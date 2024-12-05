@@ -1,0 +1,18 @@
+[package]
+name = "remote-gpio"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rppal = "0.19.0"
+pusher = { version = "*", git = "https://github.com/melkir/pusher-http-rust" }
+tokio = { version = "1.40.0", features = ["rt-multi-thread"] }
+dotenv = "0.15.0"
+axum = { version = "0.7" }
+serde = { version = "1.0", features = ["derive"] }
+hyper-util = { version = "0.1.8", features = ["client-legacy"] }
+tower-http = { version = "0.6.0", features = ["fs"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[package.metadata.cross.build]
+default-target = "armv7-unknown-linux-gnueabihf"
