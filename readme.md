@@ -1,6 +1,6 @@
 ## RemoteGPIO
 
-### Development
+### Build
 
 You need to have [cross](https://github.com/rust-embedded/cross) installed.
 
@@ -8,57 +8,30 @@ You need to have [cross](https://github.com/rust-embedded/cross) installed.
 cargo install cross --git https://github.com/cross-rs/cross
 ```
 
-As well as [podman](https://podman.io/).
+As well as [podman](https://podman.io/) and `jq`.
 
 ```bash
-brew install podman
+brew install podman jq
 ```
 
-Start the podman machine.
+### Usage
+
+**Important:** Set the `RASPBERRY_PI_IP` and `REMOTE_DIR` in the `remote-gpio.sh` file according to your setup.
 
 ```bash
-podman machine init
-podman machine start
+./remote-gpio.sh start
 ```
 
-Then build the project.
+If you are done, you can remove the application from the Raspberry Pi and the container from your machine.
 
 ```bash
-cross build
+./remote-gpio.sh delete
 ```
 
-Te clean the project.
+### Troubleshooting
 
-```bash
-podman machine stop
-podman machine rm -f podman-machine-default
-```
-
-Copy the binary and the .env file to the Raspberry Pi.
-
-```bash
-scp target/armv7-unknown-linux-gnueabihf/release/remote-gpio pi@192.168.1.18:/home/pi/Documents/remote-gpio
-scp .env pi@192.168.1.18:/home/pi/Documents/remote-gpio
-scp -r assets/ pi@192.168.1.18:/home/pi/Documents/remote-gpio/
-```
-
-Run the binary on the raspberry pi.
-
-```bash
-ssh -t pi@192.168.1.18 "cd /home/pi/Documents/remote-gpio ; bash --login"
-./remote-gpio
-```
-
-Troubleshooting
-
-Check if the GPIO pins are used by another process by running the following command.
+If the pins are already in use, you can check the list of open files on the Raspberry Pi.
 
 ```bash
 lsof | grep gpio
-```
-
-If there is a message of disk quota exceeded, you can increase the number of available keys (by default it is set to 200).
-
-```bash
-podman machine ssh sudo sysctl -w kernel.keys.maxkeys=20000
 ```

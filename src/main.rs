@@ -1,52 +1,28 @@
-mod remote;
-mod server;
-
-use dotenv::dotenv;
-use pusher::PusherBuilder;
-use std::error::Error;
+use anyhow::Result;
+use remote_gpio::remote::RemoteControl;
+use remote_gpio::server::{serve, AppState};
 use std::sync::Arc;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
-use remote::{Input, RemoteControl};
-use server::start_server;
-
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    dotenv().ok();
-
-    let rc = Arc::new(RemoteControl::new()?);
-    let pusher = Arc::new(
-        PusherBuilder::new(
-            &std::env::var("PUSHER_APP_ID")?,
-            &std::env::var("PUSHER_KEY")?,
-            &std::env::var("PUSHER_SECRET")?,
+#[tokio::main(flavor = "current_thread")]
+async fn main() -> Result<()> {
+    tracing_subscriber::registry()
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                format!(
+                    "{}=debug,tower_http=debug,axum::rejection=trace",
+                    env!("CARGO_CRATE_NAME")
+                )
+                .into()
+            }),
         )
-        .cluster(&std::env::var("PUSHER_CLUSTER")?)
-        .finalize(),
-    );
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
-    let mut selection_rx = rc.observe(vec![
-        Input::L1 as u8,
-        Input::L2 as u8,
-        Input::L3 as u8,
-        Input::L4 as u8,
-    ])?;
+    let remote_control = RemoteControl::new().await?;
+    let shared_state = Arc::new(AppState { remote_control });
 
-    // Spawn a task to handle selection changes
-    let pusher_clone = pusher.clone();
-    tokio::spawn(async move {
-        while let Some(new_selection) = selection_rx.recv().await {
-            println!("Sending selection to pusher: {}", new_selection);
-            if let Err(e) = pusher_clone
-                .trigger("cache-gpio", "led", new_selection)
-                .await
-            {
-                eprintln!("Failed to send Pusher notification: {:?}", e);
-            }
-        }
-    });
-
-    // Start the Axum server
-    start_server(rc, pusher).await;
+    serve(shared_state).await?;
 
     Ok(())
 }
