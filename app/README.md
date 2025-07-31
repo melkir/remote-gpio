@@ -1,7 +1,7 @@
 # `create-preact`
 
 <h2 align="center">
-  <img height="256" width="256" src="./src/assets/preact.svg">
+  <img height="256" width="256" src="./src/public/vite.svg">
 </h2>
 
 <h3 align="center">Get started using Preact and Vite!</h3>
