@@ -1,5 +1,7 @@
 ## RemoteGPIO
 
+![remote.png](remote.png)
+
 ### Build
 
 You need to have [cross](https://github.com/rust-embedded/cross) installed.
