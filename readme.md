@@ -1,6 +1,12 @@
 ## RemoteGPIO
 
-![remote.png](remote.png)
+Before the WebSocket connects, a loading indicator appears at the top.
+
+![Remote UI](assets/remote.png)
+
+After the connection is established, the client can control the server in real time over WebSocket. Because only one physical remote is attached to the Raspberry Pi, the selected shutter state is global and synchronized across all WebSocket clients. The server keeps this shared state by reading the GPIO pins.
+
+<video src="assets/output.mp4" autoplay loop muted playsinline></video>
 
 ### Build
 
