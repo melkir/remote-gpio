@@ -1,9 +1,17 @@
 ## RemoteGPIO
 
+RemoteGPIO is a compact Rust + Preact project that exposes a Raspberry Pi–attached remote (for shutters/blinds) over WebSocket and HTTP, keeping a single shared state across all clients.
+
+- Backend: Rust, `axum`, `tokio`, `gpiocdev`
+- Frontend: Preact + Vite + Tailwind, PWA-enabled
+- Transport: WebSocket for real-time state, HTTP for simple commands
+- Target: Raspberry Pi with Linux GPIO character device
+
+<video src="https://github.com/user-attachments/assets/4dbb72bf-5b67-4a23-8322-f3749d19901c" autoplay loop muted playsinline></video>
+
 Before the WebSocket connects, a loading indicator appears at the top.
 After the connection is established, the client can control the server in real time over WebSocket. Because only one physical remote is attached to the Raspberry Pi, the selected shutter state is global and synchronized across all WebSocket clients. The server keeps this shared state by reading the GPIO pins.
 
-<video src="https://github.com/user-attachments/assets/4dbb72bf-5b67-4a23-8322-f3749d19901c" autoplay loop muted playsinline></video>
 
 ### Build
 
@@ -21,7 +29,14 @@ brew install podman jq
 
 ### Usage
 
-**Important:** Set the `RASPBERRY_PI_IP` and `REMOTE_DIR` in the `remote-gpio.sh` file according to your setup.
+The included [remote-gpio.sh](https://github.com/melkir/remote-gpio/blob/main/remote-gpio.sh) script automates build and deploy:
+
+- Builds the frontend (`bun run build`) and Rust binary using `cross` with `podman`.
+- Syncs artifacts to your Pi via `rsync`.
+- Starts the app with `RUST_LOG=info` and offers an interactive loop to rebuild/restart quickly.
+- A `delete` command cleans up the podman machine and the remote directory.
+
+Update `RASPBERRY_PI_IP` and `REMOTE_DIR` in `remote-gpio.sh`, then:
 
 ```bash
 ./remote-gpio.sh start
@@ -40,17 +55,6 @@ If the pins are already in use, you can check the list of open files on the Rasp
 ```bash
 lsof | grep gpio
 ```
-
----
-
-# RemoteGPIO: Control Real Hardware over WebSockets with Rust + Preact
-
-Controlling real hardware from a web UI doesn’t have to be complex. RemoteGPIO is a compact Rust + Preact project that exposes a Raspberry Pi–attached remote (for shutters/blinds) over WebSocket and HTTP, keeping a single shared state across all clients.
-
-- Backend: Rust, `axum`, `tokio`, `gpiocdev`
-- Frontend: Preact + Vite + Tailwind, PWA-enabled
-- Transport: WebSocket for real-time state, HTTP for simple commands
-- Target: Raspberry Pi with Linux GPIO character device
 
 ---
 
@@ -226,25 +230,6 @@ A `tokio::select!` ensures that if one side closes, the other task is cancelled 
 
 ---
 
-## Deploying to a Raspberry Pi
-
-The included `remote-gpio.sh` script automates build and deploy:
-
-- Builds the frontend (`bun run build`) and Rust binary using `cross` with `podman`.
-- Syncs artifacts to your Pi via `rsync`.
-- Starts the app with `RUST_LOG=info` and offers an interactive loop to rebuild/restart quickly.
-- A `delete` command cleans up the podman machine and the remote directory.
-
-Update `RASPBERRY_PI_IP` and `REMOTE_DIR` in `remote-gpio.sh`, then:
-
-```bash
-./remote-gpio.sh start
-```
-
-Deploy script: [remote-gpio.sh](https://github.com/melkir/remote-gpio/blob/main/remote-gpio.sh)
-
----
-
 ## Why this approach?
 
 - Single source of truth: The Pi reads real GPIO states and broadcasts them to all clients, so every UI is consistent.
@@ -252,10 +237,4 @@ Deploy script: [remote-gpio.sh](https://github.com/melkir/remote-gpio/blob/main/
 - Small, focused codebase: It’s easy to audit, extend (e.g., add safety interlocks), or port to different pins/devices.
 
 If you’re looking for a clean pattern for hardware-backed, multi-client control with synchronized state, this project demonstrates a pragmatic, production-ready baseline.
-
----
-
-## References
-
-- GPIO mappings and edge-detection logic: [src/gpio.rs](https://github.com/melkir/remote-gpio/blob/main/src/gpio.rs)
 
