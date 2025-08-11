@@ -6,7 +6,7 @@ Before the WebSocket connects, a loading indicator appears at the top.
 
 After the connection is established, the client can control the server in real time over WebSocket. Because only one physical remote is attached to the Raspberry Pi, the selected shutter state is global and synchronized across all WebSocket clients. The server keeps this shared state by reading the GPIO pins.
 
-<video src="assets/output.mp4" autoplay loop muted playsinline></video>
+<video src="https://github.com/user-attachments/assets/4dbb72bf-5b67-4a23-8322-f3749d19901c" autoplay loop muted playsinline></video>
 
 ### Build
 
