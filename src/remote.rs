@@ -31,23 +31,24 @@ impl RemoteControl {
 
     /// Triggers the up button command
     pub async fn up(&self) -> Result<()> {
-        trigger_output(Output::Up)
+        trigger_output(Output::Up).await
     }
 
     /// Triggers the down button command
     pub async fn down(&self) -> Result<()> {
-        trigger_output(Output::Down)
+        trigger_output(Output::Down).await
     }
 
     /// Triggers the stop button command
     pub async fn stop(&self) -> Result<()> {
-        trigger_output(Output::Stop)
+        trigger_output(Output::Stop).await
     }
 
     /// Internal helper to trigger the select button and wait for LED selection
     async fn trigger_select() -> Result<Input> {
+        // Run button press and input watching concurrently
         tokio::spawn(async move {
-            trigger_output(Output::Select).unwrap();
+            trigger_output(Output::Select).await.unwrap();
         });
 
         watch_inputs().await

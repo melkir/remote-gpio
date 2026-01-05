@@ -6,7 +6,6 @@ use gpiocdev::{line::Value, Request};
 use serde::Deserialize;
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::thread;
 use std::time::{Duration, Instant};
 
 /// Represents the input GPIO pins for LED selection
@@ -126,7 +125,7 @@ pub async fn watch_inputs() -> Result<Input> {
 }
 
 /// Triggers an output GPIO pin for button commands
-pub fn trigger_output(output: Output) -> Result<()> {
+pub async fn trigger_output(output: Output) -> Result<()> {
     tracing::debug!("Triggering output: {:?}", output);
     let offset = output as u32;
     let mut value = Value::Active;
@@ -141,7 +140,7 @@ pub fn trigger_output(output: Output) -> Result<()> {
         .context("Failed to request output line")?;
 
     // Hold the button for minimum detection time
-    thread::sleep(Duration::from_millis(60));
+    tokio::time::sleep(Duration::from_millis(60)).await;
 
     // Release the button
     value = value.not();

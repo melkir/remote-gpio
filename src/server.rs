@@ -11,7 +11,6 @@ use futures::{sink::SinkExt, stream::StreamExt};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::sync::mpsc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::services::ServeDir;
 use tower_http::trace::DefaultMakeSpan;
@@ -133,78 +132,72 @@ async fn ws_handler(
 /// Manages WebSocket connections and message handling
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
-    let (sender, mut receiver) = mpsc::channel::<String>(16);
     let mut rx_led = state.remote_control.receiver.clone();
 
-    // Spawn task to forward messages to WebSocket
-    tokio::spawn(async move {
-        while let Some(message) = receiver.recv().await {
-            if sink.send(message.into()).await.is_err() {
-                break;
-            }
-        }
-    });
+    // Send initial LED state
+    let selection = rx_led.borrow().to_string();
+    if sink.send(Message::Text(selection.into())).await.is_err() {
+        return;
+    }
 
-    // Spawn task to handle LED state updates
-    let send_task_sender = sender.clone();
-    let mut send_task = tokio::spawn(async move {
-        // Send initial state
-        let selection = rx_led.borrow().to_string();
-        if send_task_sender.send(selection).await.is_err() {
-            return;
-        }
-
-        // Handle subsequent updates
-        while rx_led.changed().await.is_ok() {
-            let selection = rx_led.borrow().to_string();
-            if send_task_sender.send(selection).await.is_err() {
-                break;
-            }
-        }
-    });
-
-    // Spawn task to handle incoming WebSocket messages
-    let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(Message::Text(text))) = stream.next().await {
-            if text == "ping" {
-                tracing::debug!("[{}:{}] received ping", client_name, port);
-                if sender.send("pong".into()).await.is_err() {
+    loop {
+        tokio::select! {
+            // Handle LED state changes
+            result = rx_led.changed() => {
+                if result.is_err() {
                     break;
                 }
-                continue;
+                let selection = rx_led.borrow().to_string();
+                if sink.send(Message::Text(selection.into())).await.is_err() {
+                    break;
+                }
             }
-
-            let rc = &state.remote_control;
-            match serde_json::from_str::<CommandRequest>(&text) {
-                Ok(CommandRequest { command, led }) => {
-                    match process_command(rc, &command, led).await {
-                        Ok(_) => {
-                            tracing::info!("[{}:{}] {} {:?}", client_name, port, command, led)
+            // Handle incoming messages
+            msg = stream.next() => {
+                match msg {
+                    Some(Ok(Message::Text(text))) => {
+                        if text == "ping" {
+                            tracing::debug!("[{}:{}] received ping", client_name, port);
+                            if sink.send(Message::Text("pong".into())).await.is_err() {
+                                break;
+                            }
+                            continue;
                         }
-                        Err(e) => {
-                            tracing::error!(
-                                "[{}:{}] Command execution failed: {}",
-                                client_name,
-                                port,
-                                e
-                            );
+
+                        match serde_json::from_str::<CommandRequest>(&text) {
+                            Ok(CommandRequest { command, led }) => {
+                                // Spawn command processing so LED updates aren't blocked
+                                let state = state.clone();
+                                let client_name = client_name.clone();
+                                tokio::spawn(async move {
+                                    match process_command(&state.remote_control, &command, led).await {
+                                        Ok(_) => {
+                                            tracing::info!("[{}:{}] {} {:?}", client_name, port, command, led)
+                                        }
+                                        Err(e) => {
+                                            tracing::error!(
+                                                "[{}:{}] Command execution failed: {}",
+                                                client_name,
+                                                port,
+                                                e
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+                            Err(_) => {
+                                tracing::error!(
+                                    "Invalid JSON received from client: {}:{}",
+                                    client_name,
+                                    port
+                                );
+                            }
                         }
                     }
+                    Some(Ok(_)) => {} // Ignore other message types
+                    Some(Err(_)) | None => break, // Connection closed or error
                 }
-                Err(_) => {
-                    tracing::error!(
-                        "Invalid JSON received from client: {}:{}",
-                        client_name,
-                        port
-                    );
-                }
-            };
+            }
         }
-    });
-
-    // Wait for either task to complete and abort the other
-    tokio::select! {
-        _ = (&mut send_task) => recv_task.abort(),
-        _ = (&mut recv_task) => send_task.abort(),
-    };
+    }
 }
