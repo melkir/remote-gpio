@@ -15,26 +15,21 @@ After the connection is established, the client can control the server in real t
 
 ### Build
 
-You need to have [cross](https://github.com/rust-embedded/cross) installed.
+You need to have [zig](https://ziglang.org/) and [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) installed for cross-compilation.
 
 ```bash
-cargo install cross --git https://github.com/cross-rs/cross
-```
-
-As well as [podman](https://podman.io/) and `jq`.
-
-```bash
-brew install podman jq
+brew install zig
+cargo install cargo-zigbuild
 ```
 
 ### Usage
 
 The included [remote-gpio.sh](https://github.com/melkir/remote-gpio/blob/main/remote-gpio.sh) script automates build and deploy:
 
-- Builds the frontend (`bun run build`) and Rust binary using `cross` with `podman`.
+- Builds the frontend (`bun run build`) and cross-compiles the Rust binary using `cargo-zigbuild`.
 - Syncs artifacts to your Pi via `rsync`.
 - Starts the app with `RUST_LOG=info` and offers an interactive loop to rebuild/restart quickly.
-- A `delete` command cleans up the podman machine and the remote directory.
+- A `delete` command cleans up the remote directory on the Pi.
 
 Update `RASPBERRY_PI_IP` and `REMOTE_DIR` in `remote-gpio.sh`, then:
 
@@ -42,7 +37,7 @@ Update `RASPBERRY_PI_IP` and `REMOTE_DIR` in `remote-gpio.sh`, then:
 ./remote-gpio.sh start
 ```
 
-If you are done, you can remove the application from the Raspberry Pi and the container from your machine.
+If you are done, you can remove the application from the Raspberry Pi.
 
 ```bash
 ./remote-gpio.sh delete

@@ -5,21 +5,12 @@ REMOTE_DIR="/home/pi/Documents/remote-gpio"
 LOCAL_DIR="$(pwd)"
 
 build() {
-    # Build the project
+    # Build the frontend
     cd app && bun run build
-    # Check if a podman machine exists and is running
-    machine_status=$(podman machine list --format json -n)
-    if [ "$machine_status" = "[]" ]; then
-        echo "No podman machine exists. Creating and starting a new one..."
-        podman machine init
-        podman machine start
-        podman machine ssh sudo sysctl -w kernel.keys.maxkeys=20000
-    elif ! echo "$machine_status" | jq -e '.[0].Running' > /dev/null; then
-        echo "Podman machine exists but is not running. Starting it..."
-        podman machine start
-    fi
-    
-    cross build --release
+    cd ..
+
+    # Cross-compile for Raspberry Pi using zig (targets glibc 2.31)
+    cargo zigbuild --release --target armv7-unknown-linux-gnueabihf.2.31
 }
 
 deploy() {
@@ -58,8 +49,6 @@ start() {
 }
 
 delete() {
-    podman machine stop && podman machine rm -f podman-machine-default
-    echo "Podman machine deleted."
     ssh pi@$RASPBERRY_PI_IP "rm -rf $REMOTE_DIR"
     echo "Remote directory cleaned."
 }
