@@ -1,5 +1,3 @@
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import {
   ChevronDown,
@@ -11,6 +9,8 @@ import {
 import { useState } from 'preact/hooks';
 import useWebSocket, { ReadyState } from 'react-use-websocket';
 import { useHaptic } from 'use-haptic';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 
 export function App() {
   const [activeLed, setActiveLed] = useState<string | null>(null);
@@ -24,7 +24,7 @@ export function App() {
       threshold: 500,
       onStart: () => shortHaptic(),
       onFinish: () => longHaptic(),
-    }
+    },
   );
   const { sendJsonMessage: send, readyState } = useWebSocket(
     // We cannot use location.host because of Cloudflare Access redirect
@@ -34,7 +34,7 @@ export function App() {
       reconnectAttempts: 10,
       //attemptNumber will be 0 the first time it attempts to reconnect, so this equation results in a reconnect pattern of 1 second, 2 seconds, 4 seconds, 8 seconds, and then caps at 10 seconds until the maximum number of attempts is reached
       reconnectInterval: (attemptNumber) =>
-        Math.min(Math.pow(2, attemptNumber) * 1000, 10000),
+        Math.min(2 ** attemptNumber * 1000, 10000),
       queryParams: { name: 'react-app' },
       heartbeat: true,
       onMessage: (event) => {
@@ -43,7 +43,7 @@ export function App() {
         }
         setActiveLed(event.data);
       },
-    }
+    },
   );
 
   // Map readyState to color and label
@@ -61,7 +61,7 @@ export function App() {
       <div
         className={cn(
           'absolute top-0 h-4 w-72 rounded-b-full bg-accent',
-          status
+          status,
         )}
       />
 
