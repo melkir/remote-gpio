@@ -6,8 +6,7 @@ LOCAL_DIR="$(pwd)"
 
 build() {
     # Build the frontend
-    cd app && bun run build
-    cd ..
+    bun run --cwd app build
 
     # Cross-compile for Raspberry Pi using zig (targets glibc 2.31)
     cargo zigbuild --release --target armv7-unknown-linux-gnueabihf.2.31
