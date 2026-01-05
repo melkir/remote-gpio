@@ -77,8 +77,8 @@ Frontend (Preact)                Backend (Axum)              Hardware (Pi GPIO)
 
 ## Key Patterns
 
-- **GPIO Timing:** Output pulses are 60ms active-low; input debounce uses 300ms window
-- **WebSocket:** Dual-task pattern with `tokio::select!` for clean shutdown; auto-reconnect with exponential backoff
+- **GPIO Timing:** Output pulses are 60ms async (non-blocking); input debounce uses 300ms window
+- **WebSocket:** Single `select!` loop handles LED updates and incoming messages; commands spawned to avoid blocking
 - **Error Handling:** `anyhow::Result<T>` throughout Rust code
 - **Preact Aliases:** React imports aliased to `preact/compat` in tsconfig and vite config
 - **Static Serving:** Backend serves frontend from `dist/` directory

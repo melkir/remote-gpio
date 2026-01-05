@@ -111,8 +111,8 @@ pub enum Input { L1 = 21, L2 = 20, L3 = 16, L4 = 12, ALL }
 #[derive(Debug)]
 pub enum Output { Select = 6, Down = 13, Stop = 19, Up = 26 }
 
-// Active-low pulse for ~60ms, then release
-pub fn trigger_output(output: Output) -> Result<()> {
+// Active-low pulse for ~60ms, then release (async to avoid blocking the runtime)
+pub async fn trigger_output(output: Output) -> Result<()> {
     let offset = output as u32;
     let mut value = Value::Active;
     let req = Request::builder()
@@ -121,7 +121,7 @@ pub fn trigger_output(output: Output) -> Result<()> {
         .as_output(value)
         .as_active_low()
         .request()?;
-    thread::sleep(Duration::from_millis(60));
+    tokio::time::sleep(Duration::from_millis(60)).await;
     req.set_lone_value(value.not())?;
     Ok(())
 }
@@ -216,12 +216,14 @@ See the UI interaction code: [app/src/App.tsx](https://github.com/melkir/remote-
 
 ## Concurrency model
 
-The WebSocket handler runs two tasks:
+The WebSocket handler uses a single `tokio::select!` loop that concurrently:
 
-- A sender task that forwards selection updates (from the `watch` channel) to the client.
-- A receiver task that parses inbound JSON commands and executes them via `RemoteControl`.
+- Watches for LED state changes via the `watch` channel and forwards them to the client.
+- Receives incoming messages (pings, JSON commands) from the client.
 
-A `tokio::select!` ensures that if one side closes, the other task is cancelled cleanly.
+Command processing is spawned as a separate task to avoid blocking LED updates—this ensures all clients see intermediate selection states in real-time, not just the final result.
+
+When either the watch channel closes or the WebSocket disconnects, the loop exits cleanly.
 
 ---
 
