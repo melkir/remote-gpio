@@ -53,6 +53,30 @@ delete() {
     echo "Remote directory cleaned."
 }
 
+setup() {
+    echo "Setting up systemd user service on Raspberry Pi..."
+    ssh pi@$RASPBERRY_PI_IP "mkdir -p ~/.config/systemd/user"
+    ssh pi@$RASPBERRY_PI_IP "cat > ~/.config/systemd/user/remote-gpio.service << 'EOF'
+[Unit]
+Description=Remote GPIO
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=$REMOTE_DIR
+Environment=RUST_LOG=info
+ExecStart=$REMOTE_DIR/remote-gpio
+Restart=on-failure
+
+[Install]
+WantedBy=default.target
+EOF"
+    ssh pi@$RASPBERRY_PI_IP "systemctl --user daemon-reload"
+    ssh pi@$RASPBERRY_PI_IP "systemctl --user enable remote-gpio.service"
+    ssh pi@$RASPBERRY_PI_IP "loginctl enable-linger pi"
+    echo "Service installed. Use: systemctl --user {start|stop|status|restart} remote-gpio"
+}
+
 case "$1" in
     build)
         build
@@ -61,11 +85,14 @@ case "$1" in
     start)
         start
         ;;
+    setup)
+        setup
+        ;;
     delete)
         delete
         ;;
     *)
-        echo "Usage: $0 {build|start|delete}"
+        echo "Usage: $0 {build|start|setup|delete}"
         exit 1
         ;;
 esac
