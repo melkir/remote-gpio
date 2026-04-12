@@ -7,10 +7,10 @@ import {
   Pause,
 } from 'lucide-preact';
 import { useState } from 'preact/hooks';
-import useWebSocket, { ReadyState } from 'react-use-websocket';
 import { useHaptic } from 'use-haptic';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { ReadyState, useWebSocket } from './use-websocket';
 
 export function App() {
   const [activeLed, setActiveLed] = useState<string | null>(null);
@@ -27,21 +27,18 @@ export function App() {
     },
   );
   const { sendJsonMessage: send, readyState } = useWebSocket(
-    // We cannot use location.host because of Cloudflare Access redirect
     `wss://${location.host}/ws`,
     {
-      shouldReconnect: () => true,
       reconnectAttempts: 10,
-      //attemptNumber will be 0 the first time it attempts to reconnect, so this equation results in a reconnect pattern of 1 second, 2 seconds, 4 seconds, 8 seconds, and then caps at 10 seconds until the maximum number of attempts is reached
       reconnectInterval: (attemptNumber) =>
         Math.min(2 ** attemptNumber * 1000, 10000),
       queryParams: { name: 'react-app' },
       heartbeat: true,
-      onMessage: (event) => {
-        if (!event.data || event.data === 'pong') {
+      onMessage: (data) => {
+        if (!data || data === 'pong') {
           return;
         }
-        setActiveLed(event.data);
+        setActiveLed(data);
       },
     },
   );
@@ -52,8 +49,7 @@ export function App() {
     [ReadyState.OPEN]: 'bg-green-900',
     [ReadyState.CLOSING]: 'bg-amber-400',
     [ReadyState.CLOSED]: 'bg-red-900',
-    [ReadyState.UNINSTANTIATED]: 'bg-accent',
-  }[readyState];
+  }[readyState.value];
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-evenly gap-4 pt-4">
@@ -68,7 +64,7 @@ export function App() {
       {/* Up, Stop, Down */}
       {[
         {
-          icon: <ChevronUp className="size-8 bg-gre" />,
+          icon: <ChevronUp className="size-8" />,
           command: 'up',
           className: 'size-24',
         },
