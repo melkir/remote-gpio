@@ -133,6 +133,7 @@ async fn ws_handler(
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
     let mut rx_led = state.remote_control.receiver.clone();
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
     // Send initial LED state
     let selection = rx_led.borrow().to_string();
@@ -142,6 +143,12 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
 
     loop {
         tokio::select! {
+            // Send periodic ping to keep connection alive
+            _ = ping_interval.tick() => {
+                if sink.send(Message::Ping(vec![].into())).await.is_err() {
+                    break;
+                }
+            }
             // Handle LED state changes
             result = rx_led.changed() => {
                 if result.is_err() {
@@ -156,14 +163,6 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
             msg = stream.next() => {
                 match msg {
                     Some(Ok(Message::Text(text))) => {
-                        if text == "ping" {
-                            tracing::debug!("[{}:{}] received ping", client_name, port);
-                            if sink.send(Message::Text("pong".into())).await.is_err() {
-                                break;
-                            }
-                            continue;
-                        }
-
                         match serde_json::from_str::<CommandRequest>(&text) {
                             Ok(CommandRequest { command, led }) => {
                                 // Spawn command processing so LED updates aren't blocked
@@ -194,7 +193,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                             }
                         }
                     }
-                    Some(Ok(_)) => {} // Ignore other message types
+                    Some(Ok(_)) => {} // Ignore other message types (Pong, etc.)
                     Some(Err(_)) | None => break, // Connection closed or error
                 }
             }

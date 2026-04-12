@@ -33,11 +33,8 @@ export function App() {
       reconnectInterval: (attemptNumber) =>
         Math.min(2 ** attemptNumber * 1000, 10000),
       queryParams: { name: 'react-app' },
-      heartbeat: true,
       onMessage: (data) => {
-        if (!data || data === 'pong') {
-          return;
-        }
+        if (!data) return;
         setActiveLed(data);
       },
     },

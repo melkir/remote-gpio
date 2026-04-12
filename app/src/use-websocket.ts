@@ -8,19 +8,10 @@ export enum ReadyState {
   CLOSED = 3,
 }
 
-type HeartbeatOptions =
-  | boolean
-  | {
-      interval?: number;
-      timeout?: number;
-      message?: string;
-    };
-
 type Options = {
   queryParams?: Record<string, string>;
   reconnectAttempts?: number;
   reconnectInterval?: number | ((attempt: number) => number);
-  heartbeat?: HeartbeatOptions;
   onMessage?: (data: string) => void;
   onError?: (event: Event) => void;
 };
@@ -48,48 +39,6 @@ class WebSocketClient {
       : reconnectInterval;
   }
 
-  private setupHeartbeat(ws: WebSocket, id: symbol) {
-    const { heartbeat } = this.options;
-    if (!heartbeat) return;
-
-    const config = typeof heartbeat === 'object' ? heartbeat : {};
-    const interval = config.interval ?? 25000;
-    const timeout = config.timeout ?? 60000;
-    const message = config.message ?? 'ping';
-    const checkInterval = Math.max(100, interval / 10);
-
-    let lastMessageAt = Date.now();
-    let lastPingSentAt = 0;
-
-    const intervalId = setInterval(() => {
-      if (this.socketId !== id || ws.readyState !== WebSocket.OPEN) return;
-
-      const now = Date.now();
-
-      if (lastMessageAt + timeout <= now) {
-        ws.close();
-        return;
-      }
-
-      if (
-        lastMessageAt + interval <= now &&
-        lastPingSentAt + interval <= now
-      ) {
-        ws.send(message);
-        lastPingSentAt = now;
-      }
-    }, checkInterval);
-
-    return {
-      trackMessage: () => {
-        lastMessageAt = Date.now();
-      },
-      cleanup: () => {
-        clearInterval(intervalId);
-      },
-    };
-  }
-
   private connect() {
     this.ws?.close();
 
@@ -100,8 +49,6 @@ class WebSocketClient {
     this.ws = ws;
     this.readyState.value = ReadyState.CONNECTING;
 
-    const heartbeat = this.setupHeartbeat(ws, id);
-
     ws.onopen = () => {
       if (this.socketId !== id) return;
       this.readyState.value = ReadyState.OPEN;
@@ -110,7 +57,6 @@ class WebSocketClient {
 
     ws.onmessage = (event) => {
       if (this.socketId !== id) return;
-      heartbeat?.trackMessage();
       this.options.onMessage?.(event.data);
     };
 
@@ -121,7 +67,6 @@ class WebSocketClient {
 
     ws.onclose = () => {
       if (this.socketId !== id) return;
-      heartbeat?.cleanup();
       this.readyState.value = ReadyState.CLOSED;
       this.ws = null;
 
