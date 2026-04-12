@@ -9,6 +9,16 @@ export default defineConfig({
   build: {
     target: 'esnext',
   },
+  server: {
+    proxy: {
+      '/ws': {
+        target: 'ws://localhost:5002',
+        ws: true,
+      },
+      '/command': 'http://localhost:5002',
+      '/led': 'http://localhost:5002',
+    },
+  },
   plugins: [
     preact({
       reactAliasesEnabled: true,

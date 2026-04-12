@@ -1,12 +1,8 @@
-use anyhow::{Context, Result};
-use futures::StreamExt;
-use gpiocdev::line::EdgeDetection;
-use gpiocdev::tokio::AsyncRequest;
-use gpiocdev::{line::Value, Request};
+use anyhow::Result;
 use serde::Deserialize;
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 /// Represents the input GPIO pins for LED selection
 #[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq)]
@@ -79,73 +75,107 @@ impl Output {
     }
 }
 
-/// Monitors GPIO inputs for LED selection changes
-/// Returns the selected LED input or ALL if multiple inputs are detected
-pub async fn watch_inputs() -> Result<Input> {
-    let offsets = [
-        Input::L1 as u32,
-        Input::L2 as u32,
-        Input::L3 as u32,
-        Input::L4 as u32,
-    ];
+#[cfg(not(feature = "fake"))]
+mod hw {
+    use super::*;
+    use anyhow::Context;
+    use futures::StreamExt;
+    use gpiocdev::line::EdgeDetection;
+    use gpiocdev::tokio::AsyncRequest;
+    use gpiocdev::{line::Value, Request};
+    use std::time::Instant;
 
-    // Request multiple input lines with edge detection
-    let req = Request::builder()
-        .on_chip("/dev/gpiochip0")
-        .with_lines(&offsets)
-        .as_input()
-        .with_edge_detection(EdgeDetection::BothEdges)
-        .request()
-        .context("Failed to request GPIO lines")?;
+    /// Monitors GPIO inputs for LED selection changes
+    /// Returns the selected LED input or ALL if multiple inputs are detected
+    pub async fn watch_inputs() -> Result<Input> {
+        let offsets = [
+            Input::L1 as u32,
+            Input::L2 as u32,
+            Input::L3 as u32,
+            Input::L4 as u32,
+        ];
 
-    let areq = AsyncRequest::new(req);
-    let mut events = areq.edge_events();
+        // Request multiple input lines with edge detection
+        let req = Request::builder()
+            .on_chip("/dev/gpiochip0")
+            .with_lines(&offsets)
+            .as_input()
+            .with_edge_detection(EdgeDetection::BothEdges)
+            .request()
+            .context("Failed to request GPIO lines")?;
 
-    let start_time = Instant::now();
-    let timeout_duration = Duration::from_millis(300);
-    let mut last_event = None;
-    let mut event_count = 0;
+        let areq = AsyncRequest::new(req);
+        let mut events = areq.edge_events();
 
-    // Collect events within the timeout period
-    while event_count < 16 && start_time.elapsed() < timeout_duration {
-        if let Some(Ok(event)) = events.next().await {
-            last_event = Some(event.offset);
-            event_count += 1;
+        let start_time = Instant::now();
+        let timeout_duration = Duration::from_millis(300);
+        let mut last_event = None;
+        let mut event_count = 0;
+
+        // Collect events within the timeout period
+        while event_count < 16 && start_time.elapsed() < timeout_duration {
+            if let Some(Ok(event)) = events.next().await {
+                last_event = Some(event.offset);
+                event_count += 1;
+            } else {
+                break;
+            }
+        }
+
+        // Return ALL if multiple events detected, otherwise return the last event
+        if event_count < 16 {
+            Input::try_from(last_event.unwrap())
         } else {
-            break;
+            Ok(Input::ALL)
         }
     }
 
-    // Return ALL if multiple events detected, otherwise return the last event
-    if event_count < 16 {
-        Input::try_from(last_event.unwrap())
-    } else {
-        Ok(Input::ALL)
+    /// Triggers an output GPIO pin for button commands
+    pub async fn trigger_output(output: Output) -> Result<()> {
+        tracing::debug!("Triggering output: {:?}", output);
+        let offset = output as u32;
+        let mut value = Value::Active;
+
+        // Request the output line
+        let req = Request::builder()
+            .on_chip("/dev/gpiochip0")
+            .with_line(offset)
+            .as_output(value)
+            .as_active_low()
+            .request()
+            .context("Failed to request output line")?;
+
+        // Hold the button for minimum detection time
+        tokio::time::sleep(Duration::from_millis(60)).await;
+
+        // Release the button
+        value = value.not();
+        req.set_lone_value(value)
+            .context("Failed to set output value")?;
+
+        Ok(())
     }
 }
 
-/// Triggers an output GPIO pin for button commands
-pub async fn trigger_output(output: Output) -> Result<()> {
-    tracing::debug!("Triggering output: {:?}", output);
-    let offset = output as u32;
-    let mut value = Value::Active;
+#[cfg(feature = "fake")]
+mod hw {
+    use super::*;
+    use std::sync::atomic::{AtomicU8, Ordering};
 
-    // Request the output line
-    let req = Request::builder()
-        .on_chip("/dev/gpiochip0")
-        .with_line(offset)
-        .as_output(value)
-        .as_active_low()
-        .request()
-        .context("Failed to request output line")?;
+    static LED_INDEX: AtomicU8 = AtomicU8::new(0);
+    const LEDS: [Input; 5] = [Input::L1, Input::L2, Input::L3, Input::L4, Input::ALL];
 
-    // Hold the button for minimum detection time
-    tokio::time::sleep(Duration::from_millis(60)).await;
+    pub async fn watch_inputs() -> Result<Input> {
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        let idx = LED_INDEX.fetch_add(1, Ordering::Relaxed) % LEDS.len() as u8;
+        Ok(LEDS[idx as usize])
+    }
 
-    // Release the button
-    value = value.not();
-    req.set_lone_value(value)
-        .context("Failed to set output value")?;
-
-    Ok(())
+    pub async fn trigger_output(output: Output) -> Result<()> {
+        tracing::debug!("Fake triggering output: {:?}", output);
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        Ok(())
+    }
 }
+
+pub use hw::{trigger_output, watch_inputs};

@@ -27,7 +27,7 @@ export function App() {
     },
   );
   const { sendJsonMessage: send, readyState } = useWebSocket(
-    `wss://${location.host}/ws`,
+    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
     {
       reconnectAttempts: 10,
       reconnectInterval: (attemptNumber) =>
