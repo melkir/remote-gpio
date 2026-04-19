@@ -75,7 +75,7 @@ impl Output {
     }
 }
 
-#[cfg(not(feature = "fake"))]
+#[cfg(feature = "hw")]
 mod hw {
     use super::*;
     use anyhow::Context;

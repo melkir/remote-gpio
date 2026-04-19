@@ -15,7 +15,7 @@ brew install zig && cargo install cargo-zigbuild
 **Deploy and run:**
 
 ```bash
-# Edit RASPBERRY_PI_IP in remote-gpio.sh first
+# Setup environment variables in .env first
 ./remote-gpio.sh build    # Build frontend + cross-compile, deploy to Pi
 ./remote-gpio.sh start    # Run interactively (r=rebuild, q=quit)
 ./remote-gpio.sh setup    # Install as systemd service (auto-starts on boot)
