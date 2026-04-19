@@ -157,7 +157,7 @@ mod hw {
     }
 }
 
-#[cfg(feature = "fake")]
+#[cfg(all(feature = "fake", not(feature = "hw")))]
 mod hw {
     use super::*;
     use std::sync::atomic::{AtomicU8, Ordering};
