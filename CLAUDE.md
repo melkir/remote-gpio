@@ -25,14 +25,14 @@ cargo install cargo-zigbuild
 
 ### Frontend (Preact/Vite)
 ```bash
-cd app && bun run dev      # Development server (port 5173)
-cd app && bun run build    # Production build to app/dist/
-cd app && bun run preview  # Preview production build
+bun --cwd=app run dev      # Development server (port 5173)
+bun --cwd=app run build    # Production build to app/dist/
+bun --cwd=app run preview  # Preview production build
 ```
 
 ### Lint & Format
 ```bash
-cd app && npx biome check --apply src/
+bunx biome check --apply app/src/
 ```
 
 ### Deployment
