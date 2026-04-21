@@ -101,3 +101,77 @@ fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     fs::rename(&tmp, path)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_unit_substitutes_placeholders() {
+        let out = render_unit("pi", "/usr/local/bin/somfy");
+        assert!(out.contains("User=pi"));
+        assert!(out.contains("Group=gpio"));
+        assert!(out.contains("ExecStart=/usr/local/bin/somfy serve"));
+        assert!(!out.contains("{{SERVICE_USER}}"));
+        assert!(!out.contains("{{EXEC_START}}"));
+    }
+
+    #[test]
+    fn resolve_service_user_override_wins() {
+        let u = resolve_service_user(Some("alice".into())).unwrap();
+        assert_eq!(u, "alice");
+    }
+
+    #[test]
+    fn resolve_service_user_uses_sudo_user() {
+        // Serialize env access within this test module.
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("SUDO_USER").ok();
+        std::env::set_var("SUDO_USER", "pi");
+        let u = resolve_service_user(None).unwrap();
+        assert_eq!(u, "pi");
+        restore_env("SUDO_USER", prev);
+    }
+
+    #[test]
+    fn resolve_service_user_rejects_root() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("SUDO_USER").ok();
+        std::env::set_var("SUDO_USER", "root");
+        assert!(resolve_service_user(None).is_err());
+        restore_env("SUDO_USER", prev);
+    }
+
+    #[test]
+    fn resolve_service_user_rejects_empty_and_missing() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let prev = std::env::var("SUDO_USER").ok();
+        std::env::set_var("SUDO_USER", "");
+        assert!(resolve_service_user(None).is_err());
+        std::env::remove_var("SUDO_USER");
+        assert!(resolve_service_user(None).is_err());
+        restore_env("SUDO_USER", prev);
+    }
+
+    #[test]
+    fn atomic_write_creates_file_with_mode_0644() {
+        use std::os::unix::fs::MetadataExt;
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("somfy.service");
+        atomic_write(&target, "hello\n").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "hello\n");
+        let mode = fs::metadata(&target).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o644);
+        let tmp_sibling = dir.path().join(".somfy.service.tmp");
+        assert!(!tmp_sibling.exists());
+    }
+
+    static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn restore_env(key: &str, prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var(key, v),
+            None => std::env::remove_var(key),
+        }
+    }
+}

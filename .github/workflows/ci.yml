@@ -35,6 +35,12 @@ jobs:
       - name: Check (hw)
         run: cargo check --no-default-features --features hw
 
+      - name: Validate systemd unit template
+        run: |
+          tmp="$(mktemp -d)"
+          cargo run --quiet --example render_unit > "$tmp/somfy.service"
+          systemd-analyze verify --no-pager "$tmp/somfy.service"
+
   frontend:
     runs-on: ubuntu-latest
     steps:

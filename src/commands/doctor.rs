@@ -450,3 +450,81 @@ async fn updates_check(timeout_ms: u64) -> Check {
         },
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check(id: &'static str, status: Status) -> Check {
+        Check {
+            id,
+            label: id,
+            status,
+            detail: None,
+        }
+    }
+
+    #[test]
+    fn exec_start_matches_accepts_serve() {
+        let unit = "[Service]\nExecStart=/usr/local/bin/somfy serve\n";
+        assert!(exec_start_matches(unit));
+    }
+
+    #[test]
+    fn exec_start_matches_rejects_wrong_path() {
+        let unit = "ExecStart=/opt/somfy serve\n";
+        assert!(!exec_start_matches(unit));
+    }
+
+    #[test]
+    fn exec_start_matches_rejects_missing_serve() {
+        let unit = "ExecStart=/usr/local/bin/somfy\n";
+        assert!(!exec_start_matches(unit));
+    }
+
+    #[test]
+    fn exec_start_matches_rejects_trailing_arg() {
+        let unit = "ExecStart=/usr/local/bin/somfy serve --flag\n";
+        assert!(!exec_start_matches(unit));
+    }
+
+    #[test]
+    fn parse_service_user_extracts_name() {
+        let unit = "[Service]\nUser=pi\nGroup=gpio\n";
+        assert_eq!(parse_service_user(unit), Some("pi".into()));
+    }
+
+    #[test]
+    fn parse_service_user_absent_returns_none() {
+        let unit = "[Service]\nGroup=gpio\n";
+        assert_eq!(parse_service_user(unit), None);
+    }
+
+    #[test]
+    fn has_blocking_failure_detects_blocking() {
+        let report = DoctorReport {
+            schema_version: 1,
+            version: VersionInfo {
+                crate_version: "0.0.0",
+                git_sha: "dev",
+                build_date: "today",
+            },
+            checks: vec![check("a", Status::Ok), check("b", Status::Blocking)],
+        };
+        assert!(report.has_blocking_failure());
+    }
+
+    #[test]
+    fn has_blocking_failure_ignores_advisory() {
+        let report = DoctorReport {
+            schema_version: 1,
+            version: VersionInfo {
+                crate_version: "0.0.0",
+                git_sha: "dev",
+                build_date: "today",
+            },
+            checks: vec![check("a", Status::Ok), check("b", Status::Advisory)],
+        };
+        assert!(!report.has_blocking_failure());
+    }
+}

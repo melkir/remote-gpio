@@ -332,3 +332,108 @@ fn print_check(release: &Release, decision: &Decision) {
         println!("Up to date.");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn release(tag: &str, target: Option<&str>, assets: &[(&str, &str)]) -> Release {
+        Release {
+            tag_name: tag.to_string(),
+            name: None,
+            target_commitish: target.map(|s| s.to_string()),
+            assets: assets
+                .iter()
+                .map(|(n, u)| Asset {
+                    name: n.to_string(),
+                    browser_download_url: u.to_string(),
+                })
+                .collect(),
+        }
+    }
+
+    #[test]
+    fn compare_versions_stable_newer() {
+        let r = release("v9.9.9", None, &[]);
+        let d = compare_versions(UpgradeChannel::Stable, &r);
+        assert!(d.newer, "expected newer: {}", d.reason);
+    }
+
+    #[test]
+    fn compare_versions_stable_same_not_newer() {
+        let r = release(&format!("v{}", version::CRATE_VERSION), None, &[]);
+        let d = compare_versions(UpgradeChannel::Stable, &r);
+        assert!(!d.newer, "expected not newer: {}", d.reason);
+    }
+
+    #[test]
+    fn compare_versions_stable_unparseable_falls_back() {
+        let r = release("not-semver", None, &[]);
+        let d = compare_versions(UpgradeChannel::Stable, &r);
+        assert!(d.newer);
+        assert!(d.reason.contains("tag comparison"));
+    }
+
+    #[test]
+    fn compare_versions_main_differs() {
+        let r = release(
+            "main",
+            Some("deadbeefcafebabe1234567890abcdef12345678"),
+            &[],
+        );
+        let d = compare_versions(UpgradeChannel::Main, &r);
+        assert!(d.newer, "expected newer: {}", d.reason);
+    }
+
+    #[test]
+    fn compare_versions_main_same_sha_not_newer() {
+        let r = release("main", Some(version::GIT_SHA), &[]);
+        let d = compare_versions(UpgradeChannel::Main, &r);
+        assert!(!d.newer, "expected not newer: {}", d.reason);
+    }
+
+    #[test]
+    fn compare_versions_main_empty_remote_not_newer() {
+        let r = release("main", Some(""), &[]);
+        let d = compare_versions(UpgradeChannel::Main, &r);
+        assert!(!d.newer);
+    }
+
+    #[test]
+    fn parse_sha_for_plain() {
+        let sums = "abc123  somfy\nffeedd  other\n";
+        assert_eq!(parse_sha_for(sums, "somfy"), Some("abc123".into()));
+    }
+
+    #[test]
+    fn parse_sha_for_binary_mode() {
+        let sums = "abc123  *somfy\n";
+        assert_eq!(parse_sha_for(sums, "somfy"), Some("abc123".into()));
+    }
+
+    #[test]
+    fn parse_sha_for_missing() {
+        assert_eq!(parse_sha_for("abc  other\n", "somfy"), None);
+        assert_eq!(parse_sha_for("", "somfy"), None);
+    }
+
+    #[test]
+    fn asset_url_picks_matching_name() {
+        let r = release(
+            "v1.0.0",
+            None,
+            &[
+                ("somfy", "https://example/somfy"),
+                ("SHA256SUMS", "https://example/sums"),
+            ],
+        );
+        assert_eq!(asset_url(&r, "somfy").unwrap(), "https://example/somfy");
+        assert_eq!(asset_url(&r, "SHA256SUMS").unwrap(), "https://example/sums");
+    }
+
+    #[test]
+    fn asset_url_missing_errors() {
+        let r = release("v1.0.0", None, &[]);
+        assert!(asset_url(&r, "somfy").is_err());
+    }
+}
