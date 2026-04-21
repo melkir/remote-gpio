@@ -15,7 +15,7 @@ pub fn render_unit(service_user: &str, exec_start: &str) -> String {
         .replace("{{EXEC_START}}", exec_start)
 }
 
-pub async fn run(user_override: Option<String>) -> Result<()> {
+pub fn run(user_override: Option<String>) -> Result<()> {
     require_root()?;
 
     let service_user = resolve_service_user(user_override)?;

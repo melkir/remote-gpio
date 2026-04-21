@@ -38,12 +38,19 @@ async fn serve_asset(path: &str) -> Response {
     use std::path::PathBuf;
 
     let base = PathBuf::from("app/dist");
+    let Ok(base_real) = tokio::fs::canonicalize(&base).await else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
     let candidate = base.join(path);
-    if let Ok(bytes) = tokio::fs::read(&candidate).await {
-        let mime = mime_guess::from_path(&candidate).first_or_octet_stream();
-        return ([(header::CONTENT_TYPE, mime.as_ref())], bytes).into_response();
+    if let Ok(candidate_real) = tokio::fs::canonicalize(&candidate).await {
+        if candidate_real.starts_with(&base_real) {
+            if let Ok(bytes) = tokio::fs::read(&candidate_real).await {
+                let mime = mime_guess::from_path(&candidate_real).first_or_octet_stream();
+                return ([(header::CONTENT_TYPE, mime.as_ref())], bytes).into_response();
+            }
+        }
     }
-    if let Ok(bytes) = tokio::fs::read(base.join("index.html")).await {
+    if let Ok(bytes) = tokio::fs::read(base_real.join("index.html")).await {
         return ([(header::CONTENT_TYPE, "text/html")], bytes).into_response();
     }
     StatusCode::NOT_FOUND.into_response()

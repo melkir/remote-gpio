@@ -331,9 +331,13 @@ fn parse_service_user(unit: &str) -> Option<String> {
 }
 
 fn user_in_group(user: &str, group: &str) -> Result<bool> {
-    use nix::unistd::Group;
+    use nix::unistd::{Group, User};
     let g = Group::from_name(group)?.ok_or_else(|| anyhow::anyhow!("group not found"))?;
-    Ok(g.mem.iter().any(|m| m == user))
+    if g.mem.iter().any(|m| m == user) {
+        return Ok(true);
+    }
+    let u = User::from_name(user)?.ok_or_else(|| anyhow::anyhow!("user not found"))?;
+    Ok(u.gid == g.gid)
 }
 
 #[cfg(feature = "hw")]

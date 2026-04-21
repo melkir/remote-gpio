@@ -15,8 +15,8 @@ The old `remote-gpio.sh` workflow is no longer part of the design. The operator 
 ## Stack
 
 - **Rust + clap** — binary subcommands, with `serve` used explicitly in automation.
-- `**build.rs` + `vergen`** — embeds git SHA at compile time. The binary knows its own version.
-- `**rust-embed**` — bundles `app/dist/` into the binary. Debug builds read from disk for hot-reload; release builds embed.
+- `build.rs` + `vergen` — embeds git SHA at compile time. The binary knows its own version.
+- `rust-embed` — bundles `app/dist/` into the binary. Debug builds read from disk for hot-reload; release builds embed.
 - **GitHub Actions + `cargo-zigbuild`** — cross-compiles for the single supported Pi target, `armv7-unknown-linux-gnueabihf.2.31`, and uploads the release asset.
 
 ## The binary: `somfy`

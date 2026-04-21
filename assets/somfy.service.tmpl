@@ -7,7 +7,6 @@ Wants=network-online.target
 Type=simple
 User={{SERVICE_USER}}
 Group=gpio
-SupplementaryGroups=gpio
 ExecStart={{EXEC_START}} serve
 Restart=on-failure
 RestartSec=3

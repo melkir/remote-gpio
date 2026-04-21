@@ -20,12 +20,13 @@ trap 'rm -rf "$tmp"' EXIT
 
 echo "Fetching latest stable release metadata..."
 api="https://api.github.com/repos/$REPO/releases/latest"
+release_json="$(curl -fsSL "$api")"
 
-asset_url="$(curl -fsSL "$api" \
+asset_url="$(echo "$release_json" \
     | grep -E '"browser_download_url":.*/somfy"' \
     | head -1 | cut -d '"' -f 4)"
 
-sums_url="$(curl -fsSL "$api" \
+sums_url="$(echo "$release_json" \
     | grep -E '"browser_download_url":.*/SHA256SUMS"' \
     | head -1 | cut -d '"' -f 4)"
 

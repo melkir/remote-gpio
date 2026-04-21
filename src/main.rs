@@ -13,7 +13,7 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => somfy::commands::serve::run().await,
-        Command::Install { user } => somfy::commands::install::run(user).await,
+        Command::Install { user } => somfy::commands::install::run(user),
         Command::Upgrade {
             channel,
             version,

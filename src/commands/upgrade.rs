@@ -140,11 +140,13 @@ async fn apply_swap(new_bin: &Path) -> Result<()> {
     fs::rename(new_bin, bin_path).context("moving new binary into place")?;
 
     // Reconcile unit with new binary's template; picks up SUDO_USER.
-    install::run(None).await.context("refreshing unit")?;
+    install::run(None).context("refreshing unit")?;
 
     systemd::systemctl(&["start", "somfy"]).context("starting somfy")?;
 
-    wait_active(Duration::from_secs(WAIT_ACTIVE_SECS)).context("service did not become active")?;
+    wait_active(Duration::from_secs(WAIT_ACTIVE_SECS))
+        .await
+        .context("service did not become active")?;
 
     let report = doctor::collect(0).await;
     if report.has_blocking_failure() {
@@ -165,7 +167,7 @@ fn rollback() -> Result<()> {
     Ok(())
 }
 
-fn wait_active(timeout: Duration) -> Result<()> {
+async fn wait_active(timeout: Duration) -> Result<()> {
     let deadline = Instant::now() + timeout;
     loop {
         let state = systemd::is_active("somfy").unwrap_or_default();
@@ -177,7 +179,7 @@ fn wait_active(timeout: Duration) -> Result<()> {
         if Instant::now() >= deadline {
             bail!("timed out waiting for active state (last={state})");
         }
-        std::thread::sleep(Duration::from_millis(500));
+        tokio::time::sleep(Duration::from_millis(500)).await;
     }
 }
 
