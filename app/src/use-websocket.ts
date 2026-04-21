@@ -34,9 +34,7 @@ class WebSocketClient {
 
   private getReconnectDelay(attempt: number) {
     const { reconnectInterval = 5000 } = this.options;
-    return typeof reconnectInterval === 'function'
-      ? reconnectInterval(attempt)
-      : reconnectInterval;
+    return typeof reconnectInterval === 'function' ? reconnectInterval(attempt) : reconnectInterval;
   }
 
   private connect() {

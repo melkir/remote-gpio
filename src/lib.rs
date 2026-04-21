@@ -1,3 +1,9 @@
+pub mod cli;
+pub mod commands;
+pub mod embed;
 pub mod gpio;
+pub mod logging;
 pub mod remote;
 pub mod server;
+pub mod systemd;
+pub mod version;

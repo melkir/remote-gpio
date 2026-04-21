@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-RemoteGPIO is a Rust + Preact application that controls a Raspberry Pi-attached Somfy Telis 4 remote over WebSocket and HTTP for managing window blinds/shutters through hardware GPIO pins.
+`somfy` is a Rust + Preact application that controls a Raspberry Pi-attached Somfy Telis 4 remote over WebSocket and HTTP for managing window blinds/shutters through hardware GPIO pins. The Rust crate ships as a single self-managing binary (`somfy`) with clap subcommands; the frontend is embedded at build time.
 
 ## Build & Development Commands
 
@@ -13,8 +13,8 @@ RemoteGPIO is a Rust + Preact application that controls a Raspberry Pi-attached 
 # Standard build
 cargo build --release
 
-# Cross-compile for Raspberry Pi (armv7 with glibc 2.31)
-cargo zigbuild --release --target armv7-unknown-linux-gnueabihf.2.31
+# Cross-compile for Raspberry Pi (armv7 with glibc 2.31). `hw` is required; `fake` is the default for local dev.
+cargo zigbuild --release --no-default-features --features hw --target armv7-unknown-linux-gnueabihf.2.31
 ```
 
 Cross-compilation requires `zig` and `cargo-zigbuild`:
@@ -32,17 +32,24 @@ bun --cwd=app run preview  # Preview production build
 
 ### Lint & Format
 ```bash
-bunx biome check --apply app/src/
+bun --cwd=app run lint     # oxlint
+bun --cwd=app run format   # oxfmt --write
 ```
 
 ### Deployment
+
+See `docs/deploy-cli.md`. CI cross-compiles for armv7 and publishes release assets; the Pi pulls updates itself:
+
 ```bash
-./remote-gpio.sh build    # Builds frontend + cross-compiles Rust
-./remote-gpio.sh start    # Builds, deploys to Pi, runs interactively
-./remote-gpio.sh delete   # Cleans up remote directory on Pi
+ssh pi sudo somfy install              # idempotent: write unit, enable --now
+ssh pi sudo somfy upgrade              # latest stable
+ssh pi sudo somfy upgrade --channel main  # moving main-branch prerelease
+ssh pi sudo somfy upgrade --version v0.2.0
+ssh pi somfy doctor                    # health check; works without sudo
+ssh pi somfy --version                 # embedded git SHA + build date
 ```
 
-Configure `RASPBERRY_PI_IP` and `REMOTE_DIR` in `remote-gpio.sh`.
+Fresh-Pi bootstrap: `curl -fsSL https://raw.githubusercontent.com/melkir/server-remote-gpio/main/install.sh | sudo bash`.
 
 ## Architecture
 
@@ -81,4 +88,5 @@ Frontend (Preact)                Backend (Axum)              Hardware (Pi GPIO)
 - **WebSocket:** Single `select!` loop handles LED updates and incoming messages; commands spawned to avoid blocking
 - **Error Handling:** `anyhow::Result<T>` throughout Rust code
 - **Preact Aliases:** React imports aliased to `preact/compat` in tsconfig and vite config
-- **Static Serving:** Backend serves frontend from `dist/` directory
+- **Static Serving:** `rust-embed` bundles `app/dist/` into the release binary; debug builds read from disk for hot-reload
+- **CLI structure:** `src/cli.rs` defines clap subcommands; per-command logic lives under `src/commands/`. Default subcommand is `serve`. `somfy doctor` is the source-of-truth health check and runs on every `serve` startup.
