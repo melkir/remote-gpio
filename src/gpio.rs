@@ -62,19 +62,6 @@ impl std::fmt::Display for Input {
     }
 }
 
-impl Output {
-    /// Converts a string command to an Output enum variant
-    pub fn from_str(value: &str) -> Option<Output> {
-        match value {
-            "select" => Some(Output::Select),
-            "up" => Some(Output::Up),
-            "stop" => Some(Output::Stop),
-            "down" => Some(Output::Down),
-            _ => None,
-        }
-    }
-}
-
 #[cfg(feature = "hw")]
 mod hw {
     use super::*;
