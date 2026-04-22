@@ -5,7 +5,7 @@
     ":dependencyDashboard",
     ":semanticCommits"
   ],
-  "rangeStrategy": "bump",
+  "rangeStrategy": "update-lockfile",
   "automerge": true,
   "automergeType": "branch",
   "lockFileMaintenance": {
