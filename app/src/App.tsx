@@ -1,10 +1,10 @@
+import { Button } from '@/components/ui/button';
+import { ReadyState, useWebSocket } from '@/hooks/use-websocket';
+import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
 import { useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
-import { Button } from '@/components/ui/button';
-import { cn } from '@/lib/utils';
-import { ReadyState, useWebSocket } from './use-websocket';
 
 export function App() {
   const [activeLed, setActiveLed] = useState<string | null>(null);
