@@ -38,7 +38,9 @@ jobs:
       - name: Validate systemd unit template
         run: |
           tmp="$(mktemp -d)"
-          cargo run --quiet --example render_unit > "$tmp/somfy.service"
+          cp /bin/true "$tmp/somfy"
+          getent group gpio >/dev/null || sudo groupadd gpio
+          cargo run --quiet --example render_unit -- "$USER" "$tmp/somfy" > "$tmp/somfy.service"
           systemd-analyze verify --no-pager "$tmp/somfy.service"
 
   frontend:
