@@ -29,11 +29,8 @@ jobs:
       - name: Clippy (hw)
         run: cargo clippy --all-targets --no-default-features --features hw -- -D warnings
 
-      - name: Tests (fake)
-        run: cargo test --all-targets
-
-      - name: Check (hw)
-        run: cargo check --no-default-features --features hw
+      - name: Tests (hw)
+        run: cargo test --all-targets --no-default-features --features hw
 
       - name: Validate systemd unit template
         run: |

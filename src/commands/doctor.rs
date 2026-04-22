@@ -55,13 +55,13 @@ impl DoctorReport {
             self.version.build_date
         );
         println!("Doctor summary (run `somfy doctor -v` for details):");
-        let label_width = self
+        let visible: Vec<&Check> = self
             .checks
             .iter()
-            .map(|c| c.label.len())
-            .max()
-            .unwrap_or(10);
-        for check in &self.checks {
+            .filter(|c| c.status != Status::Skipped && c.id != "deployed_version")
+            .collect();
+        let label_width = visible.iter().map(|c| c.label.len()).max().unwrap_or(10);
+        for check in &visible {
             let marker = match check.status {
                 Status::Ok => "[✓]",
                 Status::Advisory => "[!]",
