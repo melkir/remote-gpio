@@ -5,6 +5,7 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
+use crate::commands::upgrade::BIN_PREV;
 use crate::systemd;
 
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
@@ -30,7 +31,7 @@ pub fn run(user_override: Option<String>) -> Result<()> {
         .canonicalize()?
         .to_string_lossy()
         .into_owned();
-    if current_exe != BIN_PATH {
+    if current_exe != BIN_PATH && current_exe != BIN_PREV {
         tracing::warn!(
             "running binary is at {} but unit will ExecStart={} — ensure {} points at the intended binary",
             current_exe,

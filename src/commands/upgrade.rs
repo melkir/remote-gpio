@@ -14,7 +14,7 @@ use crate::commands::install;
 use crate::systemd;
 use crate::version;
 
-const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
+pub const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
 const BIN_DIR: &str = "/usr/local/bin";
 const ASSET_NAME: &str = "somfy";
 const SUMS_ASSET: &str = "SHA256SUMS";
@@ -152,6 +152,8 @@ async fn apply_swap(new_bin: &Path) -> Result<()> {
     if report.has_blocking_failure() {
         bail!("post-upgrade doctor reported blocking failure");
     }
+
+    let _ = fs::remove_file(prev_path);
     Ok(())
 }
 
