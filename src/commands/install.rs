@@ -26,19 +26,20 @@ pub fn run(user_override: Option<String>) -> Result<()> {
         bail!("service user `{service_user}` does not exist");
     }
 
-    let exec_start = std::env::current_exe()?
+    let current_exe = std::env::current_exe()?
         .canonicalize()?
         .to_string_lossy()
         .into_owned();
-    if exec_start != BIN_PATH {
+    if current_exe != BIN_PATH {
         tracing::warn!(
-            "installed unit will ExecStart={} — expected {} (copy the binary there first)",
-            exec_start,
+            "running binary is at {} but unit will ExecStart={} — ensure {} points at the intended binary",
+            current_exe,
+            BIN_PATH,
             BIN_PATH
         );
     }
 
-    let rendered = render_unit(&service_user, &exec_start);
+    let rendered = render_unit(&service_user, BIN_PATH);
 
     let unit_path = Path::new(UNIT_PATH);
     let on_disk = fs::read_to_string(unit_path).ok();

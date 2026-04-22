@@ -303,23 +303,25 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
 }
 
 fn render_expected_unit() -> Option<String> {
-    let current_exe = std::env::current_exe().ok()?.canonicalize().ok()?;
-    let exec_start = current_exe.to_string_lossy().into_owned();
     let user = std::env::var("SUDO_USER").ok().or_else(|| {
         nix::unistd::User::from_uid(nix::unistd::Uid::current())
             .ok()
             .flatten()
             .map(|u| u.name)
     })?;
-    Some(crate::commands::install::render_unit(&user, &exec_start))
+    Some(crate::commands::install::render_unit(&user, BIN_PATH))
 }
 
 fn exec_start_matches(unit: &str) -> bool {
     unit.lines().any(|l| {
         let l = l.trim();
-        l.starts_with("ExecStart=")
-            && l.trim_start_matches("ExecStart=").starts_with(BIN_PATH)
-            && l.ends_with("serve")
+        let Some(rest) = l.strip_prefix("ExecStart=") else {
+            return false;
+        };
+        let Some(args) = rest.strip_prefix(BIN_PATH) else {
+            return false;
+        };
+        args == " serve"
     })
 }
 
@@ -485,6 +487,12 @@ mod tests {
     #[test]
     fn exec_start_matches_rejects_trailing_arg() {
         let unit = "ExecStart=/usr/local/bin/somfy serve --flag\n";
+        assert!(!exec_start_matches(unit));
+    }
+
+    #[test]
+    fn exec_start_matches_rejects_prev_suffix() {
+        let unit = "ExecStart=/usr/local/bin/somfy.prev serve\n";
         assert!(!exec_start_matches(unit));
     }
 
