@@ -16,7 +16,7 @@ cargo run
 Fresh Pi bootstrap:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/melkir/server-remote-gpio/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
 Day-to-day operation:
@@ -31,11 +31,11 @@ ssh pi somfy doctor
 
 Server listens on `0.0.0.0:5002`.
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/ws` | WebSocket | Real-time LED state + accepts commands |
-| `/led` | GET | Current selection (`L1`-`L4` or `ALL`) |
-| `/command` | POST | Execute command |
+| Endpoint   | Method    | Description                            |
+| ---------- | --------- | -------------------------------------- |
+| `/ws`      | WebSocket | Real-time LED state + accepts commands |
+| `/led`     | GET       | Current selection (`L1`-`L4` or `ALL`) |
+| `/command` | POST      | Execute command                        |
 
 ```json
 {"command": "up"}

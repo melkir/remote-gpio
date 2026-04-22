@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="melkir/server-remote-gpio"
+REPO="melkir/remote-gpio"
 TARGET_ARCH="armv7l"
 
 arch="$(uname -m)"

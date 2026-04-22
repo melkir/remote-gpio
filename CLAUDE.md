@@ -9,6 +9,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Build & Development Commands
 
 ### Rust Backend
+
 ```bash
 # Standard build
 cargo build --release
@@ -18,12 +19,14 @@ cargo zigbuild --release --no-default-features --features hw --target armv7-unkn
 ```
 
 Cross-compilation requires `zig` and `cargo-zigbuild`:
+
 ```bash
 brew install zig
 cargo install cargo-zigbuild
 ```
 
 ### Frontend (Preact/Vite)
+
 ```bash
 bun --cwd=app run dev      # Development server (port 5173)
 bun --cwd=app run build    # Production build to app/dist/
@@ -31,6 +34,7 @@ bun --cwd=app run preview  # Preview production build
 ```
 
 ### Lint & Format
+
 ```bash
 bun --cwd=app run lint     # oxlint
 bun --cwd=app run format   # oxfmt --write
@@ -49,7 +53,7 @@ ssh pi somfy doctor                    # health check; works without sudo
 ssh pi somfy --version                 # embedded git SHA + build date
 ```
 
-Fresh-Pi bootstrap: `curl -fsSL https://raw.githubusercontent.com/melkir/server-remote-gpio/main/install.sh | sudo bash`.
+Fresh-Pi bootstrap: `curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash`.
 
 ## Architecture
 

@@ -145,8 +145,8 @@ For GPIO-facing changes, verify on the Pi before cutting a stable tag:
 Three feedback loops, shortest first:
 
 1. `**act**` (nektos/act) — runs the workflow locally in Docker. `act push` or `act -j build` reproduces most of GitHub Actions on your laptop in seconds. Catches YAML errors, step failures, shell bugs without pushing. The armv7 cross-compile is slow under `act` but validates the pipeline shape.
-2. `**workflow_dispatch` trigger** — add `on: workflow_dispatch:` alongside the main/tag triggers, then `gh workflow run release.yml --ref my-branch`. Iterate on a branch without cutting real tags.
-3. `**gh run watch`** — streams logs from the most recent run instead of refreshing the Actions tab.
+2. `**workflow_dispatch` trigger\*\* — add `on: workflow_dispatch:` alongside the main/tag triggers, then `gh workflow run release.yml --ref my-branch`. Iterate on a branch without cutting real tags.
+3. `**gh run watch`\*\* — streams logs from the most recent run instead of refreshing the Actions tab.
 
 Practical flow: `act` to iron out syntax and step logic, then `workflow_dispatch` on a branch once for a real armv7 build, then merge to `main`, then tag when the Pi has been verified.
 
@@ -155,7 +155,7 @@ Practical flow: `act` to iron out syntax and step logic, then `workflow_dispatch
 One line on a fresh Pi:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/<owner>/server-remote-gpio/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/remote-gpio/main/install.sh | sudo bash
 ```
 
 The hosted `install.sh` is intentionally narrow: it supports the single target this project ships for (`armv7-unknown-linux-gnueabihf.2.31`), downloads the latest stable release asset to `/usr/local/bin/somfy`, `chmod +x`, and runs `sudo somfy install` (which writes the unit for the invoking SSH user by default, daemon-reloads, enables, and starts). If the machine is not that target, fail fast with a clear error.
@@ -165,7 +165,7 @@ The script itself is fetched from `main` as a bootstrap convenience, but the bin
 Same escape hatch as Brew/Bun/rustup if you'd rather inspect first:
 
 ```
-curl -fsSL https://raw.githubusercontent.com/<owner>/server-remote-gpio/main/install.sh -o install.sh
+curl -fsSL https://raw.githubusercontent.com/<owner>/remote-gpio/main/install.sh -o install.sh
 less install.sh
 sudo bash install.sh
 ```
