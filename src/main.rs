@@ -1,28 +1,25 @@
 use anyhow::Result;
-use remote_gpio::remote::RemoteControl;
-use remote_gpio::server::{serve, AppState};
-use std::sync::Arc;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
+use clap::Parser;
+use somfy::cli::{Cli, Command};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-                format!(
-                    "{}=debug,tower_http=debug,axum::rejection=trace",
-                    env!("CARGO_CRATE_NAME")
-                )
-                .into()
-            }),
-        )
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    somfy::logging::init();
 
-    let remote_control = RemoteControl::new().await?;
-    let shared_state = Arc::new(AppState { remote_control });
+    // rustls 0.23 requires an explicit crypto provider. Pin to `ring` so
+    // `cargo-zigbuild` can cross-compile without pulling `aws-lc-rs`.
+    let _ = rustls::crypto::ring::default_provider().install_default();
 
-    serve(shared_state).await?;
-
-    Ok(())
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => somfy::commands::serve::run().await,
+        Command::Install { user } => somfy::commands::install::run(user),
+        Command::Upgrade {
+            channel,
+            version,
+            check,
+        } => somfy::commands::upgrade::run(channel, version, check).await,
+        Command::Doctor { json, verbose } => somfy::commands::doctor::run(json, verbose).await,
+        Command::Uninstall => somfy::commands::uninstall::run().await,
+    }
 }

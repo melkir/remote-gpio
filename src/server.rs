@@ -12,7 +12,6 @@ use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
-use tower_http::services::ServeDir;
 use tower_http::trace::DefaultMakeSpan;
 use tower_http::trace::TraceLayer;
 
@@ -59,7 +58,7 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
         .route("/led", get(handle_led))
         .route("/command", post(handle_command))
         .route("/ws", get(ws_handler))
-        .fallback_service(ServeDir::new("dist"))
+        .fallback(crate::embed::static_handler)
         .with_state(shared_state)
         .layer(cors)
         .layer(

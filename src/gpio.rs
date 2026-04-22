@@ -62,19 +62,6 @@ impl std::fmt::Display for Input {
     }
 }
 
-impl Output {
-    /// Converts a string command to an Output enum variant
-    pub fn from_str(value: &str) -> Option<Output> {
-        match value {
-            "select" => Some(Output::Select),
-            "up" => Some(Output::Up),
-            "stop" => Some(Output::Stop),
-            "down" => Some(Output::Down),
-            _ => None,
-        }
-    }
-}
-
 #[cfg(feature = "hw")]
 mod hw {
     use super::*;
@@ -179,3 +166,46 @@ mod hw {
 }
 
 pub use hw::{trigger_output, watch_inputs};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn input_from_str_valid() {
+        assert_eq!(Input::from_str("L1").unwrap(), Input::L1);
+        assert_eq!(Input::from_str("L2").unwrap(), Input::L2);
+        assert_eq!(Input::from_str("L3").unwrap(), Input::L3);
+        assert_eq!(Input::from_str("L4").unwrap(), Input::L4);
+    }
+
+    #[test]
+    fn input_from_str_invalid() {
+        assert!(Input::from_str("L5").is_err());
+        assert!(Input::from_str("ALL").is_err());
+        assert!(Input::from_str("").is_err());
+    }
+
+    #[test]
+    fn input_try_from_u32_valid() {
+        assert_eq!(Input::try_from(21u32).unwrap(), Input::L1);
+        assert_eq!(Input::try_from(20u32).unwrap(), Input::L2);
+        assert_eq!(Input::try_from(16u32).unwrap(), Input::L3);
+        assert_eq!(Input::try_from(12u32).unwrap(), Input::L4);
+    }
+
+    #[test]
+    fn input_try_from_u32_invalid() {
+        assert!(Input::try_from(0u32).is_err());
+        assert!(Input::try_from(99u32).is_err());
+    }
+
+    #[test]
+    fn input_display_round_trip() {
+        for v in [Input::L1, Input::L2, Input::L3, Input::L4] {
+            let s = v.to_string();
+            assert_eq!(Input::from_str(&s).unwrap(), v);
+        }
+        assert_eq!(Input::ALL.to_string(), "ALL");
+    }
+}

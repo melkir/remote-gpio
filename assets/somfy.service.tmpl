@@ -1,0 +1,21 @@
+[Unit]
+Description=Somfy Telis 4 remote controller
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={{SERVICE_USER}}
+Group=gpio
+ExecStart={{EXEC_START}} serve
+Restart=on-failure
+RestartSec=3
+Environment=RUST_LOG=info
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+DeviceAllow=/dev/gpiochip0 rw
+
+[Install]
+WantedBy=multi-user.target

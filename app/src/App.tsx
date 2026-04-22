@@ -1,11 +1,5 @@
 import { useLongPress } from '@uidotdev/usehooks';
-import {
-  ChevronDown,
-  ChevronUp,
-  Circle,
-  CircleDot,
-  Pause,
-} from 'lucide-preact';
+import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
 import { useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
 import { Button } from '@/components/ui/button';
@@ -30,8 +24,7 @@ export function App() {
     `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
     {
       reconnectAttempts: 10,
-      reconnectInterval: (attemptNumber) =>
-        Math.min(2 ** attemptNumber * 1000, 10000),
+      reconnectInterval: (attemptNumber) => Math.min(2 ** attemptNumber * 1000, 10000),
       queryParams: { name: 'react-app' },
       onMessage: (data) => {
         if (!data) return;
@@ -51,12 +44,7 @@ export function App() {
   return (
     <div className="flex min-h-screen flex-col items-center justify-evenly gap-4 pt-4">
       {/* WebSocket Status LED */}
-      <div
-        className={cn(
-          'absolute top-0 h-4 w-72 rounded-b-full bg-accent',
-          status,
-        )}
-      />
+      <div className={cn('absolute top-0 h-4 w-72 rounded-b-full bg-accent', status)} />
 
       {/* Up, Stop, Down */}
       {[
@@ -98,11 +86,7 @@ export function App() {
             onClick={() => send({ command: 'select', led })}
           >
             <Circle
-              fill={
-                activeLed === 'ALL' || activeLed === led
-                  ? 'currentColor'
-                  : undefined
-              }
+              fill={activeLed === 'ALL' || activeLed === led ? 'currentColor' : undefined}
               className="size-6"
             />
           </Button>

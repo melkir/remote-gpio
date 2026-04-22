@@ -1,0 +1,60 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy (hw)
+        run: cargo clippy --all-targets --no-default-features --features hw -- -D warnings
+
+      - name: Tests (hw)
+        run: cargo test --all-targets --no-default-features --features hw
+
+      - name: Validate systemd unit template
+        run: |
+          tmp="$(mktemp -d)"
+          cp /bin/true "$tmp/somfy"
+          getent group gpio >/dev/null || sudo groupadd gpio
+          cargo run --quiet --example render_unit -- "$USER" "$tmp/somfy" > "$tmp/somfy.service"
+          systemd-analyze verify --no-pager "$tmp/somfy.service"
+
+  frontend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: oven-sh/setup-bun@v2
+
+      - name: Install
+        run: bun --cwd=app install --frozen-lockfile
+
+      - name: Build
+        run: bun --cwd=app run build
+
+      - name: Lint
+        run: bun --cwd=app run lint
+
+      - name: Format
+        run: bun --cwd=app run format:check
