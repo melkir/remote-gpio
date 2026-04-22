@@ -7,16 +7,19 @@
   ],
   "rangeStrategy": "update-lockfile",
   "automerge": true,
-  "automergeType": "branch",
   "lockFileMaintenance": {
     "enabled": true,
-    "automerge": true,
-    "schedule": ["before 6am on monday"]
+    "schedule": [
+      "before 6am on monday"
+    ]
   },
   "packageRules": [
     {
       "groupName": "Oxc toolchain",
-      "matchPackageNames": ["oxlint", "oxfmt"]
+      "matchPackageNames": [
+        "oxlint",
+        "oxfmt"
+      ]
     }
   ]
 }
