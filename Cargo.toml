@@ -9,7 +9,7 @@ hw = ["dep:gpiocdev"]
 fake = []
 
 [dependencies]
-axum = { version = "0.8", features = ["json", "macros", "form", "ws"] }
+axum = { version = "0.8", features = ["json", "ws"] }
 tokio = { version = "1.52", features = ["rt", "macros", "sync", "time"] }
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 serde = { version = "1.0", features = ["derive"] }
@@ -29,7 +29,7 @@ reqwest = { version = "0.13.2", default-features = false, features = [
   "stream",
   "http2",
 ] }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 sha2 = "0.11"
 hex = "0.4"
 tempfile = "3.27"
@@ -42,5 +42,7 @@ vergen-gix = { version = "9.1", features = ["build"] }
 
 [profile.release]
 strip = true
-lto = "thin"
+lto = "fat"
 codegen-units = 1
+opt-level = "z"
+panic = "abort"
