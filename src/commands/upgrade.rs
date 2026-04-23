@@ -212,8 +212,8 @@ async fn fetch_release(
             version::GITHUB_REPO,
             tag
         ),
-        (None, UpgradeChannel::Main) => format!(
-            "https://api.github.com/repos/{}/releases/tags/main",
+        (None, UpgradeChannel::Nightly) => format!(
+            "https://api.github.com/repos/{}/releases/tags/nightly",
             version::GITHUB_REPO
         ),
         (None, UpgradeChannel::Stable) => format!(
@@ -256,7 +256,7 @@ fn compare_versions(channel: UpgradeChannel, release: &Release) -> Decision {
                 },
             }
         }
-        UpgradeChannel::Main => {
+        UpgradeChannel::Nightly => {
             let remote_sha = release
                 .target_commitish
                 .as_deref()
@@ -377,27 +377,27 @@ mod tests {
     }
 
     #[test]
-    fn compare_versions_main_differs() {
+    fn compare_versions_nightly_differs() {
         let r = release(
-            "main",
+            "nightly",
             Some("deadbeefcafebabe1234567890abcdef12345678"),
             &[],
         );
-        let d = compare_versions(UpgradeChannel::Main, &r);
+        let d = compare_versions(UpgradeChannel::Nightly, &r);
         assert!(d.newer, "expected newer: {}", d.reason);
     }
 
     #[test]
-    fn compare_versions_main_same_sha_not_newer() {
-        let r = release("main", Some(version::GIT_SHA), &[]);
-        let d = compare_versions(UpgradeChannel::Main, &r);
+    fn compare_versions_nightly_same_sha_not_newer() {
+        let r = release("nightly", Some(version::GIT_SHA), &[]);
+        let d = compare_versions(UpgradeChannel::Nightly, &r);
         assert!(!d.newer, "expected not newer: {}", d.reason);
     }
 
     #[test]
-    fn compare_versions_main_empty_remote_not_newer() {
-        let r = release("main", Some(""), &[]);
-        let d = compare_versions(UpgradeChannel::Main, &r);
+    fn compare_versions_nightly_empty_remote_not_newer() {
+        let r = release("nightly", Some(""), &[]);
+        let d = compare_versions(UpgradeChannel::Nightly, &r);
         assert!(!d.newer);
     }
 

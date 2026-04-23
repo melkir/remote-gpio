@@ -57,12 +57,12 @@ jobs:
           cp target/armv7-unknown-linux-gnueabihf/release/somfy out/somfy
           (cd out && sha256sum somfy > SHA256SUMS)
 
-      - name: Publish main prerelease
+      - name: Publish nightly prerelease
         if: github.ref == 'refs/heads/main'
         uses: softprops/action-gh-release@v3
         with:
-          tag_name: main
-          name: "main (moving)"
+          tag_name: nightly
+          name: "nightly (moving)"
           prerelease: true
           files: |
             out/somfy

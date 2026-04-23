@@ -50,5 +50,5 @@ pub enum Command {
 #[derive(Copy, Clone, Debug, ValueEnum)]
 pub enum UpgradeChannel {
     Stable,
-    Main,
+    Nightly,
 }

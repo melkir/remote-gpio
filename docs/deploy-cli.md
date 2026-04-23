@@ -4,9 +4,9 @@ Pull-based deploy with a manual operator step. The Raspberry Pi runs a self-mana
 
 ## How it works
 
-1. Merge to `main` → GitHub Actions cross-compiles `somfy` for armv7 (frontend embedded inside the binary) and publishes or refreshes a moving prerelease for the `main` branch.
+1. Merge to `main` → GitHub Actions cross-compiles `somfy` for armv7 (frontend embedded inside the binary) and publishes or refreshes a moving `nightly` prerelease.
 2. Push a tag like `v0.2.0` → GitHub Actions publishes a stable release asset.
-3. When you want to update the Pi, SSH in and run `sudo somfy upgrade` (stable) or `sudo somfy upgrade --channel main` (latest branch build from `main`).
+3. When you want to update the Pi, SSH in and run `sudo somfy upgrade` (stable) or `sudo somfy upgrade --channel nightly` (latest build from the `main` branch).
 
 That's the whole loop. No rsync deploys, no CI access to the Pi, no always-on web updater.
 
@@ -26,7 +26,7 @@ somfy                                   # serve (default, for local convenience)
 somfy serve                             # explicit serve command
 sudo somfy install                      # idempotent: write/refresh systemd unit for the invoking user, daemon-reload, enable --now
 sudo somfy upgrade                      # pull latest stable release, stop, replace, start
-sudo somfy upgrade --channel main       # pull the moving prerelease for the main branch
+sudo somfy upgrade --channel nightly    # pull the moving nightly prerelease from the main branch
 sudo somfy upgrade --version vX         # pin or roll back to a specific release
 somfy upgrade --check                   # report if newer release exists, no-op
 somfy doctor                            # check everything, exit non-zero if any red
@@ -47,7 +47,7 @@ The unit file is a template inside the binary, rendered from the binary's own pa
 
 ### `upgrade` flow
 
-1. Query GitHub releases API for the latest stable release, the moving `main` branch prerelease, or the requested tag.
+1. Query GitHub releases API for the latest stable release, the moving `nightly` prerelease, or the requested tag.
 2. If already on that version, exit 0.
 3. Download the armv7 asset to a temp file and verify checksum.
 4. Move the current binary to `/usr/local/bin/somfy.prev`.
@@ -68,7 +68,7 @@ Single JSON contract, the source of truth for "is this thing healthy":
 - unit `ExecStart` matches `/usr/local/bin/somfy serve`?
 - configured service user exists and is in `gpio` group? (defaults to the invoking SSH user)
 - GPIO chip accessible (open `/dev/gpiochip0`)?
-- newer stable release or newer `main` branch build available on GitHub?
+- newer stable release or newer `nightly` build available on GitHub?
 - deployed SHA + build date
 
 Exits 0 if all green, non-zero otherwise.
@@ -105,7 +105,7 @@ One workflow at `.github/workflows/release.yml`, triggered on pushes to `main`, 
 2. Install Bun, build the frontend (`bun --cwd=app run build`).
 3. Install Rust + `cargo-zigbuild` + zig.
 4. `cargo zigbuild --release --target armv7-unknown-linux-gnueabihf.2.31`.
-5. On `main`, publish or refresh a single prerelease named `main` and upload `target/.../release/somfy` there.
+5. On `main`, publish or refresh a single prerelease tagged `nightly` and upload `target/.../release/somfy` there.
 6. On tags, upload the same binary as a stable release asset, plus a `SHA256SUMS` file.
 
 Cache `~/.cargo` and `target/` to keep cold builds tolerable.
@@ -135,8 +135,8 @@ This catches most regressions without pretending GitHub-hosted runners are a Ras
 For GPIO-facing changes, verify on the Pi before cutting a stable tag:
 
 1. Merge to `main`.
-2. Let CI refresh the `main` branch prerelease.
-3. Run `ssh pi sudo somfy upgrade --channel main`.
+2. Let CI refresh the `nightly` prerelease.
+3. Run `ssh pi sudo somfy upgrade --channel nightly`.
 4. Exercise the hardware through the app / browser / CLI.
 5. If it looks good, cut a stable tag.
 
@@ -172,12 +172,12 @@ sudo bash install.sh
 
 ## Iteration
 
-Day-to-day work happens locally — `bun run dev` for the frontend, `cargo run` natively for the backend. The app stays reachable through Cloudflare / SSH as usual, but deploys are intentionally separate from the web interface. The Pi normally runs stable tagged releases, and can opt into the moving `main` branch build when you want to test a change on hardware before cutting a tag.
+Day-to-day work happens locally — `bun run dev` for the frontend, `cargo run` natively for the backend. The app stays reachable through Cloudflare / SSH as usual, but deploys are intentionally separate from the web interface. The Pi normally runs stable tagged releases, and can opt into the moving `nightly` build when you want to test a change on hardware before cutting a tag.
 
 Recommended flow:
 
-1. Merge to `main`. CI builds and refreshes the moving `main` branch prerelease.
-2. Test it on hardware with `ssh pi sudo somfy upgrade --channel main`.
+1. Merge to `main`. CI builds and refreshes the moving `nightly` prerelease.
+2. Test it on hardware with `ssh pi sudo somfy upgrade --channel nightly`.
 3. When satisfied, cut a tag. CI publishes a stable release.
 4. Update the Pi to the stable release with `ssh pi sudo somfy upgrade`.
 
@@ -200,7 +200,7 @@ Put that in `~/.ssh/config`, then connect with:
 ```bash
 ssh pi
 ssh pi sudo somfy upgrade
-ssh pi sudo somfy upgrade --channel main
+ssh pi sudo somfy upgrade --channel nightly
 ```
 
 This is standard OpenSSH, so it works on macOS without any extra tooling.
