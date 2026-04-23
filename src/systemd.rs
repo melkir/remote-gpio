@@ -19,4 +19,3 @@ pub fn is_active(unit: &str) -> Result<String> {
     let state = String::from_utf8_lossy(&output.stdout).trim().to_string();
     Ok(state)
 }
-
