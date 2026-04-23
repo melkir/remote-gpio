@@ -66,7 +66,7 @@ impl std::fmt::Display for Input {
 mod hw {
     use super::*;
     use anyhow::Context;
-    use futures::StreamExt;
+    use futures_util::StreamExt;
     use gpiocdev::line::EdgeDetection;
     use gpiocdev::tokio::AsyncRequest;
     use gpiocdev::{line::Value, Request};
@@ -99,8 +99,12 @@ mod hw {
         let mut last_event = None;
         let mut event_count = 0;
 
+        // Threshold: 4 inputs × 2 edges (rising + falling) × 2 transitions = 16 events.
+        // When all LEDs are lit (Input::ALL), every input toggles, producing many edges.
+        const ALL_EVENTS_THRESHOLD: u32 = 16;
+
         // Collect events within the timeout period
-        while event_count < 16 && start_time.elapsed() < timeout_duration {
+        while event_count < ALL_EVENTS_THRESHOLD && start_time.elapsed() < timeout_duration {
             if let Some(Ok(event)) = events.next().await {
                 last_event = Some(event.offset);
                 event_count += 1;
@@ -110,7 +114,7 @@ mod hw {
         }
 
         // Return ALL if multiple events detected, otherwise return the last event
-        if event_count < 16 {
+        if event_count < ALL_EVENTS_THRESHOLD {
             Input::try_from(last_event.unwrap())
         } else {
             Ok(Input::ALL)

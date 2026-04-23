@@ -321,7 +321,8 @@ fn exec_start_matches(unit: &str) -> bool {
         let Some(args) = rest.strip_prefix(BIN_PATH) else {
             return false;
         };
-        args == " serve"
+        // Allow flags after "serve" (e.g. "serve --verbose")
+        args.split_whitespace().next() == Some("serve")
     })
 }
 
@@ -485,9 +486,9 @@ mod tests {
     }
 
     #[test]
-    fn exec_start_matches_rejects_trailing_arg() {
+    fn exec_start_matches_allows_trailing_args() {
         let unit = "ExecStart=/usr/local/bin/somfy serve --flag\n";
-        assert!(!exec_start_matches(unit));
+        assert!(exec_start_matches(unit));
     }
 
     #[test]
