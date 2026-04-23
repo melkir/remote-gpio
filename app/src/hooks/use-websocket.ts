@@ -99,6 +99,8 @@ class WebSocketClient {
   sendJsonMessage(data: unknown) {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(data));
+    } else {
+      console.warn('[WebSocket] Tried to send while not open:', data);
     }
   }
 }

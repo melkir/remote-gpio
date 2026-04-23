@@ -7,7 +7,7 @@ use axum::http::{Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{routing::get, Json, Router};
-use futures::{sink::SinkExt, stream::StreamExt};
+use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde::Deserialize;
 use std::net::SocketAddr;
 use std::sync::Arc;

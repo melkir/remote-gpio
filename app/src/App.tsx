@@ -51,24 +51,27 @@ export function App() {
         {
           icon: <ChevronUp className="size-8" />,
           command: 'up',
+          label: 'Move up',
           className: 'size-24',
         },
         {
           icon: <Pause className="size-10" />,
           command: 'stop',
+          label: 'Stop',
           className: 'size-28',
         },
         {
           icon: <ChevronDown className="size-8" />,
           command: 'down',
+          label: 'Move down',
           className: 'size-24',
         },
-      ].map(({ icon, command, className }) => (
+      ].map(({ icon, command, label, className }) => (
         <Button
-          {...attrs}
           key={command}
           variant="outline"
           className={cn(className, 'rounded-full active:scale-95')}
+          aria-label={label}
           onClick={() => send({ command })}
         >
           {icon}
@@ -79,10 +82,10 @@ export function App() {
       <div className="flex flex-row items-center justify-center gap-12">
         {['L1', 'L2', 'L3', 'L4'].map((led) => (
           <Button
-            {...attrs}
             key={led}
             variant="ghost"
             className="size-12 rounded-full active:scale-95"
+            aria-label={`Select ${led}`}
             onClick={() => send({ command: 'select', led })}
           >
             <Circle
@@ -100,6 +103,7 @@ export function App() {
           onClick={() => send({ command: 'select' })}
           variant="outline"
           className="size-24 rounded-full active:scale-95"
+          aria-label="Cycle selection (long press to select all)"
         >
           <CircleDot className="size-8" />
         </Button>

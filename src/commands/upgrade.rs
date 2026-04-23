@@ -1,5 +1,5 @@
 use anyhow::{anyhow, bail, Context, Result};
-use futures::StreamExt;
+use futures_util::StreamExt;
 use sha2::{Digest, Sha256};
 use std::fs;
 use std::io::Write;

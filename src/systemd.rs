@@ -20,6 +20,3 @@ pub fn is_active(unit: &str) -> Result<String> {
     Ok(state)
 }
 
-pub fn unit_exists(unit_path: &str) -> bool {
-    std::path::Path::new(unit_path).exists()
-}

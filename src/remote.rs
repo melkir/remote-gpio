@@ -1,4 +1,4 @@
-use anyhow::{Ok, Result};
+use anyhow::Result;
 
 use tokio::sync::watch::{self, Receiver, Sender};
 
