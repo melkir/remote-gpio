@@ -2,8 +2,10 @@ name: ci
 
 on:
   pull_request:
+    paths-ignore: ['homebridge/**']
   push:
     branches: [main, 'renovate/**']
+    paths-ignore: ['homebridge/**']
 
 concurrency:
   group: ci-${{ github.ref }}

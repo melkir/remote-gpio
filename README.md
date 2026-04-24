@@ -24,6 +24,12 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
+Add `-s -- --with-homekit` to the pipe to also install Homebridge + the plugin (see below):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash -s -- --with-homekit
+```
+
 The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service.
 
 ### Day-to-day Operation
@@ -55,6 +61,10 @@ Server listens on `0.0.0.0:5002`.
 {"command": "select"}
 {"command": "select", "led": "L3"}
 ```
+
+### HomeKit (optional)
+
+A Homebridge plugin in [`homebridge/`](homebridge/) exposes each blind as a HomeKit `WindowCovering` so Siri, the iOS Home app, and HomePod all work without a custom iOS app. It's a thin shim over `/command` — no Rust changes. The fastest path is the `--with-homekit` flag on the bootstrap script shown above. See [`homebridge/README.md`](homebridge/README.md) for install, config, and pairing details.
 
 ### Versioning
 
