@@ -83,8 +83,18 @@ if [[ "$WITH_HOMEKIT" == "1" ]]; then
         echo "Homebridge already installed; skipping apt step."
     fi
 
+    echo "Downloading homebridge-somfy-remote plugin..."
+    curl -fsSL "$plugin_url" -o "$tmp/homebridge-somfy-remote.tgz"
+
+    if [[ -s "$tmp/SHA256SUMS" ]] \
+       && grep -q ' homebridge-somfy-remote\.tgz$' "$tmp/SHA256SUMS"; then
+        (cd "$tmp" && sha256sum --ignore-missing -c SHA256SUMS)
+    else
+        echo "warning: no plugin hash in SHA256SUMS; skipping checksum verification" >&2
+    fi
+
     echo "Installing homebridge-somfy-remote plugin..."
-    npm install -g "$plugin_url"
+    npm install -g "$tmp/homebridge-somfy-remote.tgz"
 
     if command -v hb-service >/dev/null 2>&1; then
         hb-service restart || true
