@@ -4,9 +4,17 @@ bun = "1"
 zig = "0.15.2"
 "cargo:cargo-zigbuild" = "0.22.2"
 
+[tasks."install:rust"]
+hide = true
+run = "cargo fetch"
+
+[tasks."install:app"]
+hide = true
+run = "bun --cwd=app install --frozen-lockfile"
+
 [tasks.install]
 description = "Install repo dependencies"
-run = ["cargo fetch", "bun --cwd=app install --frozen-lockfile"]
+depends = ["install:rust", "install:app"]
 
 [tasks.dev]
 description = "Run the app locally"
@@ -30,17 +38,23 @@ run = [
   "cargo test",
 ]
 
-[tasks."check:ci"]
-description = "CI validation (hw features, warnings denied)"
-depends = ["install"]
+[tasks."check:rust"]
+description = "Rust validation (hw features, warnings denied)"
+depends = ["install:rust"]
 run = [
   "cargo fmt --all -- --check",
+  "cargo clippy --all-targets --no-default-features --features hw -- -D warnings",
+  "cargo test --all-targets --no-default-features --features hw",
+]
+
+[tasks."check:app"]
+description = "Frontend validation"
+depends = ["install:app"]
+run = [
   "bun --cwd=app run format:check",
   "bun --cwd=app run lint",
   "bun --cwd=app run typecheck",
   "bun --cwd=app run build",
-  "cargo clippy --all-targets --no-default-features --features hw -- -D warnings",
-  "cargo test --all-targets --no-default-features --features hw",
 ]
 
 [tasks.fmt]
