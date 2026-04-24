@@ -7,10 +7,9 @@ A Rust + Preact app that controls a Raspberry Pi-attached Somfy Telis 4 remote o
 ### Quick Start
 
 ```bash
-brew install bun
-bun --cwd=app install
-bun --cwd=app run build
-cargo run
+brew install mise
+mise install
+mise run dev
 ```
 
 Fresh Pi bootstrap:
