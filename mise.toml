@@ -14,7 +14,7 @@ run = "bun --cwd=app install --frozen-lockfile"
 
 [tasks."install:homebridge"]
 hide = true
-run = "bun --cwd=homebridge install"
+run = "bun --cwd=homebridge install --frozen-lockfile"
 
 [tasks.install]
 description = "Install repo dependencies"

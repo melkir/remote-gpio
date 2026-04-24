@@ -52,15 +52,27 @@ if [[ -z "${asset_url:-}" ]]; then
     exit 1
 fi
 
+if [[ -z "${sums_url:-}" ]]; then
+    echo "error: release is missing SHA256SUMS; cannot verify integrity" >&2
+    exit 1
+fi
+curl -fsSL "$sums_url" -o "$tmp/SHA256SUMS"
+
 echo "Downloading somfy..."
 curl -fsSL "$asset_url" -o "$tmp/somfy"
 
-if [[ -n "${sums_url:-}" ]]; then
-    curl -fsSL "$sums_url" -o "$tmp/SHA256SUMS"
-    (cd "$tmp" && sha256sum --ignore-missing -c SHA256SUMS)
-else
-    echo "warning: no SHA256SUMS in release; skipping checksum verification" >&2
-fi
+verify_checksum() {
+    local file="$1"
+    local line
+    line="$(grep -E "[[:space:]]+\*?${file}$" "$tmp/SHA256SUMS" || true)"
+    if [[ -z "$line" ]]; then
+        echo "error: ${file} has no entry in SHA256SUMS" >&2
+        exit 1
+    fi
+    (cd "$tmp" && printf '%s\n' "$line" | sha256sum -c -)
+}
+
+verify_checksum somfy
 
 install -m 0755 "$tmp/somfy" /usr/local/bin/somfy
 
@@ -85,13 +97,7 @@ if [[ "$WITH_HOMEKIT" == "1" ]]; then
 
     echo "Downloading homebridge-somfy-remote plugin..."
     curl -fsSL "$plugin_url" -o "$tmp/homebridge-somfy-remote.tgz"
-
-    if [[ -s "$tmp/SHA256SUMS" ]] \
-       && grep -q ' homebridge-somfy-remote\.tgz$' "$tmp/SHA256SUMS"; then
-        (cd "$tmp" && sha256sum --ignore-missing -c SHA256SUMS)
-    else
-        echo "warning: no plugin hash in SHA256SUMS; skipping checksum verification" >&2
-    fi
+    verify_checksum homebridge-somfy-remote.tgz
 
     echo "Installing homebridge-somfy-remote plugin..."
     npm install -g "$tmp/homebridge-somfy-remote.tgz"
