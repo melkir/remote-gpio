@@ -21,35 +21,16 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Frontend install
-        run: bun --cwd=app install --frozen-lockfile
-
-      - name: Frontend build
-        run: bun --cwd=app run build
-
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: armv7-unknown-linux-gnueabihf
-
-      - uses: mlugg/setup-zig@v2
-        with:
-          version: 0.15.2
+      - uses: jdx/mise-action@v3
 
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: armv7-release
           cache-targets: true
 
-      - name: Install cargo-zigbuild
-        run: cargo install cargo-zigbuild --locked
+      - run: mise run install
 
-      - name: Cross-compile
-        run: |
-          cargo zigbuild --release \
-            --no-default-features --features hw \
-            --target armv7-unknown-linux-gnueabihf.2.31
+      - run: mise run cross-build
 
       - name: Stage artifacts
         run: |

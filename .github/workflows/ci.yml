@@ -10,27 +10,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  rust:
+  check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: rustfmt, clippy
+      - uses: jdx/mise-action@v3
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Format
-        run: cargo fmt --all -- --check
+      - run: mise run install
 
-      - name: Clippy (hw)
-        run: cargo clippy --all-targets --no-default-features --features hw -- -D warnings
-
-      - name: Tests (hw)
-        run: cargo test --all-targets --no-default-features --features hw
+      - run: mise run check:ci
 
       - name: Validate systemd unit template
         run: |
@@ -39,25 +32,3 @@ jobs:
           getent group gpio >/dev/null || sudo groupadd gpio
           cargo run --quiet --example render_unit -- "$USER" "$tmp/somfy" > "$tmp/somfy.service"
           systemd-analyze verify --no-pager "$tmp/somfy.service"
-
-  frontend:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-
-      - uses: oven-sh/setup-bun@v2
-
-      - name: Install
-        run: bun --cwd=app install --frozen-lockfile
-
-      - name: Build
-        run: bun --cwd=app run build
-
-      - name: Lint
-        run: bun --cwd=app run lint
-
-      - name: Typecheck
-        run: bun --cwd=app run typecheck
-
-      - name: Format
-        run: bun --cwd=app run format:check

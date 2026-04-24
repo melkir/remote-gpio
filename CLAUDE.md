@@ -8,37 +8,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build & Development Commands
 
-### Rust Backend
+Use the repo-level `mise` tasks as the primary command surface:
 
 ```bash
-# Standard build
-cargo build --release
-
-# Cross-compile for Raspberry Pi (armv7 with glibc 2.31). `hw` is required; `fake` is the default for local dev.
-cargo zigbuild --release --no-default-features --features hw --target armv7-unknown-linux-gnueabihf.2.31
+mise tasks
+mise install
+mise run dev
+mise run check
+mise run cross-build
 ```
 
-Cross-compilation requires `zig` and `cargo-zigbuild`:
+`mise tasks` is the source of truth for day-to-day commands. Use direct `cargo`/`bun` commands only when you specifically need a subproject-level operation that is not already modeled as a task.
 
-```bash
-brew install zig
-cargo install cargo-zigbuild
-```
-
-### Frontend (Preact/Vite)
-
-```bash
-bun --cwd=app run dev      # Development server (port 5173)
-bun --cwd=app run build    # Production build to app/dist/
-bun --cwd=app run preview  # Preview production build
-```
-
-### Lint & Format
-
-```bash
-bun --cwd=app run lint     # oxlint
-bun --cwd=app run format   # oxfmt --write
-```
+`mise install` provisions rust (with the armv7 target), bun, zig, and cargo-zigbuild; no extra steps are required for cross-compilation.
 
 ### Deployment
 
