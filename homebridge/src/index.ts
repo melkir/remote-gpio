@@ -137,6 +137,11 @@ class SomfyBlindAccessory implements AccessoryPlugin {
     const { Characteristic: C, HapStatusError, HAPStatus } = this.api.hap;
 
     const numeric = typeof value === 'number' ? value : Number(value);
+    if (!Number.isFinite(numeric)) {
+      this.log.error(`[${this.name}] invalid target position: ${String(value)}`);
+      throw new HapStatusError(HAPStatus.INVALID_VALUE_IN_REQUEST);
+    }
+
     const command = numeric >= 50 ? 'up' : 'down';
     const snapped = numeric >= 50 ? 100 : 0;
 
