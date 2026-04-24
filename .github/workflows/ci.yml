@@ -33,11 +33,16 @@ jobs:
 
   app:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
     steps:
       - uses: actions/checkout@v6
 
-      - uses: jdx/mise-action@v4
-        with:
-          install_args: bun
+      - uses: oven-sh/setup-bun@v2
 
-      - run: mise run check:app
+      - run: bun install --frozen-lockfile
+      - run: bun run format:check
+      - run: bun run lint
+      - run: bun run typecheck
+      - run: bun run build
