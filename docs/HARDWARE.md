@@ -1,31 +1,29 @@
-# Hardware & Architecture Details
+# Hardware & Architecture
 
-Detailed documentation for the RemoteGPIO project.
+A deeper look at how `somfy` is wired to the Somfy Telis 4 and how the backend turns GPIO edges into synchronized UI state.
 
-## Raspberry Pi ↔ Somfy Telis 4 Wiring
+## Raspberry Pi ↔ Somfy Telis 4
 
-This project hard-wires a Raspberry Pi to a Somfy Telis 4 remote:
-
-- **Outputs (Pi → Somfy):** Simulate button presses (active-low)
-- **Inputs (Somfy → Pi):** Read LED selection state
-- **Power:** Shared 3.3V and GND (no level shifting needed)
+- **Outputs (Pi → Somfy):** simulate button presses (active-low pulses).
+- **Inputs (Somfy → Pi):** read the LED selection state.
+- **Power:** shared 3.3V and GND — no level shifting needed.
 
 ### Connection Table
 
-| Raspberry Pi Pin # | GPIO #  | Direction | Somfy Telis 4 Point | Function |
-|--------------------|---------|-----------|---------------------|----------|
-| Pin 17             | 3.3V    | Power     | +3V                 | Power supply to remote |
-| Pin 6              | GND     | Power     | 0V / OV             | Ground |
-| Pin 37             | GPIO26  | Output    | UP                  | Raise blinds |
-| Pin 35             | GPIO19  | Output    | STOP                | Stop movement |
-| Pin 33             | GPIO13  | Output    | DOWN                | Lower blinds |
-| Pin 31             | GPIO6   | Output    | SELECT              | Select next blind |
-| Pin 40             | GPIO21  | Input     | LED1                | Selection indicator 1 |
-| Pin 38             | GPIO20  | Input     | LED2                | Selection indicator 2 |
-| Pin 36             | GPIO16  | Input     | LED3                | Selection indicator 3 |
-| Pin 32             | GPIO12  | Input     | LED4                | Selection indicator 4 |
+| Pi Pin | GPIO   | Direction | Somfy Point | Function              |
+| ------ | ------ | --------- | ----------- | --------------------- |
+| 17     | 3.3V   | Power     | +3V         | Power supply          |
+| 6      | GND    | Power     | 0V          | Ground                |
+| 37     | GPIO26 | Output    | UP          | Raise blinds          |
+| 35     | GPIO19 | Output    | STOP        | Stop movement         |
+| 33     | GPIO13 | Output    | DOWN        | Lower blinds          |
+| 31     | GPIO6  | Output    | SELECT      | Select next blind     |
+| 40     | GPIO21 | Input     | LED1        | Selection indicator 1 |
+| 38     | GPIO20 | Input     | LED2        | Selection indicator 2 |
+| 36     | GPIO16 | Input     | LED3        | Selection indicator 3 |
+| 32     | GPIO12 | Input     | LED4        | Selection indicator 4 |
 
-### ASCII Wiring Diagram
+### Wiring Diagram
 
 ```
   Raspberry Pi                          Somfy Telis 4
@@ -43,13 +41,11 @@ This project hard-wires a Raspberry Pi to a Somfy Telis 4 remote:
   └────────────────┘                   └─────────────┘
 ```
 
----
-
 ## GPIO Implementation
 
 ### Output Pulses
 
-Outputs are driven as active-low pulses. The code asserts the line for ~60ms, then releases—mimicking a button tap.
+Outputs are driven as active-low pulses. The code asserts the line for ~60ms, then releases — mimicking a button tap.
 
 ```rust
 pub async fn trigger_output(output: Output) -> Result<()> {
@@ -70,8 +66,8 @@ pub async fn trigger_output(output: Output) -> Result<()> {
 
 The backend watches input lines with edge detection, collecting up to 16 events within a 300ms window:
 
-- **Multiple rapid edges:** Selection is `ALL` (group mode—LEDs blink)
-- **Single edge:** Maps to `L1`–`L4`
+- **Multiple rapid edges:** selection is `ALL` (group mode — LEDs blink).
+- **Single edge:** maps to `L1`–`L4`.
 
 ```rust
 let timeout_duration = Duration::from_millis(300);
@@ -83,8 +79,6 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 }
 // 16+ edges in 300ms = ALL, otherwise map last edge to L1-L4
 ```
-
----
 
 ## Architecture
 
@@ -127,10 +121,10 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 
 The WebSocket handler uses a single `tokio::select!` loop that concurrently:
 
-1. **Watches LED changes** via `watch::channel` and forwards to client
-2. **Receives messages** (pings, commands) from client
+1. **Watches LED changes** via `watch::channel` and forwards to the client.
+2. **Receives messages** (pings, commands) from the client.
 
-Command processing is spawned as a separate task to avoid blocking LED updates. This ensures all clients see intermediate selection states in real-time.
+Command processing is spawned as a separate task to avoid blocking LED updates. This ensures all clients see intermediate selection states in real time.
 
 ```rust
 loop {
@@ -145,32 +139,28 @@ loop {
 }
 ```
 
-### State Engine: RemoteControl
+### State Engine: `RemoteControl`
 
 `RemoteControl` is the central coordinator:
 
-1. **Startup:** Presses SELECT, reads LEDs, seeds `watch::channel`
-2. **Methods:** `select()`, `up()`, `down()`, `stop()` trigger GPIO
-3. **Broadcasts:** LED changes propagate to all WebSocket clients
-
----
+1. **Startup:** presses SELECT, reads LEDs, seeds the `watch::channel`.
+2. **Methods:** `select()`, `up()`, `down()`, `stop()` trigger GPIO.
+3. **Broadcasts:** LED changes propagate to all WebSocket clients.
 
 ## Frontend
 
 The Preact PWA features:
 
-- **Connection status bar:** Color-coded (connecting/connected/error)
-- **Control buttons:** Large circular Up, Stop, Down buttons
-- **LED indicators:** Clickable dots for L1–L4; center button for SELECT
-- **Long-press:** Sends `ALL` intent for group mode
-- **Haptics:** 100ms on press, 200ms on finish
-- **Auto-reconnect:** Exponential backoff (1s→2s→4s→8s→10s max)
+- **Connection status bar:** color-coded (connecting / connected / error).
+- **Control buttons:** large circular Up, Stop, Down.
+- **LED indicators:** clickable dots for L1–L4; center button for SELECT.
+- **Long-press:** sends `ALL` intent for group mode.
+- **Haptics:** 100ms on press, 200ms on finish.
+- **Auto-reconnect:** exponential backoff (1s → 2s → 4s → 8s → 10s max).
 
----
+## Why This Design
 
-## Why This Design?
-
-- **Single source of truth:** Pi reads real GPIO states and broadcasts—every UI stays consistent
-- **Low-latency:** WebSockets deliver immediate feedback
-- **Non-blocking:** Async GPIO timing doesn't stall the runtime
-- **Small footprint:** Easy to audit, extend, or port to different hardware
+- **Single source of truth:** the Pi reads real GPIO state and broadcasts — every UI stays consistent.
+- **Low latency:** WebSockets deliver immediate feedback.
+- **Non-blocking:** async GPIO timing doesn't stall the runtime.
+- **Small footprint:** easy to audit, extend, or port to different hardware.

@@ -1,78 +1,42 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Guidance for Claude Code working in this repo. User-facing docs live in `readme.md`.
 
-## Project Overview
+## Project
 
-`somfy` is a Rust + Preact application that controls a Raspberry Pi-attached Somfy Telis 4 remote over WebSocket and HTTP for managing window blinds/shutters through hardware GPIO pins. The Rust crate ships as a single self-managing binary (`somfy`) with clap subcommands; the frontend is embedded at build time.
+`somfy` is a Rust + Preact app that controls a Raspberry Pi-attached Somfy Telis 4 remote. It ships as a single self-managing binary with clap subcommands; the Preact frontend is embedded at build time via `rust-embed`.
 
-## Build & Development Commands
+## Commands
 
-Use the repo-level `mise` tasks as the primary command surface:
-
-```bash
-mise tasks
-mise install
-mise run dev
-mise run check
-mise run cross-build
-```
-
-`mise tasks` is the source of truth for day-to-day commands. Use direct `cargo`/`bun` commands only when you specifically need a subproject-level operation that is not already modeled as a task.
-
-`mise install` provisions rust (with the armv7 target), bun, zig, and cargo-zigbuild; no extra steps are required for cross-compilation.
-
-### Deployment
-
-See `docs/deploy-cli.md`. CI cross-compiles for armv7 and publishes release assets; the Pi pulls updates itself:
+Use the repo-level `mise` tasks as the primary surface:
 
 ```bash
-ssh pi sudo somfy install              # idempotent: write unit, enable --now
-ssh pi sudo somfy upgrade              # latest stable
-ssh pi sudo somfy upgrade --channel main  # moving main-branch prerelease
-ssh pi sudo somfy upgrade --version v0.2.0
-ssh pi somfy doctor                    # health check; works without sudo
-ssh pi somfy --version                 # embedded git SHA + build date
+mise tasks         # source of truth for day-to-day commands
+mise install       # provisions rust (armv7 target), bun, zig, cargo-zigbuild
+mise run dev       # server + frontend dev loop
+mise run check     # fmt, lint, typecheck, clippy, test
+mise run cross-build  # armv7 release build
 ```
 
-Fresh-Pi bootstrap: `curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash`.
+Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled as a task.
 
-## Architecture
+## Repo Layout
 
-```
-Frontend (Preact)                Backend (Axum)              Hardware (Pi GPIO)
-     │                                │                            │
-     │ WebSocket /ws                  │                            │
-     │ POST /command ────────────────►│ server.rs                  │
-     │                                │     │                      │
-     │                                │     ▼                      │
-     │                                │ remote.rs ◄────────────► gpio.rs
-     │◄──────────────────────────────┤ (watch::channel)            │
-     │ LED state broadcasts           │                            │
-                                                            Output pins (pulses):
-                                                            - GPIO26: UP
-                                                            - GPIO19: STOP
-                                                            - GPIO13: DOWN
-                                                            - GPIO6:  SELECT
-
-                                                            Input pins (LED read):
-                                                            - GPIO21: L1
-                                                            - GPIO20: L2
-                                                            - GPIO16: L3
-                                                            - GPIO12: L4
-```
-
-**Backend (Rust):** Axum server on `0.0.0.0:5002` with Tokio single-threaded runtime. Uses `gpiocdev` for GPIO control.
-
-**Frontend (Preact):** PWA with WebSocket auto-reconnect, haptic feedback, and Tailwind CSS styling.
-
-**State Flow:** Pi reads GPIO input states and broadcasts changes via `watch::channel` to all WebSocket clients.
+- `src/cli.rs` — clap subcommands. Default is `serve`. Per-command logic under `src/commands/`.
+- `src/server.rs` — Axum routes (`/ws`, `/command`, `/led`, embedded static files).
+- `src/remote.rs` — `RemoteControl` state engine; broadcasts LED state via `watch::channel`.
+- `src/gpio.rs` — `gpiocdev` wrapper. Output pulses are 60ms active-low; input debounce uses a 300ms edge-count window.
+- `build.rs` + `vergen` — embeds git SHA and build date at compile time.
+- `app/` — Preact PWA. Vite + Tailwind. React imports aliased to `preact/compat` in `tsconfig.json` and `vite.config.ts`.
 
 ## Key Patterns
 
-- **GPIO Timing:** Output pulses are 60ms async (non-blocking); input debounce uses 300ms window
-- **WebSocket:** Single `select!` loop handles LED updates and incoming messages; commands spawned to avoid blocking
-- **Error Handling:** `anyhow::Result<T>` throughout Rust code
-- **Preact Aliases:** React imports aliased to `preact/compat` in tsconfig and vite config
-- **Static Serving:** `rust-embed` bundles `app/dist/` into the release binary; debug builds read from disk for hot-reload
-- **CLI structure:** `src/cli.rs` defines clap subcommands; per-command logic lives under `src/commands/`. Default subcommand is `serve`. `somfy doctor` is the source-of-truth health check and runs on every `serve` startup.
+- **Error handling:** `anyhow::Result<T>` throughout the Rust code.
+- **WebSocket loop:** single `tokio::select!` handles incoming messages and LED updates; command processing is spawned so it can't block broadcasts.
+- **Static serving:** release builds embed `app/dist/`; debug builds read from disk for hot-reload.
+- **Doctor is the source of truth** for "is this thing healthy" — `somfy doctor` runs on every `serve` startup and is the single JSON contract for health (unit drift, GPIO access, service user/group, available updates, deployed SHA).
+- **Install/upgrade are idempotent.** `somfy install` defaults the service user from `SUDO_USER` and only writes the unit if it differs from the template. `somfy upgrade` downloads, checksums, swaps, restarts, and rolls back to `somfy.prev` if the new binary fails to come up.
+
+## CI / Deployment
+
+One workflow at `.github/workflows/release.yml`. Pushes to `main` refresh a moving `main` prerelease; tag pushes (`v*`) publish a stable release + `SHA256SUMS`. CI never touches the Pi — updates happen via `ssh pi sudo somfy upgrade`. See [README.md](README.md) for the operator-facing flow.
