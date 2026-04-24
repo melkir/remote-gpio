@@ -2,7 +2,7 @@
 rust = { version = "stable", profile = "default", targets = "armv7-unknown-linux-gnueabihf" }
 bun = "1"
 zig = "0.15.2"
-"cargo:cargo-zigbuild" = "latest"
+"cargo:cargo-zigbuild" = "0.22.2"
 
 [tasks.install]
 description = "Install repo dependencies"
@@ -10,14 +10,17 @@ run = ["cargo fetch", "bun --cwd=app install --frozen-lockfile"]
 
 [tasks.dev]
 description = "Run the app locally"
+depends = ["install"]
 run = [{ tasks = ["server-dev", "app-dev"] }]
 
 [tasks.build]
 description = "Build the production app"
+depends = ["install"]
 run = ["bun --cwd=app run build", "cargo build --release"]
 
 [tasks.check]
 description = "Local validation (default/fake features)"
+depends = ["install"]
 run = [
   "cargo fmt --all -- --check",
   "bun --cwd=app run format:check",
@@ -29,11 +32,13 @@ run = [
 
 [tasks."check:ci"]
 description = "CI validation (hw features, warnings denied)"
+depends = ["install"]
 run = [
   "cargo fmt --all -- --check",
   "bun --cwd=app run format:check",
   "bun --cwd=app run lint",
   "bun --cwd=app run typecheck",
+  "bun --cwd=app run build",
   "cargo clippy --all-targets --no-default-features --features hw -- -D warnings",
   "cargo test --all-targets --no-default-features --features hw",
 ]
@@ -44,6 +49,7 @@ run = ["cargo fmt --all", "bun --cwd=app run format"]
 
 [tasks.cross-build]
 description = "Cross-compile for Raspberry Pi with cargo-zigbuild"
+depends = ["install"]
 run = [
   "bun --cwd=app run build",
   "cargo zigbuild --release --no-default-features --features hw --target armv7-unknown-linux-gnueabihf.2.31",

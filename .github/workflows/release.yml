@@ -28,8 +28,6 @@ jobs:
           shared-key: armv7-release
           cache-targets: true
 
-      - run: mise run install
-
       - run: mise run cross-build
 
       - name: Stage artifacts

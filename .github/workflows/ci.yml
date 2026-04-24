@@ -21,8 +21,6 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - run: mise run install
-
       - run: mise run check:ci
 
       - name: Validate systemd unit template
