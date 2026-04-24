@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. User-facing docs live in `readme.md`.
+Guidance for Claude Code working in this repo. User-facing docs live in [README.md](README.md).
 
 ## Project
 
