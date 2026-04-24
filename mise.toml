@@ -1,5 +1,5 @@
 [tools]
-rust = { version = "stable", profile = "default", targets = "armv7-unknown-linux-gnueabihf" }
+rust = { version = "stable", profile = "default" }
 bun = "1"
 zig = "0.15.2"
 "cargo:cargo-zigbuild" = "0.22.2"

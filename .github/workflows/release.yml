@@ -23,6 +23,8 @@ jobs:
 
       - uses: jdx/mise-action@v4
 
+      - run: rustup target add armv7-unknown-linux-gnueabihf
+
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: armv7-release
