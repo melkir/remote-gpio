@@ -47,7 +47,11 @@ jobs:
           cp target/homebridge/homebridge-somfy-remote.tgz out/
 
       - name: Compute SHA256SUMS
-        run: (cd out && sha256sum * > SHA256SUMS)
+        run: |
+          cd out
+          files=(somfy)
+          [[ -f homebridge-somfy-remote.tgz ]] && files+=(homebridge-somfy-remote.tgz)
+          sha256sum "${files[@]}" > SHA256SUMS
 
       - name: Publish nightly prerelease
         if: github.ref == 'refs/heads/main'

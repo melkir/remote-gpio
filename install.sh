@@ -40,7 +40,7 @@ api="https://api.github.com/repos/$REPO/releases/latest"
 release_json="$(curl -fsSL "$api")"
 
 asset_url="$(echo "$release_json" \
-    | grep -E '"browser_download_url":.*/somfy"' \
+    | grep -E '"browser_download_url":.*/somfy"$' \
     | head -1 | cut -d '"' -f 4)"
 
 sums_url="$(echo "$release_json" \
