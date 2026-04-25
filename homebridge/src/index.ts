@@ -72,22 +72,25 @@ class SomfyRemotePlatform implements StaticPlatformPlugin {
   }
 
   accessories(callback: (found: AccessoryPlugin[]) => void): void {
-    callback(
-      this.blinds.map(
-        (blind) => new SomfyBlindAccessory(this.api, this.log, blind, this.baseUrl, this.timeoutMs),
-      ),
+    const created = this.blinds.map(
+      (blind) => new SomfyBlindAccessory(this.api, this.log, blind, this.baseUrl, this.timeoutMs),
     );
+    for (const accessory of created) {
+      accessory.setSiblings(created);
+    }
+    callback(created);
   }
 }
 
 class SomfyBlindAccessory implements AccessoryPlugin {
   private readonly api: API;
   private readonly log: Logging;
-  private readonly led: Led;
+  public readonly led: Led;
   private readonly baseUrl: string;
   private readonly timeoutMs: number;
   private readonly informationService: Service;
   private readonly service: Service;
+  private siblings: SomfyBlindAccessory[] = [];
 
   public readonly name: string;
   private position = 100;
@@ -133,6 +136,18 @@ class SomfyBlindAccessory implements AccessoryPlugin {
     return [this.informationService, this.service];
   }
 
+  setSiblings(all: SomfyBlindAccessory[]): void {
+    this.siblings = all.filter((a) => a !== this);
+  }
+
+  syncPosition(snapped: number): void {
+    if (this.position === snapped) return;
+    const { Characteristic: C } = this.api.hap;
+    this.position = snapped;
+    this.service.getCharacteristic(C.CurrentPosition).updateValue(snapped);
+    this.service.getCharacteristic(C.TargetPosition).updateValue(snapped);
+  }
+
   private async handleSetTargetPosition(value: CharacteristicValue): Promise<void> {
     const { Characteristic: C, HapStatusError, HAPStatus } = this.api.hap;
 
@@ -156,6 +171,22 @@ class SomfyBlindAccessory implements AccessoryPlugin {
     this.position = snapped;
     this.service.getCharacteristic(C.CurrentPosition).updateValue(snapped);
     this.service.getCharacteristic(C.TargetPosition).updateValue(snapped);
+    this.propagate(snapped);
+  }
+
+  private propagate(snapped: number): void {
+    if (this.led === 'ALL') {
+      for (const sibling of this.siblings) {
+        if (sibling.led !== 'ALL') sibling.syncPosition(snapped);
+      }
+      return;
+    }
+    const individuals = this.siblings.filter((s) => s.led !== 'ALL');
+    const allMatch = individuals.every((s) => s.position === snapped);
+    if (!allMatch) return;
+    for (const sibling of this.siblings) {
+      if (sibling.led === 'ALL') sibling.syncPosition(snapped);
+    }
   }
 
   private async postCommand(body: { command: string; led: Led }): Promise<void> {
