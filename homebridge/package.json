@@ -9,6 +9,9 @@
     "config.schema.json",
     "README.md"
   ],
+  "publishConfig": {
+    "access": "public"
+  },
   "engines": {
     "node": ">=18",
     "homebridge": ">=1.6.0"

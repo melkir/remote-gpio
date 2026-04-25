@@ -81,9 +81,7 @@ echo "Running somfy install..."
 /usr/local/bin/somfy install
 
 if [[ "$WITH_HOMEKIT" == "1" ]]; then
-    plugin_url="https://github.com/$REPO/releases/latest/download/homebridge-somfy-remote.tgz"
-
-    if ! command -v homebridge >/dev/null 2>&1; then
+    if ! command -v hb-service >/dev/null 2>&1; then
         echo "Installing Homebridge from repo.homebridge.io..."
         curl -fsSL https://repo.homebridge.io/KEY.gpg \
             | gpg --dearmor --yes -o /usr/share/keyrings/homebridge.gpg
@@ -95,24 +93,14 @@ if [[ "$WITH_HOMEKIT" == "1" ]]; then
         echo "Homebridge already installed; skipping apt step."
     fi
 
-    echo "Downloading homebridge-somfy-remote plugin..."
-    curl -fsSL "$plugin_url" -o "$tmp/homebridge-somfy-remote.tgz"
-    verify_checksum homebridge-somfy-remote.tgz
-
-    echo "Installing homebridge-somfy-remote plugin..."
-    npm install -g "$tmp/homebridge-somfy-remote.tgz"
-
-    if command -v hb-service >/dev/null 2>&1; then
-        hb-service restart || true
-    fi
-
     cat <<EOF
 
-HomeKit bootstrap complete. Next:
+Homebridge installed. Finish the plugin setup from the UI:
   1. Open the Homebridge UI at http://$(hostname -I | awk '{print $1}'):8581
-  2. Under Plugins → homebridge-somfy-remote → Settings, keep the default
-     baseUrl (http://localhost:5002) unless your somfy listens elsewhere.
-  3. On your iPhone: Home → Add Accessory → More Options → scan the
+  2. Plugins tab → search "homebridge-somfy-remote" → Install.
+  3. In the plugin's Settings, keep the default baseUrl
+     (http://localhost:5002) unless somfy listens elsewhere.
+  4. On your iPhone: Home → Add Accessory → More Options → scan the
      Homebridge setup code shown in the UI.
 EOF
 fi
