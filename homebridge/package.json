@@ -1,0 +1,44 @@
+{
+  "name": "homebridge-somfy-remote",
+  "version": "0.1.0",
+  "description": "Homebridge plugin that exposes a Pi-attached Somfy Telis 4 remote as HomeKit WindowCovering accessories.",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "config.schema.json",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "engines": {
+    "node": ">=18",
+    "homebridge": ">=1.6.0"
+  },
+  "keywords": [
+    "homebridge-plugin",
+    "homekit",
+    "somfy",
+    "blinds",
+    "raspberry-pi"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/melkir/remote-gpio.git",
+    "directory": "homebridge"
+  },
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "prepack": "bun run clean && bun run build"
+  },
+  "peerDependencies": {
+    "homebridge": ">=1.6.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.0",
+    "homebridge": "^1.8.0",
+    "typescript": "^6.0.3"
+  }
+}
