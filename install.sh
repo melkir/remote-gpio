@@ -93,14 +93,14 @@ if [[ "$WITH_HOMEKIT" == "1" ]]; then
         echo "Homebridge already installed; skipping apt step."
     fi
 
+    echo "Installing homebridge-somfy-remote plugin..."
+    hb-service add homebridge-somfy-remote
+
     cat <<EOF
 
-Homebridge installed. Finish the plugin setup from the UI:
+HomeKit bootstrap complete. Next:
   1. Open the Homebridge UI at http://$(hostname -I | awk '{print $1}'):8581
-  2. Plugins tab → search "homebridge-somfy-remote" → Install.
-  3. In the plugin's Settings, keep the default baseUrl
-     (http://localhost:5002) unless somfy listens elsewhere.
-  4. On your iPhone: Home → Add Accessory → More Options → scan the
+  2. On your iPhone: Home → Add Accessory → More Options → scan the
      Homebridge setup code shown in the UI.
 EOF
 fi

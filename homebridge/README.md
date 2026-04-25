@@ -11,17 +11,15 @@ Current position snaps to the target immediately (no progress simulation, since 
 
 ## Install
 
-Run the bootstrap script with `--with-homekit` to add the Homebridge apt repo and install Homebridge:
+Run the bootstrap script with `--with-homekit` to add the Homebridge apt repo, install Homebridge, and install this plugin via `hb-service add`:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash -s -- --with-homekit
 ```
 
-Safe to re-run on a box that already has `somfy` installed; `somfy install` is idempotent.
+Safe to re-run on a box that already has `somfy` installed; `somfy install` is idempotent. Updates flow through the Homebridge UI at `http://<pi>:8581` → **Plugins**, which polls the npm registry where CI publishes each tagged release.
 
-Then install the plugin from the Homebridge UI at `http://<pi>:8581` → **Plugins** → search **homebridge-somfy-remote** → **Install**. Updates flow through the same UI.
-
-For local development, `mise run homebridge-pack` writes a tarball to `target/homebridge/` so you can `npm install` it directly into a dev Homebridge.
+For local development, `mise run homebridge-pack` writes a tarball to `target/homebridge/` so you can `sudo hb-service add /path/to/homebridge-somfy-remote.tgz` into a dev Homebridge.
 
 ## Config
 
