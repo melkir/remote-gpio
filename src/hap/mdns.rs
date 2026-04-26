@@ -1,5 +1,7 @@
 use anyhow::{Context, Result};
+use base64::Engine;
 use mdns_sd::{ServiceDaemon, ServiceInfo};
+use sha2::{Digest, Sha512};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 
@@ -35,6 +37,7 @@ pub fn announce(state: &HapState, port: u16) -> Result<Announcement> {
     props.insert("s#".into(), state.state_number.to_string());
     props.insert("sf".into(), state.status_flag().into());
     props.insert("ci".into(), HAP_CATEGORY.into());
+    props.insert("sh".into(), setup_hash(&state.setup_id, &state.device_id));
 
     // mdns-sd resolves the host's interface IPs automatically when given an
     // empty address list, but we pass an unspecified placeholder for clarity.
@@ -103,4 +106,33 @@ fn sanitize_instance(name: &str) -> String {
             }
         })
         .collect()
+}
+
+fn setup_hash(setup_id: &str, device_id: &str) -> String {
+    let mut hasher = Sha512::new();
+    hasher.update(setup_id.as_bytes());
+    hasher.update(device_id.as_bytes());
+    let digest = hasher.finalize();
+    base64::engine::general_purpose::STANDARD.encode(&digest[..4])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn setup_hash_is_base64_of_first_four_sha512_bytes() {
+        assert_eq!(
+            setup_hash("7OSX", "AB:CD:EF:12:34:56"),
+            "L6e5JQ=="
+        );
+    }
+
+    #[test]
+    fn setup_hash_changes_with_setup_id_and_device_id() {
+        let original = setup_hash("7OSX", "AB:CD:EF:12:34:56");
+
+        assert_ne!(original, setup_hash("8OSX", "AB:CD:EF:12:34:56"));
+        assert_ne!(original, setup_hash("7OSX", "AB:CD:EF:12:34:57"));
+    }
 }
