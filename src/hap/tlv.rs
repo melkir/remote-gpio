@@ -70,6 +70,10 @@ impl Tlv {
                 out.push(chunk.len() as u8);
                 out.extend_from_slice(chunk);
             }
+            if value.len() % 255 == 0 {
+                out.push(*tag);
+                out.push(0);
+            }
         }
         out
     }
@@ -86,6 +90,7 @@ pub struct ParsedTlv {
 impl ParsedTlv {
     pub fn parse(input: &[u8]) -> Result<Self> {
         let mut items: Vec<(u8, Vec<u8>)> = Vec::new();
+        let mut terminated_tag: Option<u8> = None;
         let mut i = 0;
         while i < input.len() {
             if i + 2 > input.len() {
@@ -100,14 +105,29 @@ impl ParsedTlv {
             let value = &input[i..i + len];
             i += len;
 
+            if len == 0 {
+                if let Some(last) = items.last() {
+                    if last.0 == tag && last.1.len() % 255 == 0 && !last.1.is_empty() {
+                        terminated_tag = Some(tag);
+                        continue;
+                    }
+                }
+            }
+
             // Concatenate fragments: previous item with same tag of length 255.
             if let Some(last) = items.last_mut() {
-                if last.0 == tag && last.1.len() % 255 == 0 && !last.1.is_empty() {
+                if last.0 == tag
+                    && last.1.len() % 255 == 0
+                    && !last.1.is_empty()
+                    && terminated_tag != Some(tag)
+                {
                     last.1.extend_from_slice(value);
+                    terminated_tag = None;
                     continue;
                 }
             }
             items.push((tag, value.to_vec()));
+            terminated_tag = None;
         }
         Ok(Self { items })
     }
@@ -158,15 +178,21 @@ mod tests {
 
     #[test]
     fn fragment_boundary_exact_multiple() {
-        // Exactly 255 bytes is a single fragment but the next item with the
-        // same tag should NOT be glued on.
+        // Exact-255 fragments are followed by a zero-length terminator so the
+        // next item with the same tag starts a separate value.
         let bytes = Tlv::new()
             .put(Tag::PublicKey, vec![1u8; 255])
             .put(Tag::PublicKey, vec![2u8; 10])
             .encode();
         let parsed = ParsedTlv::parse(&bytes).unwrap();
-        // Per HAP rules, same tag back-to-back at 255 bytes WILL concatenate.
-        // So we expect one entry of 265 bytes here.
-        assert_eq!(parsed.get(Tag::PublicKey).unwrap().len(), 265);
+        let values: Vec<&[u8]> = parsed
+            .items
+            .iter()
+            .filter(|(tag, _)| *tag == Tag::PublicKey as u8)
+            .map(|(_, value)| value.as_slice())
+            .collect();
+        assert_eq!(values.len(), 2);
+        assert_eq!(values[0], vec![1u8; 255]);
+        assert_eq!(values[1], vec![2u8; 10]);
     }
 }

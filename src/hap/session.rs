@@ -64,6 +64,7 @@ impl EncryptedReader {
     }
 
     pub fn consume(&mut self, n: usize) {
+        let n = n.min(self.buf.len());
         self.buf.drain(..n);
     }
 

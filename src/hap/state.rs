@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
-use rand::{rngs::SysRng, TryRng};
+use rand::rngs::OsRng;
+use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -79,29 +80,25 @@ impl HapState {
     }
 
     fn generate() -> Self {
-        let mut ltsk = [0u8; 32];
-        SysRng
-            .try_fill_bytes(&mut ltsk)
-            .expect("system RNG failed while generating HAP identity");
+        let mut rng = OsRng;
+        let signing = SigningKey::generate(&mut rng);
 
         let mut id_bytes = [0u8; 6];
-        SysRng
-            .try_fill_bytes(&mut id_bytes)
-            .expect("system RNG failed while generating HAP device id");
+        rng.fill(&mut id_bytes);
         let device_id = id_bytes
             .iter()
             .map(|b| format!("{:02X}", b))
             .collect::<Vec<_>>()
             .join(":");
 
-        let setup_code = srp_setup_code(random_setup_code());
+        let setup_code = srp_setup_code(rng.gen_range(0..100_000_000u32));
 
         Self {
             device_id,
             setup_code,
             config_number: 1,
             state_number: 1,
-            ltsk: SigningKey::from_bytes(&ltsk).to_bytes(),
+            ltsk: signing.to_bytes(),
             paired_controllers: Vec::new(),
         }
     }
@@ -122,20 +119,6 @@ fn srp_setup_code(code_num: u32) -> String {
         (code_num / 1_000) % 100,
         code_num % 1_000
     )
-}
-
-fn random_setup_code() -> u32 {
-    const UPPER: u64 = 100_000_000;
-    const ZONE: u64 = (u32::MAX as u64 + 1) / UPPER * UPPER;
-
-    loop {
-        let value = SysRng
-            .try_next_u32()
-            .expect("system RNG failed while generating HAP setup code") as u64;
-        if value < ZONE {
-            return (value % UPPER) as u32;
-        }
-    }
 }
 
 pub fn state_dir() -> PathBuf {

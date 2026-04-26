@@ -6,6 +6,7 @@ use serde_json::Value;
 use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
@@ -40,7 +41,14 @@ pub async fn serve(ctx: Arc<HapContext>) -> Result<()> {
     tracing::info!("HAP server listening on {}", addr);
 
     loop {
-        let (stream, peer) = listener.accept().await?;
+        let (stream, peer) = match listener.accept().await {
+            Ok(accepted) => accepted,
+            Err(e) => {
+                tracing::warn!("hap accept failed; continuing: {e}");
+                tokio::time::sleep(Duration::from_millis(100)).await;
+                continue;
+            }
+        };
         let ctx = ctx.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, ctx).await {
@@ -267,10 +275,11 @@ async fn handle_put_characteristics(
         };
         let snapped = if value >= 50 { 100u8 } else { 0u8 };
 
+        let mut positions = ctx.positions.lock().await;
         // Skip the physical command when the cached position already matches.
         // iOS replays the last-seen TargetPosition right after pairing; without
         // this check we'd send an unwanted UP/DOWN on registration.
-        let current = ctx.positions.lock().await.get(&aid).copied().unwrap_or(100);
+        let current = positions.get(&aid).copied().unwrap_or(100);
         if current == snapped {
             tracing::debug!("PUT TargetPosition aid={aid} value={snapped}: cache hit, no-op");
             continue;
@@ -286,7 +295,6 @@ async fn handle_put_characteristics(
             .execute(Some(blind.led), command)
             .await?;
 
-        let mut positions = ctx.positions.lock().await;
         let before = positions.clone();
         positions.insert(aid, snapped);
         propagate_positions(&mut positions, blind, snapped);

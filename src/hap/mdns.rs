@@ -72,7 +72,7 @@ pub fn log_setup_payload(state: &HapState) {
 }
 
 fn short_id(device_id: &str) -> String {
-    device_id.replace(':', "")[..6].to_string()
+    device_id.chars().filter(|c| *c != ':').take(6).collect()
 }
 
 fn sanitize_instance(name: &str) -> String {

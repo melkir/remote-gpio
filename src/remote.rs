@@ -1,9 +1,11 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::str::FromStr;
 
 use tokio::sync::watch::{self, Receiver, Sender};
 
 use crate::gpio::{trigger_output, watch_inputs, Input, Output};
+
+const MAX_SELECT_CYCLES: usize = 8;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {
@@ -73,8 +75,13 @@ impl RemoteControl {
     /// `led=None` triggers exactly one cycle tick.
     pub async fn execute(&self, led: Option<Input>, command: Command) -> Result<()> {
         if let Some(target) = led {
+            let mut attempts = 0;
             while *self.receiver.borrow() != target {
+                if attempts >= MAX_SELECT_CYCLES {
+                    bail!("LED selection did not reach {target} after {attempts} select cycles");
+                }
                 self.select().await?;
+                attempts += 1;
             }
         }
         match command {

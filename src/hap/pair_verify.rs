@@ -8,6 +8,7 @@ use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
 use ed25519_dalek::{Signer, Verifier, VerifyingKey};
 use hkdf::Hkdf;
+use rand::rngs::OsRng;
 use sha2::Sha512;
 use x25519_dalek::{EphemeralSecret, PublicKey as XPub};
 
@@ -77,7 +78,7 @@ impl PairVerifySession {
         };
         let ios_pub_array: [u8; 32] = ios_pub_bytes.try_into().unwrap();
 
-        let accessory_secret = EphemeralSecret::random();
+        let accessory_secret = EphemeralSecret::random_from_rng(OsRng);
         let accessory_pub = XPub::from(&accessory_secret);
         let shared = accessory_secret.diffie_hellman(&XPub::from(ios_pub_array));
         let shared_secret: [u8; 32] = shared.to_bytes();
