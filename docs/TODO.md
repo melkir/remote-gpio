@@ -1,50 +1,43 @@
 ### TODO
 
-#### 1. Merge HAP into Existing Server (`:5002`)
-
-- Remove dedicated HAP server (`:5010`)
-- Run HAP within the same runtime and listener as the main server
-- Ensure HAP has access to shared `ctx` (no duplication of state or logic)
-- Verify no additional listeners/threads are spawned
-
-#### 2. Extend Existing Command Layer (Single Source of Truth)
+#### 1. Extend Existing Command Layer (Single Source of Truth)
 
 - Remove the duplicated logic (e.g. `execute_blind_command` and `process_command`)
-- Avoid internal HTTP/WebSocket calls — use direct function calls
+- Keep HAP on its dedicated listener, but share the same in-process command API
+- Avoid internal HTTP/WebSocket calls between subsystems — use direct function calls
 
-#### 3. Validate Accessory Initialization Behavior
+#### 2. Validate Accessory Initialization Behavior
 
-- Confirm that merging servers removes unintended `UP` trigger on registration
+- Confirm whether initial HomeKit synchronization triggers an unintended `UP`
 - If still present:
   - Prevent command execution during HAP accessory setup/sync phase
 - Ensure initialization is **read-only** and does not cause side effects
 
-#### 4. Persist Last Known State (Minimal Scope)
+#### 3. Persist Last Known State (Minimal Scope)
 
 - Store last known device state (for HAP consistency on restart)
 - Reload state on server start and expose it to HAP
 - Do **not** use this state to actively control/reset devices
 
-#### 5. Verify Server Lifecycle & Cleanup
+#### 4. Verify Server Lifecycle & Cleanup
 
-- Confirm that merging into `:5002` resolves shutdown issues
 - Ensure:
   - Clean shutdown (no non-zero exit)
   - Proper task termination
   - GPIO/resources released correctly
-- Remove any cleanup logic that was only needed for the separate HAP server
+- Confirm the HAP listener and mDNS announcement both unwind cleanly
+- Remove any cleanup logic that no longer applies after HAP stabilization
 
-#### 6. Routing & Structure (Non-invasive Refactor)
+#### 5. HAP Structure (Non-invasive Refactor)
 
-- Integrate HAP handlers into existing router (e.g. Axum)
-- Keep HAP as an extension of the current system, not a separate module
+- Keep HAP as part of the same process, not a separate service
+- Keep transport/protocol code isolated from the shared command layer
 - Maintain clear boundaries without over-abstracting
 
 ---
 
 ### Verification Checklist
 
-- [ ] Only one server running on `:5002`
 - [ ] No duplicated command paths or logic
 - [ ] REST / WebSocket / HAP all use the same command layer
 - [ ] No commands triggered during accessory registration
