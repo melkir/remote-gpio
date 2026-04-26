@@ -26,9 +26,27 @@ pub async fn run() -> Result<()> {
 
     tokio::select! {
         res = serve(shared_state) => res,
-        _ = tokio::signal::ctrl_c() => {
-            tracing::info!("received Ctrl-C, shutting down");
+        sig = wait_for_shutdown() => {
+            tracing::info!("received {sig}, shutting down");
             Ok(())
         }
+    }
+}
+
+/// Resolves to a human-readable signal name when SIGINT or SIGTERM fires.
+/// SIGTERM is what systemd sends on `systemctl stop somfy`.
+async fn wait_for_shutdown() -> &'static str {
+    use tokio::signal::unix::{signal, SignalKind};
+    let mut term = match signal(SignalKind::terminate()) {
+        Ok(s) => s,
+        Err(e) => {
+            tracing::warn!("failed to install SIGTERM handler: {e}");
+            tokio::signal::ctrl_c().await.ok();
+            return "SIGINT";
+        }
+    };
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => "SIGINT",
+        _ = term.recv() => "SIGTERM",
     }
 }

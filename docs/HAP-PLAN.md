@@ -4,7 +4,7 @@ Companion to [HAP.md](HAP.md) — the project-specific execution plan.
 
 ## Current state (working)
 
-Phases 1–6 + Phase 9 are landed and verified end-to-end against an iPhone:
+Phases 1–7 + Phase 9 are landed and verified end-to-end against an iPhone:
 
 - ✅ Persistent state at `$STATE_DIRECTORY/hap.json` (device id, Ed25519 LTSK, setup code, paired controllers).
 - ✅ mDNS advertisement of `_hap._tcp` via `mdns-sd`.
@@ -18,6 +18,8 @@ Phases 1–6 + Phase 9 are landed and verified end-to-end against an iPhone:
 - ✅ Suppress UP-on-registration: PUT entries without a `value` (event subscriptions) and writes that match the cached position are no-ops.
 - ✅ Position cache persisted to `positions.json` next to `hap.json`; reload is read-only.
 - ✅ EVENT/1.0 push: per-connection subscription set, broadcast channel fans out CurrentPosition / TargetPosition / PositionState updates so the "Closing…" spinner resolves and All-Blinds propagates to siblings live.
+- ✅ `somfy doctor` covers HAP state file readability + paired-controllers count.
+- ✅ `serve` handles SIGTERM (systemd) in addition to SIGINT; `Announcement::drop` unregisters the mDNS service on either path.
 
 Homebridge plugin still ships and runs in parallel — cutover happens at the end of Phase 8.
 
@@ -26,12 +28,6 @@ Homebridge plugin still ships and runs in parallel — cutover happens at the en
 ## Next steps (TODO)
 
 The remaining work is consolidation and polish, driven by [TODO.md](TODO.md).
-
-### Phase 7 — Lifecycle & cleanup
-
-- Verify `somfy doctor` covers HAP (port bind, state file readable, paired-controllers count).
-- Confirm Ctrl-C, SIGTERM, and `systemctl stop somfy` all unwind without leaving orphan threads. The mdns-sd daemon spawns OS threads — verify they exit on `Announcement::drop`.
-- Confirm the dedicated HAP listener shuts down cleanly alongside the main HTTP server.
 
 ### Phase 8 — Retire Homebridge
 

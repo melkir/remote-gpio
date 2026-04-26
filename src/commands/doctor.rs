@@ -275,6 +275,9 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
     // gpio_chip_accessible
     checks.push(gpio_chip_check());
 
+    // hap_state: state file present + paired-controllers count
+    checks.push(hap_state_check());
+
     // updates_available
     checks.push(updates_check(network_timeout_ms).await);
 
@@ -371,6 +374,48 @@ fn gpio_chip_check() -> Check {
         label: "GPIO",
         status: Status::Skipped,
         detail: Some("fake hardware feature".into()),
+    }
+}
+
+fn hap_state_check() -> Check {
+    use crate::hap::state::{state_dir, HapState, STATE_FILE};
+    let path = state_dir().join(STATE_FILE);
+    let text = match std::fs::read_to_string(&path) {
+        Ok(t) => t,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            return Check {
+                id: "hap_state",
+                label: "HomeKit state",
+                status: Status::Advisory,
+                detail: Some(format!("not initialized at {}; created on first serve", path.display())),
+            };
+        }
+        Err(e) => {
+            return Check {
+                id: "hap_state",
+                label: "HomeKit state",
+                status: Status::Blocking,
+                detail: Some(format!("cannot read {}: {e}", path.display())),
+            };
+        }
+    };
+    match serde_json::from_str::<HapState>(&text) {
+        Ok(s) => Check {
+            id: "hap_state",
+            label: "HomeKit state",
+            status: Status::Ok,
+            detail: Some(format!(
+                "id={} paired={}",
+                s.device_id,
+                s.paired_controllers.len()
+            )),
+        },
+        Err(e) => Check {
+            id: "hap_state",
+            label: "HomeKit state",
+            status: Status::Blocking,
+            detail: Some(format!("parse error: {e}")),
+        },
     }
 }
 
