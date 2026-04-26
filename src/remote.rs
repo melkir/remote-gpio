@@ -1,6 +1,7 @@
 use anyhow::{bail, Result};
 use std::str::FromStr;
 
+use tokio::sync::broadcast;
 use tokio::sync::watch::{self, Receiver, Sender};
 
 use crate::gpio::{trigger_output, watch_inputs, Input, Output};
@@ -36,6 +37,10 @@ pub struct RemoteControl {
     sender: Sender<Input>,
     /// Receiver for monitoring LED state changes
     pub receiver: Receiver<Input>,
+    /// Fan-out of completed Up/Down commands as `(led, position)` where
+    /// position is 100 for Up and 0 for Down. Subscribers use this to mirror
+    /// the physical state when commands originate outside HomeKit (REST, WS).
+    position_tx: broadcast::Sender<(Input, u8)>,
 }
 
 impl RemoteControl {
@@ -43,7 +48,17 @@ impl RemoteControl {
     pub async fn new() -> Result<Self> {
         let selection = Self::trigger_select().await?;
         let (sender, receiver) = watch::channel::<Input>(selection);
-        Ok(Self { sender, receiver })
+        let (position_tx, _) = broadcast::channel(64);
+        Ok(Self {
+            sender,
+            receiver,
+            position_tx,
+        })
+    }
+
+    /// Subscribe to position updates emitted after every successful Up/Down.
+    pub fn subscribe_positions(&self) -> broadcast::Receiver<(Input, u8)> {
+        self.position_tx.subscribe()
     }
 
     /// Triggers the select button and returns the new LED selection
@@ -84,7 +99,7 @@ impl RemoteControl {
                 attempts += 1;
             }
         }
-        match command {
+        let outcome = match command {
             Command::Up => self.up().await,
             Command::Down => self.down().await,
             Command::Stop => self.stop().await,
@@ -95,7 +110,19 @@ impl RemoteControl {
                     Ok(())
                 }
             }
+        };
+        if outcome.is_ok() {
+            let position = match command {
+                Command::Up => Some(100u8),
+                Command::Down => Some(0u8),
+                _ => None,
+            };
+            if let Some(pos) = position {
+                let active = *self.receiver.borrow();
+                let _ = self.position_tx.send((active, pos));
+            }
         }
+        outcome
     }
 
     /// Internal helper to trigger the select button and wait for LED selection

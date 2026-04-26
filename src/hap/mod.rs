@@ -28,11 +28,17 @@ pub async fn start(app: Arc<AppState>) -> Result<mdns::Announcement> {
     let announcement = mdns::announce(&hap_state, state::HAP_PORT)?;
 
     let (events, _) = broadcast::channel(64);
+    let position_rx = app.remote_control.subscribe_positions();
     let ctx = Arc::new(server::HapContext {
         state: Mutex::new(hap_state),
         app,
         positions: Mutex::new(positions::load()),
         events,
+    });
+
+    let listener_ctx = ctx.clone();
+    tokio::spawn(async move {
+        server::run_position_listener(listener_ctx, position_rx).await;
     });
 
     tokio::spawn(async move {

@@ -251,6 +251,34 @@ async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
     serde_json::json!({ "characteristics": out }).to_string()
 }
 
+/// Subscribe to `RemoteControl` position broadcasts and mirror non-HAP
+/// command outcomes (REST, WS) into the HAP position cache. HAP-originated
+/// PUTs already update the cache before the broadcast lands here, so this
+/// path is idempotent — a duplicate update returns no changes and emits no
+/// events.
+pub async fn run_position_listener(
+    ctx: Arc<HapContext>,
+    mut rx: broadcast::Receiver<(crate::gpio::Input, u8)>,
+) {
+    loop {
+        match rx.recv().await {
+            Ok((led, pos)) => {
+                let Some(blind) = accessories::BLINDS.iter().find(|b| b.led == led) else {
+                    continue;
+                };
+                let changes = apply_position_change(&ctx, blind, pos).await;
+                if !changes.is_empty() {
+                    let _ = ctx.events.send(changes);
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(n)) => {
+                tracing::warn!("position listener lagged by {n}");
+            }
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
+}
+
 // HAP §5.10 pair-add / §5.11 pair-remove / §5.12 pair-list. We only ship
 // remove for now (it's the one iOS triggers when the user deletes the bridge
 // from the Home app); add/list reply with kTLVError_Unavailable.
@@ -363,7 +391,7 @@ async fn handle_put_characteristics(
         };
         let snapped = if value >= 50 { 100u8 } else { 0u8 };
 
-        let mut positions = ctx.positions.lock().await;
+        let positions = ctx.positions.lock().await;
         // Skip the physical command when the target is already satisfied.
         // iOS replays the last-seen TargetPosition right after pairing; without
         // this check we'd send an unwanted UP/DOWN on registration.
@@ -388,28 +416,59 @@ async fn handle_put_characteristics(
         } else {
             Command::Down
         };
+        // Hold the positions lock across the GPIO command so concurrent HAP
+        // PUTs to the same blind don't double-fire (RemoteControl::execute is
+        // not internally serialized). Drop before persisting state via the
+        // shared helper.
         ctx.app
             .remote_control
             .execute(Some(blind.led), command)
             .await?;
-
-        let before = positions.clone();
-        positions.insert(aid, snapped);
-        propagate_positions(&mut positions, blind, snapped);
-        let snapshot = positions.clone();
-        // Persist while the lock is held so concurrent writers can't reorder
-        // their saves and clobber a newer snapshot with an older one.
-        if let Err(e) = positions::save(&snapshot) {
-            tracing::warn!("failed to persist positions: {e}");
-        }
         drop(positions);
-        for (k, v) in &snapshot {
-            if before.get(k) != Some(v) {
-                changes.push((*k, *v));
-            }
-        }
+
+        let local = apply_position_change(ctx, blind, snapped).await;
+        changes.extend(local);
     }
     Ok(changes)
+}
+
+/// Update the cached position for `blind`, propagate the ALL aggregate, and
+/// persist the snapshot. Returns the per-aid changes vs. the prior cache so
+/// the caller can fan them out as HAP EVENTs. Idempotent — a no-op when the
+/// cache already matches `snapped`.
+async fn apply_position_change(
+    ctx: &HapContext,
+    blind: &Blind,
+    snapped: u8,
+) -> Vec<(u64, u8)> {
+    let mut positions = ctx.positions.lock().await;
+    if positions.get(&blind.aid).copied() == Some(snapped) {
+        // For non-ALL accessories an exact match means nothing changed. For
+        // ALL we still want to propagate to individuals if any of them are
+        // out of sync, so check that explicitly before returning.
+        let needs_propagate = matches!(blind.led, crate::gpio::Input::ALL)
+            && accessories::BLINDS
+                .iter()
+                .filter(|b| !matches!(b.led, crate::gpio::Input::ALL))
+                .any(|b| positions.get(&b.aid).copied() != Some(snapped));
+        if !needs_propagate {
+            return Vec::new();
+        }
+    }
+    let before = positions.clone();
+    positions.insert(blind.aid, snapped);
+    propagate_positions(&mut positions, blind, snapped);
+    let snapshot = positions.clone();
+    // Persist while the lock is held so concurrent writers can't reorder
+    // their saves and clobber a newer snapshot with an older one.
+    if let Err(e) = positions::save(&snapshot) {
+        tracing::warn!("failed to persist positions: {e}");
+    }
+    drop(positions);
+    snapshot
+        .iter()
+        .filter_map(|(k, v)| (before.get(k) != Some(v)).then_some((*k, *v)))
+        .collect()
 }
 
 fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snapped: u8) {
