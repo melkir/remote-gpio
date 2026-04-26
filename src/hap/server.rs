@@ -416,15 +416,15 @@ async fn handle_put_characteristics(
         } else {
             Command::Down
         };
-        // Hold the positions lock across the GPIO command so concurrent HAP
-        // PUTs to the same blind don't double-fire (RemoteControl::execute is
-        // not internally serialized). Drop before persisting state via the
-        // shared helper.
+        // Drop the positions lock before the GPIO call. RemoteControl now
+        // serializes execute() internally, so we no longer need to hold
+        // positions to prevent concurrent double-fire — and dropping it
+        // means /characteristics reads aren't blocked while a blind moves.
+        drop(positions);
         ctx.app
             .remote_control
             .execute(Some(blind.led), command)
             .await?;
-        drop(positions);
 
         let local = apply_position_change(ctx, blind, snapped).await;
         changes.extend(local);

@@ -3,6 +3,7 @@ use std::str::FromStr;
 
 use tokio::sync::broadcast;
 use tokio::sync::watch::{self, Receiver, Sender};
+use tokio::sync::Mutex;
 
 use crate::gpio::{trigger_output, watch_inputs, Input, Output};
 
@@ -41,6 +42,13 @@ pub struct RemoteControl {
     /// position is 100 for Up and 0 for Down. Subscribers use this to mirror
     /// the physical state when commands originate outside HomeKit (REST, WS).
     position_tx: broadcast::Sender<(Input, u8)>,
+    /// Serializes the select-cycle + GPIO pulse + position broadcast as a
+    /// single critical section. Without this, concurrent callers (REST, WS,
+    /// HAP) could interleave their `select()` cycles between another
+    /// caller's target check and its Up/Down pulse, sending the command to
+    /// the wrong LED — and the post-completion broadcast could announce a
+    /// different LED again.
+    execute_lock: Mutex<()>,
 }
 
 impl RemoteControl {
@@ -53,6 +61,7 @@ impl RemoteControl {
             sender,
             receiver,
             position_tx,
+            execute_lock: Mutex::new(()),
         })
     }
 
@@ -88,7 +97,12 @@ impl RemoteControl {
     ///
     /// `Select` with `led=Some` is a no-op after the cycle; `Select` with
     /// `led=None` triggers exactly one cycle tick.
+    ///
+    /// Holds `execute_lock` end-to-end so the LED selected at `up()`/`down()`
+    /// time is the same one captured by the broadcast — concurrent callers
+    /// queue rather than interleave.
     pub async fn execute(&self, led: Option<Input>, command: Command) -> Result<()> {
+        let _guard = self.execute_lock.lock().await;
         if let Some(target) = led {
             let mut attempts = 0;
             while *self.receiver.borrow() != target {
