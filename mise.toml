@@ -18,7 +18,6 @@ depends = ["install:rust", "install:app"]
 
 [tasks.dev]
 description = "Run the app locally"
-depends = ["install"]
 run = [{ tasks = ["server-dev", "app-dev"] }]
 
 [tasks.build]
