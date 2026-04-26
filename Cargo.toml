@@ -43,6 +43,7 @@ chacha20poly1305 = "0.10"
 hkdf = "0.13"
 httparse = "1.10"
 num-bigint = "0.4"
+qrcode = { version = "0.14", default-features = false }
 
 [build-dependencies]
 anyhow = "1.0"

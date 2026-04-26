@@ -6,6 +6,7 @@ pub mod mdns;
 pub mod pair_setup;
 pub mod pair_verify;
 pub mod positions;
+pub mod qr;
 pub mod server;
 pub mod session;
 pub mod srp;

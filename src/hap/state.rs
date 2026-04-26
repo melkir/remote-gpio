@@ -23,6 +23,8 @@ pub const STATE_FILE: &str = "hap.json";
 pub struct HapState {
     pub device_id: String,
     pub setup_code: String,
+    #[serde(default = "generate_setup_id")]
+    pub setup_id: String,
     pub config_number: u32,
     pub state_number: u32,
     #[serde(with = "hex_array_32")]
@@ -92,16 +94,29 @@ impl HapState {
             .join(":");
 
         let setup_code = srp_setup_code(rng.gen_range(0..100_000_000u32));
+        let setup_id = generate_setup_id();
 
         Self {
             device_id,
             setup_code,
+            setup_id,
             config_number: 1,
             state_number: 1,
             ltsk: signing.to_bytes(),
             paired_controllers: Vec::new(),
         }
     }
+}
+
+/// 4-character HomeKit setup ID. Apple's spec recommends a confusion-free
+/// alphabet — drop ambiguous glyphs (0/O, 1/I, etc.) to keep the printed code
+/// scannable in case the operator falls back to typing it.
+fn generate_setup_id() -> String {
+    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+    let mut rng = OsRng;
+    (0..4)
+        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .collect()
 }
 
 pub fn display_setup_code(setup_code: &str) -> String {
@@ -139,7 +154,17 @@ pub fn load_or_init() -> Result<HapState> {
     let path = dir.join(STATE_FILE);
     match fs::read_to_string(&path) {
         Ok(text) => {
-            serde_json::from_str(&text).with_context(|| format!("parsing {}", path.display()))
+            let state: HapState = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            // Migrate: pre-setup_id state files would otherwise regenerate the
+            // setup_id on every boot (changing the QR). Persist on first load.
+            let raw: serde_json::Value = serde_json::from_str(&text)
+                .with_context(|| format!("parsing {}", path.display()))?;
+            if raw.get("setup_id").is_none() {
+                save(&path, &state)?;
+                tracing::info!("migrated HAP state with setup_id at {}", path.display());
+            }
+            Ok(state)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let state = HapState::generate();
@@ -242,6 +267,11 @@ mod tests {
         assert_eq!(s.device_id.matches(':').count(), 5);
         assert_eq!(s.setup_code.len(), 10);
         assert_eq!(s.setup_code.matches('-').count(), 2);
+        assert_eq!(s.setup_id.len(), 4);
+        assert!(s
+            .setup_id
+            .chars()
+            .all(|c| "ABCDEFGHJKLMNPQRSTUVWXYZ23456789".contains(c)));
         assert_eq!(s.config_number, 1);
         assert!(!s.is_paired());
         assert_eq!(s.status_flag(), "1");
@@ -268,6 +298,21 @@ mod tests {
         let loaded: HapState = serde_json::from_str(&text).unwrap();
         assert_eq!(loaded.device_id, original.device_id);
         assert_eq!(loaded.setup_code, original.setup_code);
+        assert_eq!(loaded.setup_id, original.setup_id);
         assert_eq!(loaded.ltsk, original.ltsk);
+    }
+
+    #[test]
+    fn legacy_state_without_setup_id_loads_with_default() {
+        let json = r#"{
+            "device_id": "AB:CD:EF:12:34:56",
+            "setup_code": "101-48-005",
+            "config_number": 1,
+            "state_number": 1,
+            "ltsk": "0000000000000000000000000000000000000000000000000000000000000000",
+            "paired_controllers": []
+        }"#;
+        let loaded: HapState = serde_json::from_str(json).unwrap();
+        assert_eq!(loaded.setup_id.len(), 4);
     }
 }

@@ -45,6 +45,12 @@ pub enum Command {
     },
     /// Disable and remove the systemd unit
     Uninstall,
+    /// Print the HomeKit pairing QR code
+    Qrcode {
+        /// Print only the X-HM:// URI (for piping/scripting)
+        #[arg(long)]
+        uri_only: bool,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]

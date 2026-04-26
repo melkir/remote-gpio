@@ -21,5 +21,6 @@ async fn main() -> Result<()> {
         } => somfy::commands::upgrade::run(channel, version, check).await,
         Command::Doctor { json, verbose } => somfy::commands::doctor::run(json, verbose).await,
         Command::Uninstall => somfy::commands::uninstall::run().await,
+        Command::Qrcode { uri_only } => somfy::commands::qrcode::run(uri_only),
     }
 }
