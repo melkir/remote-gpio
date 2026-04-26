@@ -4,7 +4,7 @@ Companion to [HAP.md](HAP.md) — the project-specific execution plan.
 
 ## Current state (working)
 
-Phases 1–3 are landed and verified end-to-end against an iPhone:
+Phases 1–6 + Phase 9 are landed and verified end-to-end against an iPhone:
 
 - ✅ Persistent state at `$STATE_DIRECTORY/hap.json` (device id, Ed25519 LTSK, setup code, paired controllers).
 - ✅ mDNS advertisement of `_hap._tcp` via `mdns-sd`.
@@ -14,6 +14,10 @@ Phases 1–3 are landed and verified end-to-end against an iPhone:
 - ✅ ChaCha20-Poly1305 session framing (`src/hap/session.rs`).
 - ✅ Bridge accessory + 5 bridged `WindowCovering` accessories serving `GET /accessories`, `GET /characteristics`, `PUT /characteristics`.
 - ✅ Ctrl-C handler in `serve` so the mDNS daemon unregisters cleanly.
+- ✅ Single command layer (`RemoteControl::execute`) shared by REST/WS/HAP.
+- ✅ Suppress UP-on-registration: PUT entries without a `value` (event subscriptions) and writes that match the cached position are no-ops.
+- ✅ Position cache persisted to `positions.json` next to `hap.json`; reload is read-only.
+- ✅ EVENT/1.0 push: per-connection subscription set, broadcast channel fans out CurrentPosition / TargetPosition / PositionState updates so the "Closing…" spinner resolves and All-Blinds propagates to siblings live.
 
 Homebridge plugin still ships and runs in parallel — cutover happens at the end of Phase 8.
 
@@ -22,29 +26,6 @@ Homebridge plugin still ships and runs in parallel — cutover happens at the en
 ## Next steps (TODO)
 
 The remaining work is consolidation and polish, driven by [TODO.md](TODO.md).
-
-### Phase 4 — Single command layer
-
-Eliminate `execute_blind_command` in `src/hap/server.rs:198`. Both HAP and the existing HTTP/WebSocket path should funnel through one function on `RemoteControl` (or a thin wrapper above it) that takes `(Input, Command)`. The `process_command` in `src/server.rs:90` is the closer match — extract its core into `RemoteControl` and call it from both sides.
-
-**Constraint:** no internal HTTP hops between subsystems — direct function calls only.
-
-**Non-goal:** merging the HAP listener into `:5002`. HAP keeps its dedicated port because post-Pair-Verify traffic upgrades the connection into custom encrypted framing that does not fit axum's request/response model.
-
-### Phase 5 — Suppress UP-on-registration
-
-Investigate whether iOS's initial `/accessories` read or its first `PUT` triggers an unwanted physical command. Suspected cause: iOS writes `TargetPosition` to whatever it last cached, and our PUT handler unconditionally maps that to up/down.
-
-**Fix path:**
-
-- Treat the first-ever `PUT TargetPosition` after pairing as a no-op if the value matches our cached/persisted position (Phase 6 supplies the persisted position).
-- Confirm `GET /accessories` and `GET /characteristics` are pure reads — they already are, but worth a code audit while we're in here.
-
-### Phase 6 — Persist last-known state
-
-`positions: Mutex<HashMap<u64, u8>>` lives only in memory. On restart, the Home app sees a default that may not match physical reality. Persist the position map to a sibling file (`positions.json`) on every successful PUT, reload on boot.
-
-**Critically:** reload is read-only. We do **not** replay the saved position to GPIO on startup.
 
 ### Phase 7 — Lifecycle & cleanup
 
@@ -58,16 +39,6 @@ Investigate whether iOS's initial `/accessories` read or its first `PUT` trigger
 - Remove the plugin CI deploy as well as the requirement of Node 24.
 - README: replace "install Homebridge plugin" with "scan QR / enter setup code".
 - Add instructions on the PR to uninstall homebridge from the system (e.g. hb-service remove homebridge-somfy-remote/apt-get uninstall homebridge)
-
-### Phase 9 — Event notifications (now blocking the cutover)
-
-Push EVENT/1.0 frames on subscribed characteristics. **No longer optional**:
-
-- Closing/opening a blind in Home shows "Closing…" / "Opening…" indefinitely. iOS waits for an EVENT on `PositionState` (→ stopped) and `CurrentPosition` (→ matches target) before resolving the spinner. We never send them.
-- The "All Blinds" tile updates `positions` for the four siblings via `propagate_positions`, but iOS doesn't observe those changes without EVENTs, so the per-blind tiles stay stale until the user backs out and re-enters the Home view.
-- Physical-remote changes propagating to Home — original Phase 9 motivation — is the same mechanism.
-
-Move this ahead of Phase 8 (Homebridge retirement). The plugin handled both of the above via `updateValue` in `homebridge/src/index.ts:147` — without events we'd ship a regression.
 
 ---
 

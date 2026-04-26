@@ -3,13 +3,13 @@
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::hap::accessories::{
     self, Blind, IID_CURRENT_POSITION, IID_TARGET_POSITION,
@@ -29,7 +29,12 @@ pub struct HapContext {
     pub app: Arc<AppState>,
     /// aid → cached position (0 or 100). Updated on any successful PUT.
     pub positions: Mutex<HashMap<u64, u8>>,
+    /// Broadcast channel for position changes. Each connection subscribes and
+    /// fans out EVENT/1.0 frames to its currently subscribed characteristics.
+    pub events: broadcast::Sender<Vec<(u64, u8)>>,
 }
+
+type Subscriptions = HashSet<(u64, u64)>;
 
 pub async fn serve(ctx: Arc<HapContext>) -> Result<()> {
     let addr: SocketAddr = ([0, 0, 0, 0], HAP_PORT).into();
@@ -53,82 +58,130 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
     let mut writer = HapWriter::Plain(write_half);
     let mut pair_setup = PairSetupSession::new();
     let mut pair_verify = PairVerifySession::new();
+    let mut subs: Subscriptions = HashSet::new();
+    let mut event_rx = ctx.events.subscribe();
 
     loop {
-        let req = reader.next_request().await?;
-        tracing::debug!("hap request: {} {}", req.method, req.path);
+        tokio::select! {
+            req = reader.next_request() => {
+                let req = req?;
+                tracing::debug!("hap request: {} {}", req.method, req.path);
 
-        match (req.method.as_str(), req.path_only()) {
-            ("POST", "/pair-setup") => {
-                let mut state = ctx.state.lock().await;
-                let body = pair_setup.handle(&req.body, &mut state);
-                drop(state);
-                writer
-                    .write_response(200, "application/pairing+tlv8", &body)
-                    .await?;
-            }
-            ("POST", "/pair-verify") => {
-                let state = ctx.state.lock().await;
-                let outcome = pair_verify.handle(&req.body, &state);
-                drop(state);
-                match outcome {
-                    HandleOutcome::Reply(body) => {
+                match (req.method.as_str(), req.path_only()) {
+                    ("POST", "/pair-setup") => {
+                        let mut state = ctx.state.lock().await;
+                        let body = pair_setup.handle(&req.body, &mut state);
+                        drop(state);
                         writer
                             .write_response(200, "application/pairing+tlv8", &body)
                             .await?;
                     }
-                    HandleOutcome::Verified { reply, shared_secret } => {
-                        writer
-                            .write_response(200, "application/pairing+tlv8", &reply)
-                            .await?;
-                        let keys = SessionKeys::derive(&shared_secret)?;
-                        reader = reader.upgrade(keys.read);
-                        writer = writer.upgrade(keys.write);
-                        tracing::info!("hap session encrypted; switched to control channel");
+                    ("POST", "/pair-verify") => {
+                        let state = ctx.state.lock().await;
+                        let outcome = pair_verify.handle(&req.body, &state);
+                        drop(state);
+                        match outcome {
+                            HandleOutcome::Reply(body) => {
+                                writer
+                                    .write_response(200, "application/pairing+tlv8", &body)
+                                    .await?;
+                            }
+                            HandleOutcome::Verified { reply, shared_secret } => {
+                                writer
+                                    .write_response(200, "application/pairing+tlv8", &reply)
+                                    .await?;
+                                let keys = SessionKeys::derive(&shared_secret)?;
+                                reader = reader.upgrade(keys.read);
+                                writer = writer.upgrade(keys.write);
+                                tracing::info!("hap session encrypted; switched to control channel");
+                            }
+                        }
+                    }
+                    ("GET", "/accessories") => {
+                        if !writer.is_encrypted() {
+                            writer.write_status(401, "Unauthorized").await?;
+                            continue;
+                        }
+                        let positions = snapshot_positions(&ctx).await;
+                        let body = serde_json::to_vec(&accessories::build_accessories(&positions))?;
+                        writer.write_response(200, "application/hap+json", &body).await?;
+                    }
+                    ("GET", "/characteristics") => {
+                        if !writer.is_encrypted() {
+                            writer.write_status(401, "Unauthorized").await?;
+                            continue;
+                        }
+                        let ids = req.query_param("id").unwrap_or_default();
+                        let body = handle_get_characteristics(&ctx, &ids).await;
+                        writer.write_response(200, "application/hap+json", body.as_bytes()).await?;
+                    }
+                    ("PUT", "/characteristics") => {
+                        if !writer.is_encrypted() {
+                            writer.write_status(401, "Unauthorized").await?;
+                            continue;
+                        }
+                        match handle_put_characteristics(&ctx, &req.body, &mut subs).await {
+                            Ok(changes) => {
+                                writer.write_status(204, "No Content").await?;
+                                if !changes.is_empty() {
+                                    let _ = ctx.events.send(changes);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::warn!("PUT /characteristics failed: {e}");
+                                writer.write_status(400, "Bad Request").await?;
+                            }
+                        }
+                    }
+                    ("POST", "/pairings") => {
+                        writer.write_status(503, "Service Unavailable").await?;
+                    }
+                    (method, path) => {
+                        tracing::warn!("hap: unhandled {method} {path}");
+                        writer.write_status(404, "Not Found").await?;
                     }
                 }
             }
-            ("GET", "/accessories") => {
-                if !writer.is_encrypted() {
-                    writer.write_status(401, "Unauthorized").await?;
-                    continue;
-                }
-                let positions = snapshot_positions(&ctx).await;
-                let body = serde_json::to_vec(&accessories::build_accessories(&positions))?;
-                writer.write_response(200, "application/hap+json", &body).await?;
-            }
-            ("GET", "/characteristics") => {
-                if !writer.is_encrypted() {
-                    writer.write_status(401, "Unauthorized").await?;
-                    continue;
-                }
-                let ids = req.query_param("id").unwrap_or_default();
-                let body = handle_get_characteristics(&ctx, &ids).await;
-                writer.write_response(200, "application/hap+json", body.as_bytes()).await?;
-            }
-            ("PUT", "/characteristics") => {
-                if !writer.is_encrypted() {
-                    writer.write_status(401, "Unauthorized").await?;
-                    continue;
-                }
-                match handle_put_characteristics(&ctx, &req.body).await {
-                    Ok(()) => writer.write_status(204, "No Content").await?,
-                    Err(e) => {
-                        tracing::warn!("PUT /characteristics failed: {e}");
-                        writer.write_status(400, "Bad Request").await?;
+            evt = event_rx.recv() => {
+                match evt {
+                    Ok(changes) => {
+                        if !writer.is_encrypted() {
+                            continue;
+                        }
+                        if let Some(body) = build_event_body(&changes, &subs) {
+                            writer.write_event(&body).await?;
+                        }
                     }
+                    Err(broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!("hap event subscriber lagged by {n}");
+                    }
+                    Err(broadcast::error::RecvError::Closed) => break,
                 }
-            }
-            ("POST", "/pairings") => {
-                // Phase 5 will handle add/remove additional controllers.
-                writer.write_status(503, "Service Unavailable").await?;
-            }
-            (method, path) => {
-                tracing::warn!("hap: unhandled {method} {path}");
-                writer.write_status(404, "Not Found").await?;
             }
         }
     }
+    Ok(())
+}
+
+fn build_event_body(changes: &[(u64, u8)], subs: &Subscriptions) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    for &(aid, pos) in changes {
+        for &iid in &[
+            IID_CURRENT_POSITION,
+            IID_TARGET_POSITION,
+            accessories::IID_POSITION_STATE,
+        ] {
+            if !subs.contains(&(aid, iid)) {
+                continue;
+            }
+            let value = if iid == accessories::IID_POSITION_STATE { 2u8 } else { pos };
+            out.push(serde_json::json!({ "aid": aid, "iid": iid, "value": value }));
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(serde_json::json!({ "characteristics": out }).to_string().into_bytes())
 }
 
 async fn snapshot_positions(ctx: &HapContext) -> Vec<(u64, u8)> {
@@ -165,22 +218,36 @@ async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
     serde_json::json!({ "characteristics": out }).to_string()
 }
 
-async fn handle_put_characteristics(ctx: &HapContext, body: &[u8]) -> Result<()> {
+async fn handle_put_characteristics(
+    ctx: &HapContext,
+    body: &[u8],
+    subs: &mut Subscriptions,
+) -> Result<Vec<(u64, u8)>> {
     let parsed: Value = serde_json::from_slice(body)?;
     let chars = parsed
         .get("characteristics")
         .and_then(|c| c.as_array())
         .ok_or_else(|| anyhow!("missing characteristics array"))?;
 
+    let mut changes: Vec<(u64, u8)> = Vec::new();
     for entry in chars {
         let aid = entry.get("aid").and_then(|v| v.as_u64()).unwrap_or(0);
         let iid = entry.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        // Event subscription toggle. `{aid, iid, ev: true|false}` has no
+        // `value` key — handle it before the value-write path.
+        if let Some(ev) = entry.get("ev").and_then(|v| v.as_bool()) {
+            if ev {
+                subs.insert((aid, iid));
+            } else {
+                subs.remove(&(aid, iid));
+            }
+            continue;
+        }
+
         if iid != IID_TARGET_POSITION {
             continue;
         }
-        // Distinguish a real write from an event-subscription PUT
-        // (`{aid, iid, ev: true}` has no `value` key). Treating a missing
-        // value as 100 would fire UP on every subscription.
         let value = match entry.get("value").and_then(|v| v.as_u64()) {
             Some(v) => v as u8,
             None => continue,
@@ -204,6 +271,7 @@ async fn handle_put_characteristics(ctx: &HapContext, body: &[u8]) -> Result<()>
         ctx.app.remote_control.execute(Some(blind.led), command).await?;
 
         let mut positions = ctx.positions.lock().await;
+        let before = positions.clone();
         positions.insert(aid, snapped);
         propagate_positions(&mut positions, blind, snapped);
         let snapshot = positions.clone();
@@ -211,8 +279,13 @@ async fn handle_put_characteristics(ctx: &HapContext, body: &[u8]) -> Result<()>
         if let Err(e) = positions::save(&snapshot) {
             tracing::warn!("failed to persist positions: {e}");
         }
+        for (k, v) in &snapshot {
+            if before.get(k) != Some(v) {
+                changes.push((*k, *v));
+            }
+        }
     }
-    Ok(())
+    Ok(changes)
 }
 
 fn propagate_positions(
@@ -311,6 +384,17 @@ impl HapWriter {
             status,
             status_phrase(status),
             content_type,
+            body.len()
+        );
+        let mut out = Vec::with_capacity(head.len() + body.len());
+        out.extend_from_slice(head.as_bytes());
+        out.extend_from_slice(body);
+        self.write_all(&out).await
+    }
+
+    async fn write_event(&mut self, body: &[u8]) -> Result<()> {
+        let head = format!(
+            "EVENT/1.0 200 OK\r\nContent-Type: application/hap+json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
         let mut out = Vec::with_capacity(head.len() + body.len());

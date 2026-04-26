@@ -18,7 +18,7 @@ pub mod tlv;
 
 use anyhow::Result;
 use std::sync::Arc;
-use tokio::sync::Mutex;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::server::AppState;
 
@@ -30,10 +30,12 @@ pub async fn start(app: Arc<AppState>) -> Result<mdns::Announcement> {
     mdns::log_setup_payload(&hap_state);
     let announcement = mdns::announce(&hap_state, state::HAP_PORT)?;
 
+    let (events, _) = broadcast::channel(64);
     let ctx = Arc::new(server::HapContext {
         state: Mutex::new(hap_state),
         app,
         positions: Mutex::new(positions::load()),
+        events,
     });
 
     tokio::spawn(async move {
