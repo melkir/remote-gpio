@@ -66,7 +66,9 @@ pub const IID_CURRENT_POSITION: u64 = 9;
 pub const IID_TARGET_POSITION: u64 = 10;
 pub const IID_POSITION_STATE: u64 = 11;
 
-// Bridge-only iids
+// Bridge-only iids. These reuse 8/9 because HAP iids are scoped per-aid;
+// the Bridge (aid=1) and the WindowCovering accessories (aid=2..6) live in
+// separate namespaces, so there's no collision.
 pub const IID_BRIDGE_PROTO_SERVICE: u64 = 8;
 pub const IID_BRIDGE_VERSION: u64 = 9;
 

@@ -276,11 +276,21 @@ async fn handle_put_characteristics(
         let snapped = if value >= 50 { 100u8 } else { 0u8 };
 
         let mut positions = ctx.positions.lock().await;
-        // Skip the physical command when the cached position already matches.
+        // Skip the physical command when the target is already satisfied.
         // iOS replays the last-seen TargetPosition right after pairing; without
         // this check we'd send an unwanted UP/DOWN on registration.
-        let current = effective_position(&positions, aid);
-        if current == snapped {
+        //
+        // For ALL we can't trust the cached aggregate value (it may be stale
+        // when individuals are mixed), so check the individuals directly.
+        let already_at_target = if matches!(blind.led, crate::gpio::Input::ALL) {
+            accessories::BLINDS
+                .iter()
+                .filter(|b| !matches!(b.led, crate::gpio::Input::ALL))
+                .all(|b| positions.get(&b.aid).copied() == Some(snapped))
+        } else {
+            positions.get(&aid).copied() == Some(snapped)
+        };
+        if already_at_target {
             tracing::debug!("PUT TargetPosition aid={aid} value={snapped}: cache hit, no-op");
             continue;
         }
@@ -299,10 +309,12 @@ async fn handle_put_characteristics(
         positions.insert(aid, snapped);
         propagate_positions(&mut positions, blind, snapped);
         let snapshot = positions.clone();
-        drop(positions);
+        // Persist while the lock is held so concurrent writers can't reorder
+        // their saves and clobber a newer snapshot with an older one.
         if let Err(e) = positions::save(&snapshot) {
             tracing::warn!("failed to persist positions: {e}");
         }
+        drop(positions);
         for (k, v) in &snapshot {
             if before.get(k) != Some(v) {
                 changes.push((*k, *v));
@@ -330,12 +342,16 @@ fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snappe
     let all_match = individuals
         .iter()
         .all(|b| positions.get(&b.aid).copied() == Some(snapped));
-    if all_match {
-        if let Some(all_blind) = accessories::BLINDS
-            .iter()
-            .find(|b| matches!(b.led, Input::ALL))
-        {
+    let all_blind = accessories::BLINDS
+        .iter()
+        .find(|b| matches!(b.led, Input::ALL));
+    if let Some(all_blind) = all_blind {
+        if all_match {
             positions.insert(all_blind.aid, snapped);
+        } else {
+            // Individuals are mixed — drop the stale aggregate so reads fall
+            // back to the default rather than returning the last-known value.
+            positions.remove(&all_blind.aid);
         }
     }
 }
@@ -562,6 +578,32 @@ mod tests {
         positions.insert(5, 0);
 
         assert_eq!(effective_position(&positions, 6), 0);
+    }
+
+    #[test]
+    fn propagate_clears_aggregate_when_individuals_diverge() {
+        use crate::gpio::Input;
+        let mut positions = HashMap::new();
+        positions.insert(2, 0);
+        positions.insert(3, 0);
+        positions.insert(4, 0);
+        positions.insert(5, 0);
+        positions.insert(6, 0);
+
+        // Open one individual — aid=6 should no longer report a fresh 0.
+        let changed = accessories::find_blind(2).unwrap();
+        positions.insert(2, 100);
+        propagate_positions(&mut positions, changed, 100);
+        assert_eq!(positions.get(&6), None, "stale ALL must be invalidated");
+
+        // Subsequent ALL-Close must not be deduped against a stale 0.
+        let all_blind = accessories::find_blind(6).unwrap();
+        assert!(matches!(all_blind.led, Input::ALL));
+        let already = accessories::BLINDS
+            .iter()
+            .filter(|b| !matches!(b.led, Input::ALL))
+            .all(|b| positions.get(&b.aid).copied() == Some(0));
+        assert!(!already, "individuals are mixed; ALL→0 must not be skipped");
     }
 
     #[test]

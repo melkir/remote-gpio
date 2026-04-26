@@ -37,7 +37,14 @@ fn load_from(path: &Path) -> HashMap<u64, u8> {
         }
     };
     raw.into_iter()
-        .filter_map(|(k, v)| k.parse::<u64>().ok().map(|aid| (aid, v)))
+        .filter_map(|(k, v)| {
+            let aid = k.parse::<u64>().ok()?;
+            // We only ever persist {0, 100}; clamp anything else so a
+            // hand-edited or corrupt file can't push out-of-range values to
+            // controllers.
+            let snapped = if v >= 50 { 100 } else { 0 };
+            Some((aid, snapped))
+        })
         .collect()
 }
 
