@@ -43,7 +43,12 @@ pub struct EncryptedReader {
 impl EncryptedReader {
     pub fn new(inner: OwnedReadHalf, key: [u8; 32]) -> Self {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-        Self { inner, cipher, counter: 0, buf: Vec::new() }
+        Self {
+            inner,
+            cipher,
+            counter: 0,
+            buf: Vec::new(),
+        }
     }
 
     /// Read at least `min` plaintext bytes into the internal buffer.
@@ -97,7 +102,11 @@ pub struct EncryptedWriter {
 impl EncryptedWriter {
     pub fn new(inner: OwnedWriteHalf, key: [u8; 32]) -> Self {
         let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
-        Self { inner, cipher, counter: 0 }
+        Self {
+            inner,
+            cipher,
+            counter: 0,
+        }
     }
 
     pub async fn write_all(&mut self, plaintext: &[u8]) -> Result<()> {

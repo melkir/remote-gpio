@@ -11,12 +11,10 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::hap::accessories::{
-    self, Blind, IID_CURRENT_POSITION, IID_TARGET_POSITION,
-};
+use crate::hap::accessories::{self, Blind, IID_CURRENT_POSITION, IID_TARGET_POSITION};
 use crate::hap::pair_setup::PairSetupSession;
-use crate::hap::positions;
 use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
+use crate::hap::positions;
 use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
 use crate::hap::state::{HapState, HAP_PORT};
 use crate::remote::Command;
@@ -54,7 +52,10 @@ pub async fn serve(ctx: Arc<HapContext>) -> Result<()> {
 
 async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) -> Result<()> {
     let (read_half, write_half) = stream.into_split();
-    let mut reader = HapReader::Plain { inner: read_half, buf: Vec::new() };
+    let mut reader = HapReader::Plain {
+        inner: read_half,
+        buf: Vec::new(),
+    };
     let mut writer = HapWriter::Plain(write_half);
     let mut pair_setup = PairSetupSession::new();
     let mut pair_verify = PairVerifySession::new();
@@ -174,14 +175,22 @@ fn build_event_body(changes: &[(u64, u8)], subs: &Subscriptions) -> Option<Vec<u
             if !subs.contains(&(aid, iid)) {
                 continue;
             }
-            let value = if iid == accessories::IID_POSITION_STATE { 2u8 } else { pos };
+            let value = if iid == accessories::IID_POSITION_STATE {
+                2u8
+            } else {
+                pos
+            };
             out.push(serde_json::json!({ "aid": aid, "iid": iid, "value": value }));
         }
     }
     if out.is_empty() {
         return None;
     }
-    Some(serde_json::json!({ "characteristics": out }).to_string().into_bytes())
+    Some(
+        serde_json::json!({ "characteristics": out })
+            .to_string()
+            .into_bytes(),
+    )
 }
 
 async fn snapshot_positions(ctx: &HapContext) -> Vec<(u64, u8)> {
@@ -206,8 +215,8 @@ async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
             (a, i) if accessories::find_blind(a).is_some() && i == IID_TARGET_POSITION => {
                 serde_json::Value::Number(positions.get(&a).copied().unwrap_or(100).into())
             }
-            (a, i) if accessories::find_blind(a).is_some()
-                && i == accessories::IID_POSITION_STATE =>
+            (a, i)
+                if accessories::find_blind(a).is_some() && i == accessories::IID_POSITION_STATE =>
             {
                 serde_json::Value::Number(2.into())
             }
@@ -267,8 +276,15 @@ async fn handle_put_characteristics(
             continue;
         }
 
-        let command = if snapped == 100 { Command::Up } else { Command::Down };
-        ctx.app.remote_control.execute(Some(blind.led), command).await?;
+        let command = if snapped == 100 {
+            Command::Up
+        } else {
+            Command::Down
+        };
+        ctx.app
+            .remote_control
+            .execute(Some(blind.led), command)
+            .await?;
 
         let mut positions = ctx.positions.lock().await;
         let before = positions.clone();
@@ -288,14 +304,13 @@ async fn handle_put_characteristics(
     Ok(changes)
 }
 
-fn propagate_positions(
-    positions: &mut HashMap<u64, u8>,
-    changed: &Blind,
-    snapped: u8,
-) {
+fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snapped: u8) {
     use crate::gpio::Input;
     if matches!(changed.led, Input::ALL) {
-        for b in accessories::BLINDS.iter().filter(|b| !matches!(b.led, Input::ALL)) {
+        for b in accessories::BLINDS
+            .iter()
+            .filter(|b| !matches!(b.led, Input::ALL))
+        {
             positions.insert(b.aid, snapped);
         }
         return;
@@ -308,7 +323,10 @@ fn propagate_positions(
         .iter()
         .all(|b| positions.get(&b.aid).copied() == Some(snapped));
     if all_match {
-        if let Some(all_blind) = accessories::BLINDS.iter().find(|b| matches!(b.led, Input::ALL)) {
+        if let Some(all_blind) = accessories::BLINDS
+            .iter()
+            .find(|b| matches!(b.led, Input::ALL))
+        {
             positions.insert(all_blind.aid, snapped);
         }
     }
@@ -355,7 +373,9 @@ impl HapReader {
 
     fn upgrade(self, key: [u8; 32]) -> Self {
         match self {
-            HapReader::Plain { inner, .. } => HapReader::Encrypted(EncryptedReader::new(inner, key)),
+            HapReader::Plain { inner, .. } => {
+                HapReader::Encrypted(EncryptedReader::new(inner, key))
+            }
             other => other,
         }
     }

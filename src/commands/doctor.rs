@@ -387,7 +387,10 @@ fn hap_state_check() -> Check {
                 id: "hap_state",
                 label: "HomeKit state",
                 status: Status::Advisory,
-                detail: Some(format!("not initialized at {}; created on first serve", path.display())),
+                detail: Some(format!(
+                    "not initialized at {}; created on first serve",
+                    path.display()
+                )),
             };
         }
         Err(e) => {

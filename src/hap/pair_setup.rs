@@ -34,7 +34,9 @@ pub struct PairSetupSession {
 
 impl PairSetupSession {
     pub fn new() -> Self {
-        Self { state: PairSetupState::Initial }
+        Self {
+            state: PairSetupState::Initial,
+        }
     }
 
     pub fn handle(&mut self, body: &[u8], state: &mut HapState) -> Vec<u8> {
@@ -140,8 +142,12 @@ impl PairSetupSession {
             return Err((6, HapError::Authentication));
         }
 
-        let session_key = derive_session_key(&srp_key, b"Pair-Setup-Encrypt-Salt", b"Pair-Setup-Encrypt-Info")
-            .map_err(|_| (6, HapError::Unknown))?;
+        let session_key = derive_session_key(
+            &srp_key,
+            b"Pair-Setup-Encrypt-Salt",
+            b"Pair-Setup-Encrypt-Info",
+        )
+        .map_err(|_| (6, HapError::Unknown))?;
 
         let mut plaintext = encrypted[..encrypted.len() - 16].to_vec();
         let tag = Tag::clone_from_slice(&encrypted[encrypted.len() - 16..]);
@@ -156,9 +162,15 @@ impl PairSetupSession {
             })?;
 
         let sub = ParsedTlv::parse(&plaintext).map_err(|_| (6, HapError::Authentication))?;
-        let ios_pairing_id = sub.get(TlvTag::Identifier).ok_or((6, HapError::Authentication))?;
-        let ios_ltpk_bytes = sub.get(TlvTag::PublicKey).ok_or((6, HapError::Authentication))?;
-        let ios_signature = sub.get(TlvTag::Signature).ok_or((6, HapError::Authentication))?;
+        let ios_pairing_id = sub
+            .get(TlvTag::Identifier)
+            .ok_or((6, HapError::Authentication))?;
+        let ios_ltpk_bytes = sub
+            .get(TlvTag::PublicKey)
+            .ok_or((6, HapError::Authentication))?;
+        let ios_signature = sub
+            .get(TlvTag::Signature)
+            .ok_or((6, HapError::Authentication))?;
 
         let ios_device_x = derive_session_key(
             &srp_key,
@@ -174,8 +186,8 @@ impl PairSetupSession {
         let ios_ltpk_array: [u8; 32] = ios_ltpk_bytes
             .try_into()
             .map_err(|_| (6, HapError::Authentication))?;
-        let ios_ltpk = VerifyingKey::from_bytes(&ios_ltpk_array)
-            .map_err(|_| (6, HapError::Authentication))?;
+        let ios_ltpk =
+            VerifyingKey::from_bytes(&ios_ltpk_array).map_err(|_| (6, HapError::Authentication))?;
         let ios_sig_array: [u8; 64] = ios_signature
             .try_into()
             .map_err(|_| (6, HapError::Authentication))?;
@@ -241,6 +253,7 @@ impl PairSetupSession {
 fn derive_session_key(srp_key: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 32]> {
     let hkdf = Hkdf::<Sha512>::new(Some(salt), srp_key);
     let mut out = [0u8; 32];
-    hkdf.expand(info, &mut out).map_err(|e| anyhow!("HKDF: {e}"))?;
+    hkdf.expand(info, &mut out)
+        .map_err(|e| anyhow!("HKDF: {e}"))?;
     Ok(out)
 }

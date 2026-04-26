@@ -38,9 +38,16 @@ pub fn announce(state: &HapState, port: u16) -> Result<Announcement> {
     // mdns-sd resolves the host's interface IPs automatically when given an
     // empty address list, but we pass an unspecified placeholder for clarity.
     let placeholder: Vec<IpAddr> = vec![IpAddr::V4(Ipv4Addr::UNSPECIFIED)];
-    let info = ServiceInfo::new(service_type, &instance, &host, &placeholder[..], port, props)
-        .context("building mDNS service info")?
-        .enable_addr_auto();
+    let info = ServiceInfo::new(
+        service_type,
+        &instance,
+        &host,
+        &placeholder[..],
+        port,
+        props,
+    )
+    .context("building mDNS service info")?
+    .enable_addr_auto();
 
     let fullname = info.get_fullname().to_string();
     daemon.register(info).context("registering mDNS service")?;
@@ -70,6 +77,12 @@ fn short_id(device_id: &str) -> String {
 
 fn sanitize_instance(name: &str) -> String {
     name.chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == ' ' { c } else { '-' })
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == ' ' {
+                c
+            } else {
+                '-'
+            }
+        })
         .collect()
 }

@@ -141,11 +141,7 @@ pub fn server_verify(setup: &ServerSetup, a_pub_bytes: &[u8]) -> Result<ServerVe
 
     let h_n = sha512(&n.to_bytes_be());
     let h_g = sha512(&g.to_bytes_be());
-    let h_xor: Vec<u8> = h_n
-        .iter()
-        .zip(h_g.iter())
-        .map(|(a, b)| a ^ b)
-        .collect();
+    let h_xor: Vec<u8> = h_n.iter().zip(h_g.iter()).map(|(a, b)| a ^ b).collect();
     let h_i = sha512(USERNAME);
 
     let m1_expected = {

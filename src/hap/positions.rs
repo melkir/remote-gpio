@@ -9,7 +9,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::hap::state::state_dir;
+use crate::hap::state::{atomic_save_bytes, state_dir};
 
 const POSITIONS_FILE: &str = "positions.json";
 
@@ -42,34 +42,10 @@ fn load_from(path: &Path) -> HashMap<u64, u8> {
 }
 
 fn save_to(path: &Path, positions: &HashMap<u64, u8>) -> Result<()> {
-    let stringified: HashMap<String, u8> = positions
-        .iter()
-        .map(|(k, v)| (k.to_string(), *v))
-        .collect();
+    let stringified: HashMap<String, u8> =
+        positions.iter().map(|(k, v)| (k.to_string(), *v)).collect();
     let bytes = serde_json::to_vec_pretty(&stringified)?;
-    atomic_save_bytes(path, &bytes)
-}
-
-fn atomic_save_bytes(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
-    use std::io::Write;
-    use std::os::unix::fs::OpenOptionsExt;
-    let parent = path.parent().unwrap_or(std::path::Path::new("."));
-    let filename = path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("invalid positions path"))?;
-    let tmp = parent.join(format!(".{}.tmp", filename.to_string_lossy()));
-    {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&tmp)?;
-        f.write_all(bytes)?;
-        f.sync_all()?;
-    }
-    fs::rename(&tmp, path)?;
-    Ok(())
+    atomic_save_bytes(path, &bytes, false)
 }
 
 #[cfg(test)]

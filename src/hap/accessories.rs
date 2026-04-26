@@ -20,11 +20,36 @@ pub struct Blind {
 pub const BRIDGE_AID: u64 = 1;
 
 pub const BLINDS: &[Blind] = &[
-    Blind { aid: 2, name: "Blind 1", led: Input::L1, serial: "somfy-L1" },
-    Blind { aid: 3, name: "Blind 2", led: Input::L2, serial: "somfy-L2" },
-    Blind { aid: 4, name: "Blind 3", led: Input::L3, serial: "somfy-L3" },
-    Blind { aid: 5, name: "Blind 4", led: Input::L4, serial: "somfy-L4" },
-    Blind { aid: 6, name: "All Blinds", led: Input::ALL, serial: "somfy-ALL" },
+    Blind {
+        aid: 2,
+        name: "Blind 1",
+        led: Input::L1,
+        serial: "somfy-L1",
+    },
+    Blind {
+        aid: 3,
+        name: "Blind 2",
+        led: Input::L2,
+        serial: "somfy-L2",
+    },
+    Blind {
+        aid: 4,
+        name: "Blind 3",
+        led: Input::L3,
+        serial: "somfy-L3",
+    },
+    Blind {
+        aid: 5,
+        name: "Blind 4",
+        led: Input::L4,
+        serial: "somfy-L4",
+    },
+    Blind {
+        aid: 6,
+        name: "All Blinds",
+        led: Input::ALL,
+        serial: "somfy-ALL",
+    },
 ];
 
 // Per-blind characteristic IIDs. AccessoryInformation iids are 1..7,

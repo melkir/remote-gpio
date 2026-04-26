@@ -1,7 +1,6 @@
 use crate::gpio::Input;
 use crate::remote::{Command, RemoteControl};
 use anyhow::Result;
-use std::str::FromStr;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::http::{Method, StatusCode};
@@ -11,6 +10,7 @@ use axum::{routing::get, Json, Router};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde::Deserialize;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::DefaultMakeSpan;

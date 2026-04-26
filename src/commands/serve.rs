@@ -19,7 +19,10 @@ pub async fn run() -> Result<()> {
     let _hap_announcement = match hap::start(shared_state.clone()).await {
         Ok(a) => Some(a),
         Err(e) => {
-            tracing::warn!("HAP subsystem failed to start, continuing without HomeKit: {}", e);
+            tracing::warn!(
+                "HAP subsystem failed to start, continuing without HomeKit: {}",
+                e
+            );
             None
         }
     };

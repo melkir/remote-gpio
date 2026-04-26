@@ -38,12 +38,17 @@ pub struct PairVerifySession {
 pub enum HandleOutcome {
     Reply(Vec<u8>),
     /// M4 succeeded — switch the connection to encrypted mode using this secret.
-    Verified { reply: Vec<u8>, shared_secret: [u8; 32] },
+    Verified {
+        reply: Vec<u8>,
+        shared_secret: [u8; 32],
+    },
 }
 
 impl PairVerifySession {
     pub fn new() -> Self {
-        Self { state: PairVerifyState::Initial }
+        Self {
+            state: PairVerifyState::Initial,
+        }
     }
 
     pub fn handle(&mut self, body: &[u8], state: &HapState) -> HandleOutcome {
