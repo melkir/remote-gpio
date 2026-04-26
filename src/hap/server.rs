@@ -175,19 +175,31 @@ async fn handle_put_characteristics(ctx: &HapContext, body: &[u8]) -> Result<()>
         let aid = entry.get("aid").and_then(|v| v.as_u64()).unwrap_or(0);
         let iid = entry.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
         if iid != IID_TARGET_POSITION {
-            // Ignore writes to non-target characteristics (event subscriptions
-            // come through here with `ev: true`; we accept them silently and
-            // leave actual event delivery to Phase 4).
             continue;
         }
+        // Distinguish a real write from an event-subscription PUT
+        // (`{aid, iid, ev: true}` has no `value` key). Treating a missing
+        // value as 100 would fire UP on every subscription.
+        let value = match entry.get("value").and_then(|v| v.as_u64()) {
+            Some(v) => v as u8,
+            None => continue,
+        };
         let blind: &Blind = match accessories::find_blind(aid) {
             Some(b) => b,
             None => continue,
         };
-        let value = entry.get("value").and_then(|v| v.as_u64()).unwrap_or(100) as u8;
         let snapped = if value >= 50 { 100u8 } else { 0u8 };
-        let command = if snapped == 100 { Command::Up } else { Command::Down };
 
+        // Skip the physical command when the cached position already matches.
+        // iOS replays the last-seen TargetPosition right after pairing; without
+        // this check we'd send an unwanted UP/DOWN on registration.
+        let current = ctx.positions.lock().await.get(&aid).copied().unwrap_or(100);
+        if current == snapped {
+            tracing::debug!("PUT TargetPosition aid={aid} value={snapped}: cache hit, no-op");
+            continue;
+        }
+
+        let command = if snapped == 100 { Command::Up } else { Command::Down };
         ctx.app.remote_control.execute(Some(blind.led), command).await?;
 
         let mut positions = ctx.positions.lock().await;
