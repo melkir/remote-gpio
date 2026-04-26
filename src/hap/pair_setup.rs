@@ -7,7 +7,7 @@ use chacha20poly1305::aead::{AeadInPlace, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use rand::{rngs::OsRng, RngCore};
+use rand::{rngs::SysRng, TryRng};
 use sha2::Sha512;
 
 use crate::hap::srp;
@@ -71,9 +71,13 @@ impl PairSetupSession {
         }
 
         let mut salt = [0u8; 16];
-        OsRng.fill_bytes(&mut salt);
         let mut b_priv = [0u8; 32];
-        OsRng.fill_bytes(&mut b_priv);
+        SysRng
+            .try_fill_bytes(&mut salt)
+            .map_err(|_| (2, HapError::Unavailable))?;
+        SysRng
+            .try_fill_bytes(&mut b_priv)
+            .map_err(|_| (2, HapError::Unavailable))?;
 
         let setup = srp::server_setup(state.setup_code.as_bytes(), salt, b_priv);
         let b_pub = setup.b_pub.clone();

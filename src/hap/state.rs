@@ -1,7 +1,6 @@
 use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
-use rand::Rng;
+use rand::{rngs::SysRng, TryRng};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::io;
@@ -80,32 +79,61 @@ impl HapState {
     }
 
     fn generate() -> Self {
-        let mut rng = OsRng;
-        let signing = SigningKey::generate(&mut rng);
+        let mut ltsk = [0u8; 32];
+        SysRng
+            .try_fill_bytes(&mut ltsk)
+            .expect("system RNG failed while generating HAP identity");
 
         let mut id_bytes = [0u8; 6];
-        rng.fill(&mut id_bytes);
+        SysRng
+            .try_fill_bytes(&mut id_bytes)
+            .expect("system RNG failed while generating HAP device id");
         let device_id = id_bytes
             .iter()
             .map(|b| format!("{:02X}", b))
             .collect::<Vec<_>>()
             .join(":");
 
-        let code_num = rng.gen_range(0..100_000_000u32);
-        let setup_code = format!(
-            "{:03}-{:02}-{:03}",
-            code_num / 100_000,
-            (code_num / 1_000) % 100,
-            code_num % 1_000
-        );
+        let setup_code = srp_setup_code(random_setup_code());
 
         Self {
             device_id,
             setup_code,
             config_number: 1,
             state_number: 1,
-            ltsk: signing.to_bytes(),
+            ltsk: SigningKey::from_bytes(&ltsk).to_bytes(),
             paired_controllers: Vec::new(),
+        }
+    }
+}
+
+pub fn display_setup_code(setup_code: &str) -> String {
+    let digits: String = setup_code.chars().filter(|c| c.is_ascii_digit()).collect();
+    if digits.len() != 8 {
+        return setup_code.to_string();
+    }
+    format!("{}-{}", &digits[..4], &digits[4..])
+}
+
+fn srp_setup_code(code_num: u32) -> String {
+    format!(
+        "{:03}-{:02}-{:03}",
+        code_num / 100_000,
+        (code_num / 1_000) % 100,
+        code_num % 1_000
+    )
+}
+
+fn random_setup_code() -> u32 {
+    const UPPER: u64 = 100_000_000;
+    const ZONE: u64 = (u32::MAX as u64 + 1) / UPPER * UPPER;
+
+    loop {
+        let value = SysRng
+            .try_next_u32()
+            .expect("system RNG failed while generating HAP setup code") as u64;
+        if value < ZONE {
+            return (value % UPPER) as u32;
         }
     }
 }
@@ -234,6 +262,17 @@ mod tests {
         assert_eq!(s.config_number, 1);
         assert!(!s.is_paired());
         assert_eq!(s.status_flag(), "1");
+    }
+
+    #[test]
+    fn setup_code_formats_are_distinct_for_srp_and_display() {
+        assert_eq!(srp_setup_code(10148005), "101-48-005");
+        assert_eq!(display_setup_code("101-48-005"), "1014-8005");
+    }
+
+    #[test]
+    fn display_setup_code_leaves_unexpected_format_unchanged() {
+        assert_eq!(display_setup_code("not-a-code"), "not-a-code");
     }
 
     #[test]

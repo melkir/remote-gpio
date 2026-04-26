@@ -3,7 +3,7 @@ use mdns_sd::{ServiceDaemon, ServiceInfo};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 
-use crate::hap::state::{HapState, HAP_CATEGORY, HAP_PORT, MODEL};
+use crate::hap::state::{display_setup_code, HapState, HAP_CATEGORY, HAP_PORT, MODEL};
 
 /// Owns the live mDNS daemon. Dropping it stops the announcement.
 pub struct Announcement {
@@ -65,7 +65,7 @@ pub fn announce(state: &HapState, port: u16) -> Result<Announcement> {
 
 pub fn log_setup_payload(state: &HapState) {
     tracing::info!("┌─ HomeKit pairing");
-    tracing::info!("│ setup code: {}", state.setup_code);
+    tracing::info!("│ setup code: {}", display_setup_code(&state.setup_code));
     tracing::info!("│ device id : {}", state.device_id);
     tracing::info!("│ port      : {}", HAP_PORT);
     tracing::info!("└─ paired   : {}", state.is_paired());
