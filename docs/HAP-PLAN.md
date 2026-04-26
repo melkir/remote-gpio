@@ -56,7 +56,7 @@ Investigate whether iOS's initial `/accessories` read or its first `PUT` trigger
 
 - Delete `homebridge/`, the second systemd unit, the `paths-ignore` carve-out in CI.
 - README: replace "install Homebridge plugin" with "scan QR / enter setup code".
-- `somfy uninstall` stops both units if present (back-compat with deployed Pis).
+- Add instructions on the PR to uninstall homebridge from the system (e.g. hb-service remove homebridge-somfy-remote/apt-get uninstall homebridge)
 
 ### Phase 9 — Event notifications (deferred)
 
