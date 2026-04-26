@@ -58,7 +58,7 @@ Server listens on `0.0.0.0:5002`.
 
 ### HomeKit
 
-`somfy serve` runs a native HAP (HomeKit Accessory Protocol) server on port `5010`, advertised via mDNS as a Bridge with one `WindowCovering` per LED selector (`L1`–`L4` + `ALL`). No Homebridge, no plugin, no Node — Siri, the Home app, and HomePod work directly against the Rust binary.
+`somfy serve` runs a native HAP server on port `5010`, advertised via mDNS as a Bridge with one `WindowCovering` per LED selector (`L1`–`L4` + `ALL`). No Homebridge, no plugin, no Node — Siri, the Home app, and HomePod talk directly to the Rust binary.
 
 Pair on first install:
 
@@ -68,12 +68,7 @@ ssh pi journalctl -u somfy | grep "setup code"
 
 In the iOS Home app: **Add Accessory → More Options → enter the code**. State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
 
-Already running Homebridge with the legacy plugin? Remove it first so both stacks don't fight for HomeKit advertisement:
-
-```bash
-sudo hb-service remove homebridge-somfy-remote
-sudo apt-get purge homebridge   # only if you don't use it for anything else
-```
+See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
 
 ### Versioning
 
