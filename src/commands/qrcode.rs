@@ -21,10 +21,6 @@ pub fn run(uri_only: bool) -> Result<()> {
     println!("  port       : {}", HAP_PORT);
     println!("  paired     : {}", state.is_paired());
     println!("  uri        : {}", uri);
-    if state.is_paired() {
-        println!("\nAccessory is already paired — scanning the QR will be rejected.");
-        return Ok(());
-    }
     println!();
     println!("{}", qr::render_terminal(&uri)?);
     Ok(())

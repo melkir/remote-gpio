@@ -22,7 +22,7 @@ pub fn setup_uri(state: &HapState) -> Result<String> {
         .with_context(|| format!("invalid HAP_CATEGORY {:?}", HAP_CATEGORY))?;
 
     // 44-bit payload: version(3) | reserved(4) | category(8) | flags(4) | setup_code(27)
-    let payload: u64 = (category << 29) | (FLAGS_IP << 25) | u64::from(setup_code);
+    let payload: u64 = (category << 31) | (FLAGS_IP << 27) | u64::from(setup_code);
 
     Ok(format!(
         "X-HM://{}{}",
@@ -98,6 +98,19 @@ mod tests {
     }
 
     #[test]
+    fn packs_category_and_flags_at_hap_bit_positions() {
+        let state = fixture_state("101-48-005", "7OSX");
+        let uri = setup_uri(&state).unwrap();
+        let payload = decode_base36(&uri[7..16]).unwrap();
+
+        assert_eq!((payload >> 39) & 0b111, 0);
+        assert_eq!((payload >> 35) & 0b1111, 0);
+        assert_eq!((payload >> 31) & 0xff, 14);
+        assert_eq!((payload >> 27) & 0b1111, FLAGS_IP);
+        assert_eq!(payload & ((1 << 27) - 1), 10_148_005);
+    }
+
+    #[test]
     fn setup_uri_is_deterministic() {
         let a = setup_uri(&fixture_state("101-48-005", "7OSX")).unwrap();
         let b = setup_uri(&fixture_state("101-48-005", "7OSX")).unwrap();
@@ -131,5 +144,12 @@ mod tests {
         assert_eq!(encode_base36(0, 9), "000000000");
         assert_eq!(encode_base36(35, 2), "0Z");
         assert_eq!(encode_base36(36, 2), "10");
+    }
+
+    fn decode_base36(value: &str) -> Option<u64> {
+        value.chars().try_fold(0u64, |acc, c| {
+            c.to_digit(36)
+                .map(|digit| acc * 36 + u64::from(digit))
+        })
     }
 }
