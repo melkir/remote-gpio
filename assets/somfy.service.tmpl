@@ -11,6 +11,8 @@ ExecStart={{EXEC_START}} serve
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info
+StateDirectory=somfy
+StateDirectoryMode=0700
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true

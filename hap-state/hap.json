@@ -1,0 +1,14 @@
+{
+  "device_id": "53:C6:AF:B8:6C:6E",
+  "setup_code": "357-74-176",
+  "config_number": 1,
+  "state_number": 1,
+  "ltsk": "b3aa4de23a7b00dd39a2fe9de3985e78231d890e5b7f109714d85474403fa2b1",
+  "paired_controllers": [
+    {
+      "identifier": "D103F19D-047E-46BC-AEC4-02B0BC389716",
+      "public_key": "c208dc584a4321a4886d5666244fa554e1607e4f73f5d0f8fcfa3543daf87d62",
+      "admin": true
+    }
+  ]
+}
