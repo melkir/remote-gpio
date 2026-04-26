@@ -12,23 +12,23 @@
 
 `$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`, falls back to `./hap-state` for `cargo run`):
 
-| File              | Owner        | Contents                                                                          |
-| ----------------- | ------------ | --------------------------------------------------------------------------------- |
-| `hap.json`        | `state.rs`   | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers |
-| `positions.json`  | `positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
+| File             | Owner          | Contents                                                                                |
+| ---------------- | -------------- | --------------------------------------------------------------------------------------- |
+| `hap.json`       | `state.rs`     | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
+| `positions.json` | `positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
 
 Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
 
 ## Crypto + protocol
 
-| Concern              | Implementation                                                                                            |
-| -------------------- | --------------------------------------------------------------------------------------------------------- |
-| TLV8 codec           | `src/hap/tlv.rs` with fragment reassembly (HAP §14.1).                                                    |
-| SRP-6a / SHA-512     | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects. |
-| Pair-Setup (M1–M6)   | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs. |
-| Pair-Verify (M1–M4)  | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                   |
-| Session framing      | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.|
-| HTTP                 | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser.     |
+| Concern             | Implementation                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| TLV8 codec          | `src/hap/tlv.rs` with fragment reassembly (HAP §14.1).                                                                                      |
+| SRP-6a / SHA-512    | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects. |
+| Pair-Setup (M1–M6)  | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs.                                   |
+| Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                    |
+| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.                                  |
+| HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser.                                       |
 
 ## Connection lifecycle
 
@@ -36,9 +36,9 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.
-3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<(u64, u8)>>`. After a successful `PUT`, the handler diffs the position map (including sibling propagation) and broadcasts changes; subscribers fan them out as `EVENT/1.0` frames over the same encrypted writer.
+3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<(u64, u8)>>`. After a successful `PUT`, the handler updates the commanded aid and broadcasts that direct change; subscribers fan it out as `EVENT/1.0` frames over the same encrypted writer.
 
-EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits on `PositionState=2` + `CurrentPosition` matching `TargetPosition`) and what makes the **All Blinds** tile propagate live to the four siblings.
+EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits on `PositionState=2` + `CurrentPosition` matching `TargetPosition`). The **All Blinds** tile is tracked as its own physical remote selection, not as a derived aggregate of the four individual blinds.
 
 ## PUT semantics
 
@@ -46,7 +46,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 - `{aid, iid, ev: true|false}` — toggle subscription on the per-connection set. No GPIO action.
 - `{aid, iid, value: N}` where the snapped value (`< 50` → 0, `≥ 50` → 100) **matches the cached position** — no-op. iOS replays the last-known `TargetPosition` right after pairing; without this the bridge would fire UP on every registration.
-- `{aid, iid, value: N}` with a real change — funnels through `RemoteControl::execute(Some(led), command)`, the single command layer shared by REST, WebSocket, and HAP. Then updates the cached position, propagates to siblings (or to ALL when all four match), persists `positions.json`, and broadcasts a change event.
+- `{aid, iid, value: N}` with a real change — funnels through `RemoteControl::execute(Some(led), command)`, the single command layer shared by REST, WebSocket, and HAP. Then updates that aid's cached position, persists `positions.json`, and broadcasts a change event.
 
 ## Doctor
 
