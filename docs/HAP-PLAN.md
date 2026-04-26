@@ -59,9 +59,22 @@ Investigate whether iOS's initial `/accessories` read or its first `PUT` trigger
 - README: replace "install Homebridge plugin" with "scan QR / enter setup code".
 - Add instructions on the PR to uninstall homebridge from the system (e.g. hb-service remove homebridge-somfy-remote/apt-get uninstall homebridge)
 
-### Phase 9 — Event notifications (deferred)
+### Phase 9 — Event notifications (now blocking the cutover)
 
-Push EVENT/1.0 frames on subscribed characteristics when `RemoteControl.receiver` fires, so physical-remote changes propagate to Home. Useful but not required for the cutover.
+Push EVENT/1.0 frames on subscribed characteristics. **No longer optional**:
+
+- Closing/opening a blind in Home shows "Closing…" / "Opening…" indefinitely. iOS waits for an EVENT on `PositionState` (→ stopped) and `CurrentPosition` (→ matches target) before resolving the spinner. We never send them.
+- The "All Blinds" tile updates `positions` for the four siblings via `propagate_positions`, but iOS doesn't observe those changes without EVENTs, so the per-blind tiles stay stale until the user backs out and re-enters the Home view.
+- Physical-remote changes propagating to Home — original Phase 9 motivation — is the same mechanism.
+
+Move this ahead of Phase 8 (Homebridge retirement). The plugin handled both of the above via `updateValue` in `homebridge/src/index.ts:147` — without events we'd ship a regression.
+
+---
+
+## Open questions (parked, not in any phase yet)
+
+- **Dev mode dual-client.** `mise dev` runs both `server-dev` (binary serves `app/dist/` from disk via the debug branch in `src/embed.rs:36`) and `app-dev` (Vite hot-reload on its own port). Two URLs serve the same UI, only the Vite one hot-reloads. Options: gate static-asset serving off in debug builds (force `cargo run` users to hit Vite); drop the disk-read path in `embed.rs`; or document the convention. Decide before touching either.
+- **`mise dev` Ctrl-C noise.** `[app-dev] ERROR sh exited with non-zero status: no exit status` after `task failed.` — Vite returns non-zero on SIGINT and mise surfaces it. Cosmetic; either swallow with a wrapper or leave a note in the README.
 
 ---
 

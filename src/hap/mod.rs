@@ -9,6 +9,7 @@ pub mod accessories;
 pub mod mdns;
 pub mod pair_setup;
 pub mod pair_verify;
+pub mod positions;
 pub mod server;
 pub mod session;
 pub mod srp;
@@ -16,7 +17,6 @@ pub mod state;
 pub mod tlv;
 
 use anyhow::Result;
-use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -33,7 +33,7 @@ pub async fn start(app: Arc<AppState>) -> Result<mdns::Announcement> {
     let ctx = Arc::new(server::HapContext {
         state: Mutex::new(hap_state),
         app,
-        positions: Mutex::new(HashMap::new()),
+        positions: Mutex::new(positions::load()),
     });
 
     tokio::spawn(async move {

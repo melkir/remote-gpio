@@ -15,6 +15,7 @@ use crate::hap::accessories::{
     self, Blind, IID_CURRENT_POSITION, IID_TARGET_POSITION,
 };
 use crate::hap::pair_setup::PairSetupSession;
+use crate::hap::positions;
 use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
 use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
 use crate::hap::state::{HapState, HAP_PORT};
@@ -205,6 +206,11 @@ async fn handle_put_characteristics(ctx: &HapContext, body: &[u8]) -> Result<()>
         let mut positions = ctx.positions.lock().await;
         positions.insert(aid, snapped);
         propagate_positions(&mut positions, blind, snapped);
+        let snapshot = positions.clone();
+        drop(positions);
+        if let Err(e) = positions::save(&snapshot) {
+            tracing::warn!("failed to persist positions: {e}");
+        }
     }
     Ok(())
 }
