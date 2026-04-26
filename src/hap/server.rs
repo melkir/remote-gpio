@@ -205,7 +205,7 @@ async fn snapshot_positions(ctx: &HapContext) -> Vec<(u64, u8)> {
     let positions = ctx.positions.lock().await;
     accessories::BLINDS
         .iter()
-        .map(|b| (b.aid, positions.get(&b.aid).copied().unwrap_or(100)))
+        .map(|b| (b.aid, effective_position(&positions, b.aid)))
         .collect()
 }
 
@@ -218,10 +218,10 @@ async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
         let iid: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         let value: Value = match (aid, iid) {
             (a, i) if accessories::find_blind(a).is_some() && i == IID_CURRENT_POSITION => {
-                serde_json::Value::Number(positions.get(&a).copied().unwrap_or(100).into())
+                serde_json::Value::Number(effective_position(&positions, a).into())
             }
             (a, i) if accessories::find_blind(a).is_some() && i == IID_TARGET_POSITION => {
-                serde_json::Value::Number(positions.get(&a).copied().unwrap_or(100).into())
+                serde_json::Value::Number(effective_position(&positions, a).into())
             }
             (a, i)
                 if accessories::find_blind(a).is_some() && i == accessories::IID_POSITION_STATE =>
@@ -279,7 +279,7 @@ async fn handle_put_characteristics(
         // Skip the physical command when the cached position already matches.
         // iOS replays the last-seen TargetPosition right after pairing; without
         // this check we'd send an unwanted UP/DOWN on registration.
-        let current = positions.get(&aid).copied().unwrap_or(100);
+        let current = effective_position(&positions, aid);
         if current == snapped {
             tracing::debug!("PUT TargetPosition aid={aid} value={snapped}: cache hit, no-op");
             continue;
@@ -337,6 +337,29 @@ fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snappe
         {
             positions.insert(all_blind.aid, snapped);
         }
+    }
+}
+
+fn effective_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
+    use crate::gpio::Input;
+    let Some(blind) = accessories::find_blind(aid) else {
+        return 100;
+    };
+    if !matches!(blind.led, Input::ALL) {
+        return positions.get(&aid).copied().unwrap_or(100);
+    }
+
+    let mut individual_positions = accessories::BLINDS
+        .iter()
+        .filter(|b| !matches!(b.led, Input::ALL))
+        .map(|b| positions.get(&b.aid).copied());
+    let Some(Some(first)) = individual_positions.next() else {
+        return positions.get(&aid).copied().unwrap_or(100);
+    };
+    if individual_positions.all(|pos| pos == Some(first)) {
+        first
+    } else {
+        positions.get(&aid).copied().unwrap_or(100)
     }
 }
 
@@ -523,5 +546,37 @@ fn status_phrase(code: u16) -> &'static str {
         404 => "Not Found",
         503 => "Service Unavailable",
         _ => "Unknown",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_blinds_position_uses_matching_individual_positions() {
+        let mut positions = HashMap::new();
+        positions.insert(2, 0);
+        positions.insert(3, 0);
+        positions.insert(4, 0);
+        positions.insert(5, 0);
+
+        assert_eq!(effective_position(&positions, 6), 0);
+    }
+
+    #[test]
+    fn all_blinds_position_falls_back_when_individual_positions_are_missing_or_mixed() {
+        let mut positions = HashMap::new();
+        positions.insert(6, 100);
+        positions.insert(2, 0);
+        positions.insert(3, 0);
+        positions.insert(4, 100);
+        positions.insert(5, 0);
+
+        assert_eq!(effective_position(&positions, 6), 100);
+
+        positions.insert(6, 0);
+        positions.remove(&4);
+        assert_eq!(effective_position(&positions, 6), 0);
     }
 }
