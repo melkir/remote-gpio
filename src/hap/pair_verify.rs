@@ -37,10 +37,14 @@ pub struct PairVerifySession {
 
 pub enum HandleOutcome {
     Reply(Vec<u8>),
-    /// M4 succeeded — switch the connection to encrypted mode using this secret.
+    /// M4 succeeded — switch the connection to encrypted mode using this
+    /// secret. `controller_id` identifies who's on the other end so post-verify
+    /// requests (e.g. `POST /pairings`) can authorize against the persisted
+    /// admin flag.
     Verified {
         reply: Vec<u8>,
         shared_secret: [u8; 32],
+        controller_id: String,
     },
 }
 
@@ -219,6 +223,7 @@ impl PairVerifySession {
         HandleOutcome::Verified {
             reply: Tlv::new().put_u8(TlvTag::State, 4).encode(),
             shared_secret,
+            controller_id: pairing_id_str,
         }
     }
 }

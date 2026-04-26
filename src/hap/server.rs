@@ -17,7 +17,8 @@ use crate::hap::pair_setup::PairSetupSession;
 use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
 use crate::hap::positions;
 use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
-use crate::hap::state::{HapState, HAP_PORT};
+use crate::hap::state::{self, HapState, HAP_PORT};
+use crate::hap::tlv::{HapError, ParsedTlv, Tag as TlvTag, Tlv};
 use crate::remote::Command;
 use crate::server::AppState;
 
@@ -69,6 +70,9 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
     let mut pair_verify = PairVerifySession::new();
     let mut subs: Subscriptions = HashSet::new();
     let mut event_rx = ctx.events.subscribe();
+    // The controller identifier learned from the most recent pair-verify on
+    // this connection. Only set after the channel becomes encrypted.
+    let mut controller_id: Option<String> = None;
 
     loop {
         tokio::select! {
@@ -95,13 +99,18 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
                                     .write_response(200, "application/pairing+tlv8", &body)
                                     .await?;
                             }
-                            HandleOutcome::Verified { reply, shared_secret } => {
+                            HandleOutcome::Verified {
+                                reply,
+                                shared_secret,
+                                controller_id: id,
+                            } => {
                                 writer
                                     .write_response(200, "application/pairing+tlv8", &reply)
                                     .await?;
                                 let keys = SessionKeys::derive(&shared_secret)?;
                                 reader = reader.upgrade(keys.read);
                                 writer = writer.upgrade(keys.write);
+                                controller_id = Some(id);
                                 tracing::info!("hap session encrypted; switched to control channel");
                             }
                         }
@@ -143,7 +152,14 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
                         }
                     }
                     ("POST", "/pairings") => {
-                        writer.write_status(503, "Service Unavailable").await?;
+                        if !writer.is_encrypted() {
+                            writer.write_status(401, "Unauthorized").await?;
+                            continue;
+                        }
+                        let body = handle_pairings(&ctx, controller_id.as_deref(), &req.body).await;
+                        writer
+                            .write_response(200, "application/pairing+tlv8", &body)
+                            .await?;
                     }
                     (method, path) => {
                         tracing::warn!("hap: unhandled {method} {path}");
@@ -233,6 +249,78 @@ async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
         out.push(serde_json::json!({ "aid": aid, "iid": iid, "value": value }));
     }
     serde_json::json!({ "characteristics": out }).to_string()
+}
+
+// HAP §5.10 pair-add / §5.11 pair-remove / §5.12 pair-list. We only ship
+// remove for now (it's the one iOS triggers when the user deletes the bridge
+// from the Home app); add/list reply with kTLVError_Unavailable.
+const PAIRING_METHOD_ADD: u8 = 3;
+const PAIRING_METHOD_REMOVE: u8 = 4;
+const PAIRING_METHOD_LIST: u8 = 5;
+
+async fn handle_pairings(
+    ctx: &HapContext,
+    caller_id: Option<&str>,
+    body: &[u8],
+) -> Vec<u8> {
+    let parsed = match ParsedTlv::parse(body) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("/pairings: malformed TLV: {e}");
+            return error_tlv(2, HapError::Unknown);
+        }
+    };
+
+    let method = parsed.get_u8(TlvTag::Method).unwrap_or(0xFF);
+
+    let mut state = ctx.state.lock().await;
+    let caller_admin = caller_id
+        .and_then(|id| state.find_paired(id))
+        .map(|c| c.admin)
+        .unwrap_or(false);
+    if !caller_admin {
+        tracing::warn!(
+            "/pairings refused: caller {:?} not an admin",
+            caller_id.unwrap_or("<unknown>")
+        );
+        return error_tlv(2, HapError::Authentication);
+    }
+
+    match method {
+        PAIRING_METHOD_REMOVE => {
+            let target = match parsed.get(TlvTag::Identifier) {
+                Some(b) => String::from_utf8_lossy(b).to_string(),
+                None => return error_tlv(2, HapError::Unknown),
+            };
+            state.remove_pairing(&target);
+            if let Err(e) = state::save_current(&state) {
+                tracing::error!("failed to persist pair-remove: {e}");
+                return error_tlv(2, HapError::Unknown);
+            }
+            tracing::info!(
+                "pair-remove: {} removed by {} (paired={})",
+                target,
+                caller_id.unwrap_or("<unknown>"),
+                state.paired_controllers.len()
+            );
+            Tlv::new().put_u8(TlvTag::State, 2).encode()
+        }
+        PAIRING_METHOD_ADD | PAIRING_METHOD_LIST => {
+            tracing::warn!("/pairings method {method} not implemented");
+            error_tlv(2, HapError::Unavailable)
+        }
+        other => {
+            tracing::warn!("/pairings unknown method {other}");
+            error_tlv(2, HapError::Unknown)
+        }
+    }
+}
+
+fn error_tlv(state: u8, err: HapError) -> Vec<u8> {
+    Tlv::new()
+        .put_u8(TlvTag::State, state)
+        .put_u8(TlvTag::Error, err as u8)
+        .encode()
 }
 
 async fn handle_put_characteristics(
