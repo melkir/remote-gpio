@@ -63,10 +63,10 @@ Server listens on `0.0.0.0:5002`.
 Pair on first install:
 
 ```bash
-ssh pi journalctl -u somfy | grep "setup code"
+ssh pi somfy qrcode
 ```
 
-In the iOS Home app: **Add Accessory → More Options → enter the code**. State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
+In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
 
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
 
