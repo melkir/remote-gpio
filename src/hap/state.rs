@@ -30,7 +30,15 @@ pub struct HapState {
     #[serde(with = "hex_array_32")]
     pub ltsk: [u8; 32],
     pub paired_controllers: Vec<PairedController>,
+    /// Cumulative count of failed pair-setup M3 proofs since the last
+    /// successful pairing. HAP §5.6.5 requires the accessory to refuse all
+    /// subsequent attempts after 100 failures until factory reset.
+    #[serde(default)]
+    pub setup_failed_attempts: u32,
 }
+
+/// HAP §5.6.5: cap on consecutive failed pair-setup proofs.
+pub const MAX_SETUP_FAILED_ATTEMPTS: u32 = 100;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct PairedController {
@@ -104,6 +112,7 @@ impl HapState {
             state_number: 1,
             ltsk: signing.to_bytes(),
             paired_controllers: Vec::new(),
+            setup_failed_attempts: 0,
         }
     }
 }

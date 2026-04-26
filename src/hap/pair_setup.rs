@@ -11,7 +11,7 @@ use rand::{rngs::OsRng, RngCore};
 use sha2::Sha512;
 
 use crate::hap::srp;
-use crate::hap::state::{HapState, PairedController};
+use crate::hap::state::{HapState, PairedController, MAX_SETUP_FAILED_ATTEMPTS};
 use crate::hap::tlv::{error_response, HapError, ParsedTlv, Tag as TlvTag, Tlv};
 
 #[derive(Default)]
@@ -51,7 +51,7 @@ impl PairSetupSession {
         let m_state = parsed.get_u8(TlvTag::State).unwrap_or(0);
         let result = match m_state {
             1 => self.handle_m1(state),
-            3 => self.handle_m3(&parsed),
+            3 => self.handle_m3(&parsed, state),
             5 => self.handle_m5(&parsed, state),
             other => {
                 tracing::warn!("pair-setup: unexpected state byte {other}");
@@ -68,6 +68,13 @@ impl PairSetupSession {
     fn handle_m1(&mut self, state: &HapState) -> Result<Vec<u8>, (u8, HapError)> {
         if state.is_paired() {
             return Err((2, HapError::Unavailable));
+        }
+        if state.setup_failed_attempts >= MAX_SETUP_FAILED_ATTEMPTS {
+            tracing::warn!(
+                "pair-setup M1 refused: {} prior failures (delete hap.json to reset)",
+                state.setup_failed_attempts
+            );
+            return Err((2, HapError::MaxTries));
         }
 
         let mut salt = [0u8; 16];
@@ -87,7 +94,11 @@ impl PairSetupSession {
             .encode())
     }
 
-    fn handle_m3(&mut self, parsed: &ParsedTlv) -> Result<Vec<u8>, (u8, HapError)> {
+    fn handle_m3(
+        &mut self,
+        parsed: &ParsedTlv,
+        state: &mut HapState,
+    ) -> Result<Vec<u8>, (u8, HapError)> {
         let setup = match std::mem::take(&mut self.state) {
             PairSetupState::AwaitingProof { setup } => setup,
             other => {
@@ -103,13 +114,16 @@ impl PairSetupSession {
             .get(TlvTag::Proof)
             .ok_or((4, HapError::Authentication))?;
 
-        let verifier = srp::server_verify(&setup, a_pub).map_err(|e| {
-            tracing::warn!("pair-setup M3 verify setup failed: {e}");
-            (4, HapError::Authentication)
-        })?;
+        let verifier = match srp::server_verify(&setup, a_pub) {
+            Ok(v) => v,
+            Err(e) => {
+                tracing::warn!("pair-setup M3 verify setup failed: {e}");
+                return Err(record_failed_attempt(state));
+            }
+        };
         if !srp::ct_eq(&verifier.m1_expected, m1) {
             tracing::warn!("pair-setup M3 client proof mismatch");
-            return Err((4, HapError::Authentication));
+            return Err(record_failed_attempt(state));
         }
 
         self.state = PairSetupState::AwaitingExchange {
@@ -232,6 +246,7 @@ impl PairSetupSession {
             public_key: ios_ltpk_bytes.to_vec(),
             admin: true,
         });
+        state.setup_failed_attempts = 0;
         if let Err(e) = crate::hap::state::save_current(state) {
             tracing::error!("failed to persist pairing: {e}");
             return Err((6, HapError::Unknown));
@@ -256,4 +271,25 @@ fn derive_session_key(srp_key: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 3
     hkdf.expand(info, &mut out)
         .map_err(|e| anyhow!("HKDF: {e}"))?;
     Ok(out)
+}
+
+/// Increment the persisted failed-attempt counter and pick the right HAP
+/// error: `MaxTries` once we've crossed the lockout threshold (so iOS shows
+/// "device cannot be added"), `Authentication` otherwise. A persist failure
+/// gets logged but doesn't change the response — better to reply now than
+/// hide the auth failure behind an Unknown error.
+fn record_failed_attempt(state: &mut HapState) -> (u8, HapError) {
+    state.setup_failed_attempts = state.setup_failed_attempts.saturating_add(1);
+    if let Err(e) = crate::hap::state::save_current(state) {
+        tracing::error!("failed to persist setup_failed_attempts: {e}");
+    }
+    if state.setup_failed_attempts >= MAX_SETUP_FAILED_ATTEMPTS {
+        tracing::warn!(
+            "pair-setup locked after {} failures; delete hap.json to reset",
+            state.setup_failed_attempts
+        );
+        (4, HapError::MaxTries)
+    } else {
+        (4, HapError::Authentication)
+    }
 }
