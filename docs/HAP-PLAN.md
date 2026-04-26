@@ -4,7 +4,7 @@ Companion to [HAP.md](HAP.md) — the project-specific execution plan.
 
 ## Current state (working)
 
-Phases 1–7 + Phase 9 are landed and verified end-to-end against an iPhone:
+All phases (1–9) are landed and verified end-to-end against an iPhone:
 
 - ✅ Persistent state at `$STATE_DIRECTORY/hap.json` (device id, Ed25519 LTSK, setup code, paired controllers).
 - ✅ mDNS advertisement of `_hap._tcp` via `mdns-sd`.
@@ -20,21 +20,7 @@ Phases 1–7 + Phase 9 are landed and verified end-to-end against an iPhone:
 - ✅ EVENT/1.0 push: per-connection subscription set, broadcast channel fans out CurrentPosition / TargetPosition / PositionState updates so the "Closing…" spinner resolves and All-Blinds propagates to siblings live.
 - ✅ `somfy doctor` covers HAP state file readability + paired-controllers count.
 - ✅ `serve` handles SIGTERM (systemd) in addition to SIGINT; `Announcement::drop` unregisters the mDNS service on either path.
-
-Homebridge plugin still ships and runs in parallel — cutover happens at the end of Phase 8.
-
----
-
-## Next steps (TODO)
-
-The remaining work is consolidation and polish, driven by [TODO.md](TODO.md).
-
-### Phase 8 — Retire Homebridge
-
-- Delete `homebridge/`, the second systemd unit, the `paths-ignore` carve-out in CI.
-- Remove the plugin CI deploy as well as the requirement of Node 24.
-- README: replace "install Homebridge plugin" with "scan QR / enter setup code".
-- Add instructions on the PR to uninstall homebridge from the system (e.g. hb-service remove homebridge-somfy-remote/apt-get uninstall homebridge)
+- ✅ Homebridge retired: `homebridge/` removed, CI `paths-ignore` carve-out and npm publish dropped, `install.sh --with-homekit` flag gone, README points to the native pairing flow.
 
 ---
 

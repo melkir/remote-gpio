@@ -1,9 +1,5 @@
 //! Native HomeKit Accessory Protocol server. Replaces the Homebridge plugin.
-//!
-//! Phases 1–3: persistent state, mDNS discovery, pair-setup/verify, and the
-//! encrypted accessory protocol for read/write of WindowCovering
-//! characteristics. Event notifications land in Phase 4.
-//! See `docs/HAP-PLAN.md`.
+//! See `docs/HAP-PLAN.md` for the phased rollout.
 
 pub mod accessories;
 pub mod mdns;

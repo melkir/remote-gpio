@@ -24,13 +24,7 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-Add `-s -- --with-homekit` to the pipe to also install Homebridge + the plugin (see below):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash -s -- --with-homekit
-```
-
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
 ### Day-to-day Operation
 
@@ -62,9 +56,24 @@ Server listens on `0.0.0.0:5002`.
 {"command": "select", "led": "L3"}
 ```
 
-### HomeKit (optional)
+### HomeKit
 
-A Homebridge plugin in [`homebridge/`](homebridge/) exposes each blind as a HomeKit `WindowCovering` so Siri, the iOS Home app, and HomePod all work without a custom iOS app. It's a thin shim over `/command` — no Rust changes. The fastest path is the `--with-homekit` flag on the bootstrap script shown above. See [`homebridge/README.md`](homebridge/README.md) for install, config, and pairing details.
+`somfy serve` runs a native HAP (HomeKit Accessory Protocol) server on port `5010`, advertised via mDNS as a Bridge with one `WindowCovering` per LED selector (`L1`–`L4` + `ALL`). No Homebridge, no plugin, no Node — Siri, the Home app, and HomePod work directly against the Rust binary.
+
+Pair on first install:
+
+```bash
+ssh pi journalctl -u somfy | grep "setup code"
+```
+
+In the iOS Home app: **Add Accessory → More Options → enter the code**. State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
+
+Already running Homebridge with the legacy plugin? Remove it first so both stacks don't fight for HomeKit advertisement:
+
+```bash
+sudo hb-service remove homebridge-somfy-remote
+sudo apt-get purge homebridge   # only if you don't use it for anything else
+```
 
 ### Versioning
 

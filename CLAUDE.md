@@ -28,7 +28,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 - `src/gpio.rs` — `gpiocdev` wrapper. Output pulses are 60ms active-low; input debounce uses a 300ms edge-count window.
 - `build.rs` + `vergen` — embeds git SHA and build date at compile time.
 - `app/` — Preact PWA. Vite + Tailwind. React imports aliased to `preact/compat` in `tsconfig.json` and `vite.config.ts`.
-- `homebridge/` — optional Node.js Homebridge plugin that exposes each blind as a HomeKit `WindowCovering`. Shim over `POST /command`; no Rust changes required. Runs as a separate `homebridge` systemd service on the Pi. CI is scoped via `paths-ignore` so plugin-only changes don't retrigger Rust builds.
+- `src/hap/` — native HomeKit Accessory Protocol server on port 5010 (mDNS advert, SRP-6a/SHA-512 pair-setup, ChaCha20-Poly1305 session, accessory db, EVENT push). State at `$STATE_DIRECTORY/{hap.json,positions.json}`. Replaces the prior `homebridge/` plugin (retired in Phase 8 — see [docs/HAP-PLAN.md](docs/HAP-PLAN.md)).
 
 ## Key Patterns
 
