@@ -4,6 +4,7 @@ use rand::rngs::OsRng;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use std::fs;
+use std::io;
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
@@ -66,7 +67,8 @@ impl HapState {
     }
 
     pub fn remove_pairing(&mut self, identifier: &str) {
-        self.paired_controllers.retain(|c| c.identifier != identifier);
+        self.paired_controllers
+            .retain(|c| c.identifier != identifier);
     }
 
     pub fn status_flag(&self) -> &'static str {
@@ -145,6 +147,11 @@ pub fn save_current(state: &HapState) -> Result<()> {
 }
 
 pub fn save(path: &Path, state: &HapState) -> Result<()> {
+    let json = serde_json::to_vec_pretty(state)?;
+    atomic_save_bytes(path, &json, true)
+}
+
+pub(crate) fn atomic_save_bytes(path: &Path, bytes: &[u8], durable: bool) -> Result<()> {
     let parent = path.parent().unwrap_or(Path::new("."));
     let filename = path
         .file_name()
@@ -157,12 +164,31 @@ pub fn save(path: &Path, state: &HapState) -> Result<()> {
             .truncate(true)
             .mode(0o600)
             .open(&tmp)?;
-        let json = serde_json::to_vec_pretty(state)?;
-        f.write_all(&json)?;
-        f.sync_all()?;
+        f.write_all(bytes)?;
+        if durable {
+            f.sync_all()?;
+        }
     }
     fs::rename(&tmp, path)?;
+    if durable {
+        sync_parent_dir(parent)?;
+    }
     Ok(())
+}
+
+fn sync_parent_dir(parent: &Path) -> Result<()> {
+    match fs::File::open(parent).and_then(|dir| dir.sync_all()) {
+        Ok(()) => Ok(()),
+        Err(e) if directory_sync_unsupported(&e) => Ok(()),
+        Err(e) => Err(e).with_context(|| format!("syncing state directory {}", parent.display())),
+    }
+}
+
+fn directory_sync_unsupported(e: &io::Error) -> bool {
+    matches!(
+        e.kind(),
+        io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
+    )
 }
 
 mod hex_array_32 {
