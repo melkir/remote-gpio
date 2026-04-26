@@ -18,6 +18,7 @@ use crate::hap::pair_setup::PairSetupSession;
 use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
 use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
 use crate::hap::state::{HapState, HAP_PORT};
+use crate::remote::Command;
 use crate::server::AppState;
 
 /// Shared HAP runtime state. Wraps the persistent `HapState` plus the
@@ -185,27 +186,13 @@ async fn handle_put_characteristics(ctx: &HapContext, body: &[u8]) -> Result<()>
         };
         let value = entry.get("value").and_then(|v| v.as_u64()).unwrap_or(100) as u8;
         let snapped = if value >= 50 { 100u8 } else { 0u8 };
-        let command = if snapped == 100 { "up" } else { "down" };
+        let command = if snapped == 100 { Command::Up } else { Command::Down };
 
-        execute_blind_command(ctx, blind, command).await?;
+        ctx.app.remote_control.execute(Some(blind.led), command).await?;
 
         let mut positions = ctx.positions.lock().await;
         positions.insert(aid, snapped);
         propagate_positions(&mut positions, blind, snapped);
-    }
-    Ok(())
-}
-
-async fn execute_blind_command(ctx: &HapContext, blind: &Blind, command: &str) -> Result<()> {
-    let rc = &ctx.app.remote_control;
-    while *rc.receiver.borrow() != blind.led {
-        rc.select().await?;
-    }
-    match command {
-        "up" => rc.up().await?,
-        "down" => rc.down().await?,
-        "stop" => rc.stop().await?,
-        _ => bail!("unknown command {command}"),
     }
     Ok(())
 }

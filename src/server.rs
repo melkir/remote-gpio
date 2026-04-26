@@ -1,6 +1,7 @@
 use crate::gpio::Input;
-use crate::remote::RemoteControl;
+use crate::remote::{Command, RemoteControl};
 use anyhow::Result;
+use std::str::FromStr;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::http::{Method, StatusCode};
@@ -78,41 +79,15 @@ async fn handle_command(
     Json(payload): Json<CommandRequest>,
 ) -> Response {
     let CommandRequest { command, led } = payload;
-    let rc = &state.remote_control;
-
-    match process_command(rc, &command, led).await {
+    match dispatch(&state.remote_control, &command, led).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
-/// Processes a command and handles LED selection if specified
-async fn process_command(
-    rc: &RemoteControl,
-    command: &str,
-    led: Option<Input>,
-) -> Result<(), String> {
-    // Wait for specific LED if requested
-    if let Some(led) = led {
-        while rc.receiver.borrow().to_owned() != led {
-            rc.select().await.map_err(|e| e.to_string())?;
-        }
-    }
-
-    // Execute the command
-    match command {
-        "select" => {
-            if led.is_none() {
-                rc.select().await.map_err(|e| e.to_string())?;
-            }
-        }
-        "up" => rc.up().await.map_err(|e| e.to_string())?,
-        "down" => rc.down().await.map_err(|e| e.to_string())?,
-        "stop" => rc.stop().await.map_err(|e| e.to_string())?,
-        _ => return Err(format!("Invalid command: {}", command)),
-    };
-
-    Ok(())
+async fn dispatch(rc: &RemoteControl, command: &str, led: Option<Input>) -> Result<(), String> {
+    let cmd = Command::from_str(command).map_err(|e| e.to_string())?;
+    rc.execute(led, cmd).await.map_err(|e| e.to_string())
 }
 
 /// Handles WebSocket upgrade requests
@@ -168,7 +143,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
-                                    match process_command(&state.remote_control, &command, led).await {
+                                    match dispatch(&state.remote_control, &command, led).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, led)
                                         }

@@ -1,8 +1,30 @@
 use anyhow::Result;
+use std::str::FromStr;
 
 use tokio::sync::watch::{self, Receiver, Sender};
 
 use crate::gpio::{trigger_output, watch_inputs, Input, Output};
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum Command {
+    Up,
+    Down,
+    Stop,
+    Select,
+}
+
+impl FromStr for Command {
+    type Err = anyhow::Error;
+    fn from_str(s: &str) -> Result<Self> {
+        match s {
+            "up" => Ok(Command::Up),
+            "down" => Ok(Command::Down),
+            "stop" => Ok(Command::Stop),
+            "select" => Ok(Command::Select),
+            _ => Err(anyhow::anyhow!("Invalid command: {}", s)),
+        }
+    }
+}
 
 /// RemoteControl manages the state and operations of the remote control system.
 /// It handles LED selection and button commands while maintaining the current state.
@@ -44,6 +66,31 @@ impl RemoteControl {
         trigger_output(Output::Stop).await
     }
 
+    /// Cycle to `led` (if specified), then run `command`. Single entry point
+    /// shared by REST, WebSocket, and HAP transports.
+    ///
+    /// `Select` with `led=Some` is a no-op after the cycle; `Select` with
+    /// `led=None` triggers exactly one cycle tick.
+    pub async fn execute(&self, led: Option<Input>, command: Command) -> Result<()> {
+        if let Some(target) = led {
+            while *self.receiver.borrow() != target {
+                self.select().await?;
+            }
+        }
+        match command {
+            Command::Up => self.up().await,
+            Command::Down => self.down().await,
+            Command::Stop => self.stop().await,
+            Command::Select => {
+                if led.is_none() {
+                    self.select().await.map(|_| ())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+    }
+
     /// Internal helper to trigger the select button and wait for LED selection
     async fn trigger_select() -> Result<Input> {
         // Run button press and input watching concurrently
@@ -52,5 +99,25 @@ impl RemoteControl {
         });
 
         watch_inputs().await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn command_from_str_valid() {
+        assert_eq!(Command::from_str("up").unwrap(), Command::Up);
+        assert_eq!(Command::from_str("down").unwrap(), Command::Down);
+        assert_eq!(Command::from_str("stop").unwrap(), Command::Stop);
+        assert_eq!(Command::from_str("select").unwrap(), Command::Select);
+    }
+
+    #[test]
+    fn command_from_str_invalid() {
+        assert!(Command::from_str("UP").is_err());
+        assert!(Command::from_str("toggle").is_err());
+        assert!(Command::from_str("").is_err());
     }
 }
