@@ -122,10 +122,7 @@ mod tests {
 
     #[test]
     fn setup_hash_is_base64_of_first_four_sha512_bytes() {
-        assert_eq!(
-            setup_hash("7OSX", "AB:CD:EF:12:34:56"),
-            "L6e5JQ=="
-        );
+        assert_eq!(setup_hash("7OSX", "AB:CD:EF:12:34:56"), "L6e5JQ==");
     }
 
     #[test]

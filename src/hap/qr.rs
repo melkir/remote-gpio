@@ -148,8 +148,7 @@ mod tests {
 
     fn decode_base36(value: &str) -> Option<u64> {
         value.chars().try_fold(0u64, |acc, c| {
-            c.to_digit(36)
-                .map(|digit| acc * 36 + u64::from(digit))
+            c.to_digit(36).map(|digit| acc * 36 + u64::from(digit))
         })
     }
 }
