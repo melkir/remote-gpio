@@ -55,6 +55,7 @@ Investigate whether iOS's initial `/accessories` read or its first `PUT` trigger
 ### Phase 8 — Retire Homebridge
 
 - Delete `homebridge/`, the second systemd unit, the `paths-ignore` carve-out in CI.
+- Remove the plugin CI deploy as well as the requirement of Node 24.
 - README: replace "install Homebridge plugin" with "scan QR / enter setup code".
 - Add instructions on the PR to uninstall homebridge from the system (e.g. hb-service remove homebridge-somfy-remote/apt-get uninstall homebridge)
 
