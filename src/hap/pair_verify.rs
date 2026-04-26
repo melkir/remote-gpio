@@ -208,9 +208,7 @@ impl PairVerifySession {
         info.extend_from_slice(ios_pairing_id);
         info.extend_from_slice(&accessory_pub);
 
-        let sig_array: [u8; 64] = ios_signature
-            .try_into()
-            .expect("length checked above");
+        let sig_array: [u8; 64] = ios_signature.try_into().expect("length checked above");
         let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
         if ltpk.verify(&info, &sig).is_err() {
             tracing::warn!("pair-verify M3 iOS signature failed");

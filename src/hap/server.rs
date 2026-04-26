@@ -286,11 +286,7 @@ const PAIRING_METHOD_ADD: u8 = 3;
 const PAIRING_METHOD_REMOVE: u8 = 4;
 const PAIRING_METHOD_LIST: u8 = 5;
 
-async fn handle_pairings(
-    ctx: &HapContext,
-    caller_id: Option<&str>,
-    body: &[u8],
-) -> Vec<u8> {
+async fn handle_pairings(ctx: &HapContext, caller_id: Option<&str>, body: &[u8]) -> Vec<u8> {
     let parsed = match ParsedTlv::parse(body) {
         Ok(p) => p,
         Err(e) => {
@@ -436,11 +432,7 @@ async fn handle_put_characteristics(
 /// persist the snapshot. Returns the per-aid changes vs. the prior cache so
 /// the caller can fan them out as HAP EVENTs. Idempotent — a no-op when the
 /// cache already matches `snapped`.
-async fn apply_position_change(
-    ctx: &HapContext,
-    blind: &Blind,
-    snapped: u8,
-) -> Vec<(u64, u8)> {
+async fn apply_position_change(ctx: &HapContext, blind: &Blind, snapped: u8) -> Vec<(u64, u8)> {
     let mut positions = ctx.positions.lock().await;
     if positions.get(&blind.aid).copied() == Some(snapped) {
         // For non-ALL accessories an exact match means nothing changed. For
@@ -495,10 +487,6 @@ fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snappe
     if let Some(all_blind) = all_blind {
         if all_match {
             positions.insert(all_blind.aid, snapped);
-        } else {
-            // Individuals are mixed — drop the stale aggregate so reads fall
-            // back to the default rather than returning the last-known value.
-            positions.remove(&all_blind.aid);
         }
     }
 }
@@ -728,7 +716,7 @@ mod tests {
     }
 
     #[test]
-    fn propagate_clears_aggregate_when_individuals_diverge() {
+    fn propagate_keeps_aggregate_when_individuals_diverge() {
         use crate::gpio::Input;
         let mut positions = HashMap::new();
         positions.insert(2, 0);
@@ -737,11 +725,15 @@ mod tests {
         positions.insert(5, 0);
         positions.insert(6, 0);
 
-        // Open one individual — aid=6 should no longer report a fresh 0.
+        // Open one individual — aid=6 keeps its own last persisted value.
         let changed = accessories::find_blind(2).unwrap();
         positions.insert(2, 100);
         propagate_positions(&mut positions, changed, 100);
-        assert_eq!(positions.get(&6), None, "stale ALL must be invalidated");
+        assert_eq!(
+            positions.get(&6),
+            Some(&0),
+            "ALL keeps its last persisted state while individuals are mixed"
+        );
 
         // Subsequent ALL-Close must not be deduped against a stale 0.
         let all_blind = accessories::find_blind(6).unwrap();
