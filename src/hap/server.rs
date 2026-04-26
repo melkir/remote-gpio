@@ -221,7 +221,7 @@ async fn snapshot_positions(ctx: &HapContext) -> Vec<(u64, u8)> {
     let positions = ctx.positions.lock().await;
     accessories::BLINDS
         .iter()
-        .map(|b| (b.aid, cached_position(&positions, b.aid)))
+        .map(|b| (b.aid, effective_position(&positions, b.aid)))
         .collect()
 }
 
@@ -234,10 +234,10 @@ async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
         let iid: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         let value: Value = match (aid, iid) {
             (a, i) if accessories::find_blind(a).is_some() && i == IID_CURRENT_POSITION => {
-                serde_json::Value::Number(cached_position(&positions, a).into())
+                serde_json::Value::Number(effective_position(&positions, a).into())
             }
             (a, i) if accessories::find_blind(a).is_some() && i == IID_TARGET_POSITION => {
-                serde_json::Value::Number(cached_position(&positions, a).into())
+                serde_json::Value::Number(effective_position(&positions, a).into())
             }
             (a, i)
                 if accessories::find_blind(a).is_some() && i == accessories::IID_POSITION_STATE =>
@@ -286,7 +286,11 @@ const PAIRING_METHOD_ADD: u8 = 3;
 const PAIRING_METHOD_REMOVE: u8 = 4;
 const PAIRING_METHOD_LIST: u8 = 5;
 
-async fn handle_pairings(ctx: &HapContext, caller_id: Option<&str>, body: &[u8]) -> Vec<u8> {
+async fn handle_pairings(
+    ctx: &HapContext,
+    caller_id: Option<&str>,
+    body: &[u8],
+) -> Vec<u8> {
     let parsed = match ParsedTlv::parse(body) {
         Ok(p) => p,
         Err(e) => {
@@ -387,11 +391,22 @@ async fn handle_put_characteristics(
         };
         let snapped = if value >= 50 { 100u8 } else { 0u8 };
 
-        let mut positions = ctx.positions.lock().await;
+        let positions = ctx.positions.lock().await;
         // Skip the physical command when the target is already satisfied.
         // iOS replays the last-seen TargetPosition right after pairing; without
         // this check we'd send an unwanted UP/DOWN on registration.
-        if positions.get(&aid).copied() == Some(snapped) {
+        //
+        // For ALL we can't trust the cached aggregate value (it may be stale
+        // when individuals are mixed), so check the individuals directly.
+        let already_at_target = if matches!(blind.led, crate::gpio::Input::ALL) {
+            accessories::BLINDS
+                .iter()
+                .filter(|b| !matches!(b.led, crate::gpio::Input::ALL))
+                .all(|b| positions.get(&b.aid).copied() == Some(snapped))
+        } else {
+            positions.get(&aid).copied() == Some(snapped)
+        };
+        if already_at_target {
             tracing::debug!("PUT TargetPosition aid={aid} value={snapped}: cache hit, no-op");
             continue;
         }
@@ -401,38 +416,48 @@ async fn handle_put_characteristics(
         } else {
             Command::Down
         };
-        // Hold the positions lock across the GPIO command so concurrent HAP
-        // writes to the same aid don't both see the old cache and double-fire.
-        // RemoteControl serializes the physical remote, but this lock
-        // serializes HomeKit dedupe and cache persistence.
+        // Drop the positions lock before the GPIO call. RemoteControl now
+        // serializes execute() internally, so we no longer need to hold
+        // positions to prevent concurrent double-fire — and dropping it
+        // means /characteristics reads aren't blocked while a blind moves.
+        drop(positions);
         ctx.app
             .remote_control
             .execute(Some(blind.led), command)
             .await?;
 
-        let before = positions.insert(aid, snapped);
-        let snapshot = positions.clone();
-        if let Err(e) = positions::save(&snapshot) {
-            tracing::warn!("failed to persist positions: {e}");
-        }
-        drop(positions);
-
-        if before != Some(snapped) {
-            changes.push((aid, snapped));
-        }
+        let local = apply_position_change(ctx, blind, snapped).await;
+        changes.extend(local);
     }
     Ok(changes)
 }
 
-/// Update the cached position for `blind` and persist the snapshot. Returns
-/// the direct aid change so the caller can fan it out as HAP EVENTs.
-/// Idempotent — a no-op when the cache already matches `snapped`.
-async fn apply_position_change(ctx: &HapContext, blind: &Blind, snapped: u8) -> Vec<(u64, u8)> {
+/// Update the cached position for `blind`, propagate the ALL aggregate, and
+/// persist the snapshot. Returns the per-aid changes vs. the prior cache so
+/// the caller can fan them out as HAP EVENTs. Idempotent — a no-op when the
+/// cache already matches `snapped`.
+async fn apply_position_change(
+    ctx: &HapContext,
+    blind: &Blind,
+    snapped: u8,
+) -> Vec<(u64, u8)> {
     let mut positions = ctx.positions.lock().await;
     if positions.get(&blind.aid).copied() == Some(snapped) {
-        return Vec::new();
+        // For non-ALL accessories an exact match means nothing changed. For
+        // ALL we still want to propagate to individuals if any of them are
+        // out of sync, so check that explicitly before returning.
+        let needs_propagate = matches!(blind.led, crate::gpio::Input::ALL)
+            && accessories::BLINDS
+                .iter()
+                .filter(|b| !matches!(b.led, crate::gpio::Input::ALL))
+                .any(|b| positions.get(&b.aid).copied() != Some(snapped));
+        if !needs_propagate {
+            return Vec::new();
+        }
     }
+    let before = positions.clone();
     positions.insert(blind.aid, snapped);
+    propagate_positions(&mut positions, blind, snapped);
     let snapshot = positions.clone();
     // Persist while the lock is held so concurrent writers can't reorder
     // their saves and clobber a newer snapshot with an older one.
@@ -440,11 +465,65 @@ async fn apply_position_change(ctx: &HapContext, blind: &Blind, snapped: u8) -> 
         tracing::warn!("failed to persist positions: {e}");
     }
     drop(positions);
-    vec![(blind.aid, snapped)]
+    snapshot
+        .iter()
+        .filter_map(|(k, v)| (before.get(k) != Some(v)).then_some((*k, *v)))
+        .collect()
 }
 
-fn cached_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
-    positions.get(&aid).copied().unwrap_or(100)
+fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snapped: u8) {
+    use crate::gpio::Input;
+    if matches!(changed.led, Input::ALL) {
+        for b in accessories::BLINDS
+            .iter()
+            .filter(|b| !matches!(b.led, Input::ALL))
+        {
+            positions.insert(b.aid, snapped);
+        }
+        return;
+    }
+    let individuals: Vec<&Blind> = accessories::BLINDS
+        .iter()
+        .filter(|b| !matches!(b.led, Input::ALL))
+        .collect();
+    let all_match = individuals
+        .iter()
+        .all(|b| positions.get(&b.aid).copied() == Some(snapped));
+    let all_blind = accessories::BLINDS
+        .iter()
+        .find(|b| matches!(b.led, Input::ALL));
+    if let Some(all_blind) = all_blind {
+        if all_match {
+            positions.insert(all_blind.aid, snapped);
+        } else {
+            // Individuals are mixed — drop the stale aggregate so reads fall
+            // back to the default rather than returning the last-known value.
+            positions.remove(&all_blind.aid);
+        }
+    }
+}
+
+fn effective_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
+    use crate::gpio::Input;
+    let Some(blind) = accessories::find_blind(aid) else {
+        return 100;
+    };
+    if !matches!(blind.led, Input::ALL) {
+        return positions.get(&aid).copied().unwrap_or(100);
+    }
+
+    let mut individual_positions = accessories::BLINDS
+        .iter()
+        .filter(|b| !matches!(b.led, Input::ALL))
+        .map(|b| positions.get(&b.aid).copied());
+    let Some(Some(first)) = individual_positions.next() else {
+        return positions.get(&aid).copied().unwrap_or(100);
+    };
+    if individual_positions.all(|pos| pos == Some(first)) {
+        first
+    } else {
+        positions.get(&aid).copied().unwrap_or(100)
+    }
 }
 
 // --- HTTP request reading ----------------------------------------------------
@@ -638,21 +717,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn all_blinds_position_is_independent_from_individuals() {
+    fn all_blinds_position_uses_matching_individual_positions() {
         let mut positions = HashMap::new();
         positions.insert(2, 0);
         positions.insert(3, 0);
         positions.insert(4, 0);
         positions.insert(5, 0);
 
-        assert_eq!(cached_position(&positions, 6), 100);
-
-        positions.insert(6, 0);
-        assert_eq!(cached_position(&positions, 6), 0);
+        assert_eq!(effective_position(&positions, 6), 0);
     }
 
     #[test]
-    fn individual_changes_do_not_clear_all_blinds_state() {
+    fn propagate_clears_aggregate_when_individuals_diverge() {
+        use crate::gpio::Input;
         let mut positions = HashMap::new();
         positions.insert(2, 0);
         positions.insert(3, 0);
@@ -660,14 +737,24 @@ mod tests {
         positions.insert(5, 0);
         positions.insert(6, 0);
 
-        // Opening one individual does not mutate the physical ALL selector's
-        // own last-commanded state.
+        // Open one individual — aid=6 should no longer report a fresh 0.
+        let changed = accessories::find_blind(2).unwrap();
         positions.insert(2, 100);
-        assert_eq!(positions.get(&6), Some(&0));
+        propagate_positions(&mut positions, changed, 100);
+        assert_eq!(positions.get(&6), None, "stale ALL must be invalidated");
+
+        // Subsequent ALL-Close must not be deduped against a stale 0.
+        let all_blind = accessories::find_blind(6).unwrap();
+        assert!(matches!(all_blind.led, Input::ALL));
+        let already = accessories::BLINDS
+            .iter()
+            .filter(|b| !matches!(b.led, Input::ALL))
+            .all(|b| positions.get(&b.aid).copied() == Some(0));
+        assert!(!already, "individuals are mixed; ALL→0 must not be skipped");
     }
 
     #[test]
-    fn missing_positions_default_open_per_aid() {
+    fn all_blinds_position_falls_back_when_individual_positions_are_missing_or_mixed() {
         let mut positions = HashMap::new();
         positions.insert(6, 100);
         positions.insert(2, 0);
@@ -675,9 +762,10 @@ mod tests {
         positions.insert(4, 100);
         positions.insert(5, 0);
 
-        assert_eq!(cached_position(&positions, 6), 100);
+        assert_eq!(effective_position(&positions, 6), 100);
 
-        positions.remove(&6);
-        assert_eq!(cached_position(&positions, 6), 100);
+        positions.insert(6, 0);
+        positions.remove(&4);
+        assert_eq!(effective_position(&positions, 6), 0);
     }
 }
