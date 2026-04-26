@@ -32,7 +32,11 @@ The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-g
 ssh pi sudo somfy upgrade                 # latest stable release
 ssh pi sudo somfy upgrade --channel main  # moving prerelease built from main
 ssh pi sudo somfy upgrade --version v0.2.0  # pin or roll back
+ssh pi sudo somfy restart                 # restart the service
 ssh pi somfy doctor                       # health check (GPIO, unit, version)
+ssh pi somfy homekit status               # HomeKit pairing/status + QR
+ssh pi somfy homekit pairings             # paired controller list
+ssh pi somfy homekit reset                # regenerate HomeKit identity
 ssh pi somfy --version                    # embedded git SHA + build date
 ```
 
@@ -63,10 +67,10 @@ Server listens on `0.0.0.0:5002`.
 Pair on first install:
 
 ```bash
-ssh pi somfy qrcode
+ssh pi somfy homekit status
 ```
 
-In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
+In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps. Use `somfy homekit reset` before re-pairing from scratch.
 
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
 

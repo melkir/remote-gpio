@@ -14,6 +14,7 @@ pub const MODEL: &str = "Somfy Telis 4";
 pub const MANUFACTURER: &str = "Somfy";
 pub const HAP_CATEGORY: &str = "14";
 pub const STATE_FILE: &str = "hap.json";
+pub const SYSTEM_STATE_DIR: &str = "/var/lib/somfy";
 
 /// Persistent HAP accessory identity.
 ///
@@ -23,7 +24,6 @@ pub const STATE_FILE: &str = "hap.json";
 pub struct HapState {
     pub device_id: String,
     pub setup_code: String,
-    #[serde(default = "generate_setup_id")]
     pub setup_id: String,
     pub config_number: u32,
     pub state_number: u32,
@@ -117,6 +117,15 @@ impl HapState {
     }
 }
 
+pub fn reset_current() -> Result<HapState> {
+    let dir = state_dir();
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("creating state directory {}", dir.display()))?;
+    let state = HapState::generate();
+    save(&dir.join(STATE_FILE), &state)?;
+    Ok(state)
+}
+
 /// 4-character HomeKit setup ID. Apple's spec recommends a confusion-free
 /// alphabet — drop ambiguous glyphs (0/O, 1/I, etc.) to keep the printed code
 /// scannable in case the operator falls back to typing it.
@@ -152,7 +161,17 @@ pub fn state_dir() -> PathBuf {
     if let Ok(dir) = std::env::var("SOMFY_STATE_DIR") {
         return PathBuf::from(dir);
     }
+    default_state_dir()
+}
+
+#[cfg(debug_assertions)]
+fn default_state_dir() -> PathBuf {
     PathBuf::from("./hap-state")
+}
+
+#[cfg(not(debug_assertions))]
+fn default_state_dir() -> PathBuf {
+    PathBuf::from(SYSTEM_STATE_DIR)
 }
 
 pub fn load_or_init() -> Result<HapState> {
@@ -165,14 +184,6 @@ pub fn load_or_init() -> Result<HapState> {
         Ok(text) => {
             let state: HapState = serde_json::from_str(&text)
                 .with_context(|| format!("parsing {}", path.display()))?;
-            // Migrate: pre-setup_id state files would otherwise regenerate the
-            // setup_id on every boot (changing the QR). Persist on first load.
-            let raw: serde_json::Value = serde_json::from_str(&text)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            if raw.get("setup_id").is_none() {
-                save(&path, &state)?;
-                tracing::info!("migrated HAP state with setup_id at {}", path.display());
-            }
             Ok(state)
         }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -312,7 +323,7 @@ mod tests {
     }
 
     #[test]
-    fn legacy_state_without_setup_id_loads_with_default() {
+    fn state_without_setup_id_is_invalid() {
         let json = r#"{
             "device_id": "AB:CD:EF:12:34:56",
             "setup_code": "101-48-005",
@@ -321,7 +332,6 @@ mod tests {
             "ltsk": "0000000000000000000000000000000000000000000000000000000000000000",
             "paired_controllers": []
         }"#;
-        let loaded: HapState = serde_json::from_str(json).unwrap();
-        assert_eq!(loaded.setup_id.len(), 4);
+        assert!(serde_json::from_str::<HapState>(json).is_err());
     }
 }

@@ -10,25 +10,25 @@
 
 ## Persistent state
 
-`$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`, falls back to `./hap-state` for `cargo run`):
+`$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`; otherwise defaults to `/var/lib/somfy` in release builds and `./hap-state` in debug builds; override with `SOMFY_STATE_DIR`):
 
-| File              | Owner        | Contents                                                                          |
-| ----------------- | ------------ | --------------------------------------------------------------------------------- |
-| `hap.json`        | `state.rs`   | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers |
-| `positions.json`  | `positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
+| File             | Owner          | Contents                                                                                |
+| ---------------- | -------------- | --------------------------------------------------------------------------------------- |
+| `hap.json`       | `state.rs`     | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
+| `positions.json` | `positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
 
 Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
 
 ## Crypto + protocol
 
-| Concern              | Implementation                                                                                            |
-| -------------------- | --------------------------------------------------------------------------------------------------------- |
-| TLV8 codec           | `src/hap/tlv.rs` with fragment reassembly (HAP §14.1).                                                    |
-| SRP-6a / SHA-512     | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects. |
-| Pair-Setup (M1–M6)   | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs. |
-| Pair-Verify (M1–M4)  | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                   |
-| Session framing      | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.|
-| HTTP                 | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser.     |
+| Concern             | Implementation                                                                                                                              |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| TLV8 codec          | `src/hap/tlv.rs` with fragment reassembly (HAP §14.1).                                                                                      |
+| SRP-6a / SHA-512    | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects. |
+| Pair-Setup (M1–M6)  | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs.                                   |
+| Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                    |
+| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.                                  |
+| HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser.                                       |
 
 ## Connection lifecycle
 
@@ -50,7 +50,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 ## Doctor
 
-`somfy doctor` includes a `hap_state` check: missing → advisory ("created on first serve"), unreadable / malformed → blocking, otherwise OK with `id=… paired=N`.
+`somfy doctor` deliberately stays focused on process and deployment health: systemd unit drift, service state, GPIO access, updates, and deployed version. HomeKit pairing state lives under `somfy homekit ...` so diagnostics and pairing lifecycle commands do not drift apart.
 
 ## Lifecycle
 
@@ -62,10 +62,31 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 ## Pairing
 
-Setup code is logged at startup:
+Show the setup code and pairing QR:
 
 ```bash
-ssh pi journalctl -u somfy | grep "setup code"
+ssh pi somfy homekit status
 ```
 
-In iOS Home → Add Accessory → More Options → enter the code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
+In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
+
+Pairing lifecycle commands:
+
+```bash
+ssh pi somfy homekit status
+ssh pi somfy homekit pairings
+ssh pi somfy homekit unpair '<controller-id>'
+ssh pi somfy homekit reset
+ssh pi sudo somfy restart
+```
+
+`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. `reset` regenerates the HomeKit identity and removes all pairings. Run `sudo somfy restart` after `reset` or `unpair` so the in-memory HAP server advertises and enforces the updated state.
+
+## Accessory Identity Stability
+
+Home remembers accessories by the persisted identity in `hap.json` and by stable accessory/characteristic IDs from `accessories.rs`. Treat these values as compatibility surfaces:
+
+- Keep `device_id`, `setup_id`, and the long-term signing key stable across upgrades. Regenerating them is a factory reset and forces re-pairing.
+- Keep AIDs and IIDs stable once shipped. Changing them can make Home lose room/name/automation associations.
+- Bump `config_number` only when the exposed accessory schema changes.
+- Avoid renaming the bridge model/name constants casually. User-visible names can be changed in Home, but changing advertised defaults can make debugging paired devices harder.

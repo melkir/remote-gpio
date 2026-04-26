@@ -35,7 +35,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 - **Error handling:** `anyhow::Result<T>` throughout the Rust code.
 - **WebSocket loop:** single `tokio::select!` handles incoming messages and LED updates; command processing is spawned so it can't block broadcasts.
 - **Static serving:** release builds embed `app/dist/`; debug builds read from disk for hot-reload.
-- **Doctor is the source of truth** for "is this thing healthy" — `somfy doctor` runs on every `serve` startup and is the single JSON contract for health (unit drift, GPIO access, service user/group, available updates, deployed SHA).
+- **Doctor is the source of truth** for "is this thing healthy" — `somfy doctor` runs on every `serve` startup and is the single JSON contract for deployment/process health (unit drift, GPIO access, service user/group, available updates, deployed SHA). HomeKit pairing lifecycle belongs to `somfy homekit ...`.
 - **Install/upgrade are idempotent.** `somfy install` defaults the service user from `SUDO_USER` and only writes the unit if it differs from the template. `somfy upgrade` downloads, checksums, swaps, restarts, and rolls back to `somfy.prev` if the new binary fails to come up.
 
 ## CI / Deployment

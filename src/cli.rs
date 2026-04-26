@@ -45,11 +45,12 @@ pub enum Command {
     },
     /// Disable and remove the systemd unit
     Uninstall,
-    /// Print the HomeKit pairing QR code
-    Qrcode {
-        /// Print only the X-HM:// URI (for piping/scripting)
-        #[arg(long)]
-        uri_only: bool,
+    /// Restart the systemd service
+    Restart,
+    /// Inspect or reset HomeKit pairing state
+    Homekit {
+        #[command(subcommand)]
+        command: HomekitCommand,
     },
 }
 
@@ -57,4 +58,30 @@ pub enum Command {
 pub enum UpgradeChannel {
     Stable,
     Nightly,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum HomekitCommand {
+    /// Show HomeKit identity, pairing status, and pairing QR when unpaired
+    Status {
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+        /// Print only the X-HM:// setup URI
+        #[arg(long)]
+        uri_only: bool,
+    },
+    /// Regenerate the HomeKit identity and remove all pairings
+    Reset,
+    /// List paired HomeKit controllers
+    Pairings {
+        /// Print machine-readable JSON
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove one paired HomeKit controller by identifier
+    Unpair {
+        /// Controller identifier from `somfy homekit pairings`
+        identifier: String,
+    },
 }

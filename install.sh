@@ -76,9 +76,9 @@ echo "Running somfy install..."
 cat <<EOF
 
 HomeKit pairing: the somfy binary advertises itself natively over mDNS.
-Find the setup code in the journal:
+Show the pairing QR code and setup code:
 
-  sudo journalctl -u somfy | grep "setup code"
+  somfy homekit status
 
-In the iOS Home app: Add Accessory → More Options → enter the code.
+In the iOS Home app: Add Accessory → scan the QR code.
 EOF
