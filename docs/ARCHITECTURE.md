@@ -88,12 +88,10 @@ The web server exposes one command endpoint and two live-state transports:
 - `GET /events` for the Preact PWA's SSE stream of LED updates.
 - `GET /ws` for bidirectional clients that want live LED updates and command messages.
 
-The Preact PWA uses SSE for live state and `POST /command` for actions. `/ws`
-stays available for bidirectional clients. Both live transports subscribe to
-`RemoteControl::subscribe_selection()`, send the current LED immediately, and
-then forward selection changes. Incoming WebSocket commands are spawned as tasks
-so LED updates keep flowing while a command is cycling through the physical
-remote.
+Both live transports subscribe to `RemoteControl::subscribe_selection()`, send
+the current LED immediately, and then forward selection changes. Incoming
+WebSocket commands are spawned as tasks so LED updates keep flowing while a
+command is cycling through the physical remote.
 
 ## HomeKit Flow
 

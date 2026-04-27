@@ -83,25 +83,12 @@ async fn handle_led(State(state): State<Arc<AppState>>) -> String {
 async fn handle_events(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let rx_led = state.remote_control.subscribe_selection();
-    let stream = stream::unfold((rx_led, true), |(mut rx_led, initial)| async move {
-        if initial {
-            let selection = rx_led.borrow().to_string();
-            return Some((
-                Ok(Event::default().event("selection").data(selection)),
-                (rx_led, false),
-            ));
-        }
-
-        if rx_led.changed().await.is_err() {
-            return None;
-        }
-
-        let selection = rx_led.borrow().to_string();
-        Some((
-            Ok(Event::default().event("selection").data(selection)),
-            (rx_led, false),
-        ))
+    let mut rx = state.remote_control.subscribe_selection();
+    rx.mark_changed();
+    let stream = stream::unfold(rx, |mut rx| async move {
+        rx.changed().await.ok()?;
+        let selection = rx.borrow_and_update().to_string();
+        Some((Ok(Event::default().event("selection").data(selection)), rx))
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())

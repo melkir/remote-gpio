@@ -7,64 +7,60 @@ export enum ReadyState {
   CLOSED = 2,
 }
 
+const DOWN_AFTER_MS = 30_000;
+
 type Options = {
   onSelection?: (selection: string) => void;
   onError?: (event: Event) => void;
 };
 
-class SelectionEventClient {
-  readonly readyState = signal(ReadyState.CLOSED);
-
-  private eventSource: EventSource | null = null;
-
-  constructor(
-    private readonly url: string,
-    private readonly options: Options = {},
-  ) {
-    this.connect();
-  }
-
-  private connect() {
-    const events = new EventSource(this.url);
-
-    this.eventSource = events;
-    this.readyState.value = ReadyState.CONNECTING;
-
-    events.onopen = () => {
-      this.readyState.value = ReadyState.OPEN;
-    };
-
-    events.addEventListener('selection', (event) => {
-      this.options.onSelection?.(event.data);
-    });
-
-    events.onerror = (event) => {
-      this.readyState.value =
-        events.readyState === EventSource.CLOSED ? ReadyState.CLOSED : ReadyState.CONNECTING;
-      this.options.onError?.(event);
-    };
-  }
-
-  disconnect() {
-    this.eventSource?.close();
-    this.eventSource = null;
-    this.readyState.value = ReadyState.CLOSED;
-  }
-}
-
 export function useSelectionEvents(url: string, options: Options = {}) {
-  const clientRef = useRef<SelectionEventClient>();
-
-  if (!clientRef.current) {
-    clientRef.current = new SelectionEventClient(url, options);
-  }
+  const readyState = useRef(signal(ReadyState.CLOSED)).current;
+  const optsRef = useRef(options);
+  optsRef.current = options;
 
   useEffect(() => {
-    return () => clientRef.current?.disconnect();
-  }, []);
+    const es = new EventSource(url);
+    let downTimer: ReturnType<typeof setTimeout> | null = null;
+    readyState.value = ReadyState.CONNECTING;
 
-  return {
-    readyState: clientRef.current.readyState,
-    disconnect: () => clientRef.current?.disconnect(),
-  };
+    const clearDown = () => {
+      if (downTimer === null) return;
+      clearTimeout(downTimer);
+      downTimer = null;
+    };
+
+    es.onopen = () => {
+      clearDown();
+      readyState.value = ReadyState.OPEN;
+    };
+
+    es.addEventListener('selection', (event) => {
+      optsRef.current.onSelection?.(event.data);
+    });
+
+    es.onerror = (event) => {
+      if (es.readyState === EventSource.CLOSED) {
+        clearDown();
+        readyState.value = ReadyState.CLOSED;
+      } else {
+        readyState.value = ReadyState.CONNECTING;
+        if (downTimer === null) {
+          downTimer = setTimeout(() => {
+            downTimer = null;
+            readyState.value = ReadyState.CLOSED;
+          }, DOWN_AFTER_MS);
+        }
+      }
+      optsRef.current.onError?.(event);
+    };
+
+    return () => {
+      clearDown();
+      es.close();
+      readyState.value = ReadyState.CLOSED;
+    };
+  }, [url]);
+
+  return { readyState };
 }

@@ -22,10 +22,7 @@ export function App() {
     }
   }, []);
   const { readyState } = useSelectionEvents('/events', {
-    onSelection: (selection) => {
-      if (!selection) return;
-      setActiveLed(selection);
-    },
+    onSelection: setActiveLed,
   });
   const attrs = useLongPress(
     () => {
@@ -38,7 +35,6 @@ export function App() {
     },
   );
 
-  // Map readyState to color and label
   const status = {
     [ReadyState.CONNECTING]: 'bg-loading',
     [ReadyState.OPEN]: 'bg-green-900',
