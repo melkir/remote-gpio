@@ -73,6 +73,7 @@ ssh pi somfy homekit status
 In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps. Use `somfy homekit reset` before re-pairing from scratch.
 
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
+For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Versioning
 
@@ -84,5 +85,6 @@ CI never touches the Pi. Deployment is a pull from the device over SSH.
 
 ### More
 
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — codebase tour, data flow, concurrency model, and major tradeoffs.
 - [docs/HARDWARE.md](docs/HARDWARE.md) — wiring, GPIO timing, concurrency model, and the "why" behind the design.
 - [CLAUDE.md](CLAUDE.md) — build commands, repo layout, and patterns worth knowing before editing.
