@@ -81,6 +81,15 @@ For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTUR
 - Push a tag `vX.Y.Z` → CI publishes a stable release plus a `SHA256SUMS` file.
 - The binary embeds its git SHA and build date via `vergen`, so `somfy --version` and `somfy doctor` always report what's actually running.
 
+Release a new patch version from a clean, up-to-date `main`:
+
+```bash
+mise run release:dry
+mise run release:patch
+```
+
+`cargo-release` bumps `Cargo.toml`/`Cargo.lock`, creates the release commit and `vX.Y.Z` tag, then pushes both. GitHub Actions builds and publishes the binary from the tag.
+
 CI never touches the Pi. Deployment is a pull from the device over SSH.
 
 ### More

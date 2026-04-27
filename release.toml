@@ -1,0 +1,6 @@
+allow-branch = ["main"]
+push-remote = "origin"
+tag-name = "v{{version}}"
+pre-release-commit-message = "chore: release v{{version}}"
+publish = false
+verify = false
