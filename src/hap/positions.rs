@@ -1,5 +1,5 @@
 //! Persisted position cache. Sibling file to `hap.json` so the in-memory
-//! `HapContext.positions` survives restarts and the Phase-5 dedupe stays
+//! the Somfy HAP adapter's position cache survives restarts and the dedupe stays
 //! effective across process boundaries.
 //!
 //! Reload is read-only: we never replay a saved position to GPIO.

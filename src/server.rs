@@ -18,7 +18,7 @@ use tower_http::trace::TraceLayer;
 
 /// Application state shared across all routes
 pub struct AppState {
-    pub remote_control: RemoteControl,
+    pub remote_control: Arc<RemoteControl>,
 }
 
 /// Command request structure for HTTP and WebSocket endpoints

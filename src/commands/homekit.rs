@@ -3,7 +3,8 @@ use serde::Serialize;
 
 use crate::cli::HomekitCommand;
 use crate::hap::qr;
-use crate::hap::state::{self, display_setup_code, HAP_PORT};
+use crate::hap::runtime::HapStore;
+use crate::hap::state::{display_setup_code, FileHapStore, HAP_PORT};
 
 #[derive(Serialize)]
 struct StatusReport {
@@ -35,7 +36,8 @@ pub fn run(command: HomekitCommand) -> Result<()> {
 }
 
 fn status(json: bool, uri_only: bool) -> Result<()> {
-    let state = state::load_or_init()?;
+    let store = FileHapStore::current();
+    let state = store.load_or_init()?;
     let uri = qr::setup_uri(&state)?;
 
     if uri_only {
@@ -44,10 +46,7 @@ fn status(json: bool, uri_only: bool) -> Result<()> {
     }
 
     let report = StatusReport {
-        state_path: state::state_dir()
-            .join(state::STATE_FILE)
-            .display()
-            .to_string(),
+        state_path: store.state_path().display().to_string(),
         device_id: state.device_id.clone(),
         setup_id: state.setup_id.clone(),
         setup_code: display_setup_code(&state.setup_code),
@@ -87,7 +86,7 @@ fn status(json: bool, uri_only: bool) -> Result<()> {
 }
 
 fn reset() -> Result<()> {
-    let state = state::reset_current()?;
+    let state = FileHapStore::current().reset()?;
     println!("HomeKit state reset");
     println!("  device id  : {}", state.device_id);
     println!("  setup id   : {}", state.setup_id);
@@ -98,7 +97,7 @@ fn reset() -> Result<()> {
 }
 
 fn pairings(json: bool) -> Result<()> {
-    let state = state::load_or_init()?;
+    let state = FileHapStore::current().load_or_init()?;
     let pairings: Vec<PairingReport> = state
         .paired_controllers
         .iter()
@@ -127,13 +126,14 @@ fn pairings(json: bool) -> Result<()> {
 }
 
 fn unpair(identifier: &str) -> Result<()> {
-    let mut state = state::load_or_init()?;
+    let store = FileHapStore::current();
+    let mut state = store.load_or_init()?;
     let before = state.paired_controllers.len();
     state.remove_pairing(identifier);
     if state.paired_controllers.len() == before {
         bail!("no paired HomeKit controller with identifier `{identifier}`");
     }
-    state::save_current(&state)?;
+    store.save_state(&state)?;
 
     println!("Removed HomeKit pairing `{identifier}`.");
     println!("Run `sudo somfy restart` to drop any in-memory pairing state.");

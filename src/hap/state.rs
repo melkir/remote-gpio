@@ -9,6 +9,8 @@ use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use crate::hap::runtime::HapStore;
+
 pub const HAP_PORT: u16 = 5010;
 pub const MODEL: &str = "Somfy Telis 4";
 pub const MANUFACTURER: &str = "Somfy";
@@ -117,15 +119,6 @@ impl HapState {
     }
 }
 
-pub fn reset_current() -> Result<HapState> {
-    let dir = state_dir();
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("creating state directory {}", dir.display()))?;
-    let state = HapState::generate();
-    save(&dir.join(STATE_FILE), &state)?;
-    Ok(state)
-}
-
 /// 4-character HomeKit setup ID. Apple's spec recommends a confusion-free
 /// alphabet — drop ambiguous glyphs (0/O, 1/I, etc.) to keep the printed code
 /// scannable in case the operator falls back to typing it.
@@ -175,31 +168,77 @@ fn default_state_dir() -> PathBuf {
 }
 
 pub fn load_or_init() -> Result<HapState> {
-    let dir = state_dir();
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("creating state directory {}", dir.display()))?;
-
-    let path = dir.join(STATE_FILE);
-    match fs::read_to_string(&path) {
-        Ok(text) => {
-            let state: HapState = serde_json::from_str(&text)
-                .with_context(|| format!("parsing {}", path.display()))?;
-            Ok(state)
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let state = HapState::generate();
-            save(&path, &state)?;
-            tracing::info!("initialized HAP state at {}", path.display());
-            Ok(state)
-        }
-        Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
-    }
+    FileHapStore::current().load_or_init()
 }
 
 pub fn save_current(state: &HapState) -> Result<()> {
-    let dir = state_dir();
-    fs::create_dir_all(&dir)?;
-    save(&dir.join(STATE_FILE), state)
+    FileHapStore::current().save_state(state)
+}
+
+#[derive(Clone, Debug)]
+pub struct FileHapStore {
+    dir: PathBuf,
+}
+
+impl FileHapStore {
+    pub fn current() -> Self {
+        Self { dir: state_dir() }
+    }
+
+    pub fn new(dir: impl Into<PathBuf>) -> Self {
+        Self { dir: dir.into() }
+    }
+
+    pub fn state_path(&self) -> PathBuf {
+        self.dir.join(STATE_FILE)
+    }
+
+    pub fn load_or_init(&self) -> Result<HapState> {
+        fs::create_dir_all(&self.dir)
+            .with_context(|| format!("creating state directory {}", self.dir.display()))?;
+
+        match self.load_state()? {
+            Some(state) => Ok(state),
+            None => {
+                let state = HapState::generate();
+                self.save_state(&state)?;
+                tracing::info!("initialized HAP state at {}", self.state_path().display());
+                Ok(state)
+            }
+        }
+    }
+
+    pub fn reset(&self) -> Result<HapState> {
+        fs::create_dir_all(&self.dir)
+            .with_context(|| format!("creating state directory {}", self.dir.display()))?;
+        let state = HapState::generate();
+        self.save_state(&state)?;
+        Ok(state)
+    }
+}
+
+impl HapStore for FileHapStore {
+    fn load_state(&self) -> Result<Option<HapState>> {
+        let path = self.state_path();
+        match fs::read_to_string(&path) {
+            Ok(text) => {
+                let state: HapState = serde_json::from_str(&text)
+                    .with_context(|| format!("parsing {}", path.display()))?;
+                Ok(Some(state))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("reading {}", path.display())),
+        }
+    }
+
+    fn save_state(&self, state: &HapState) -> Result<()> {
+        fs::create_dir_all(&self.dir)?;
+        save(&self.state_path(), state)
+    }
+}
+
+pub fn reset_current() -> Result<HapState> {
+    FileHapStore::current().reset()
 }
 
 pub fn save(path: &Path, state: &HapState) -> Result<()> {

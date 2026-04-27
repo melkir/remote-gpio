@@ -247,10 +247,6 @@ impl PairSetupSession {
             admin: true,
         });
         state.setup_failed_attempts = 0;
-        if let Err(e) = crate::hap::state::save_current(state) {
-            tracing::error!("failed to persist pairing: {e}");
-            return Err((6, HapError::Unknown));
-        }
 
         self.state = PairSetupState::Done;
         tracing::info!(
@@ -273,16 +269,12 @@ fn derive_session_key(srp_key: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 3
     Ok(out)
 }
 
-/// Increment the persisted failed-attempt counter and pick the right HAP
+/// Increment the failed-attempt counter and pick the right HAP
 /// error: `MaxTries` once we've crossed the lockout threshold (so iOS shows
-/// "device cannot be added"), `Authentication` otherwise. A persist failure
-/// gets logged but doesn't change the response — better to reply now than
-/// hide the auth failure behind an Unknown error.
+/// "device cannot be added"), `Authentication` otherwise. The runtime
+/// persists the updated state after the state-machine step returns.
 fn record_failed_attempt(state: &mut HapState) -> (u8, HapError) {
     state.setup_failed_attempts = state.setup_failed_attempts.saturating_add(1);
-    if let Err(e) = crate::hap::state::save_current(state) {
-        tracing::error!("failed to persist setup_failed_attempts: {e}");
-    }
     if state.setup_failed_attempts >= MAX_SETUP_FAILED_ATTEMPTS {
         tracing::warn!(
             "pair-setup locked after {} failures; delete hap.json to reset",

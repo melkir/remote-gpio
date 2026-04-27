@@ -3,40 +3,29 @@
 
 use anyhow::{anyhow, bail, Result};
 use serde_json::Value;
-use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::broadcast;
 
-use crate::hap::accessories::{self, Blind, IID_CURRENT_POSITION, IID_TARGET_POSITION};
 use crate::hap::pair_setup::PairSetupSession;
 use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
-use crate::hap::positions;
+use crate::hap::runtime::{
+    CharacteristicEvent, CharacteristicId, CharacteristicValue, CharacteristicWrite,
+    HapAccessoryApp, HapRuntime, HapStore, Subscriptions,
+};
 use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
-use crate::hap::state::{self, HapState, HAP_PORT};
+use crate::hap::state::HAP_PORT;
 use crate::hap::tlv::{HapError, ParsedTlv, Tag as TlvTag, Tlv};
-use crate::remote::Command;
-use crate::server::AppState;
 
-/// Shared HAP runtime state. Wraps the persistent `HapState` plus the
-/// in-memory accessory position cache.
-pub struct HapContext {
-    pub state: Mutex<HapState>,
-    pub app: Arc<AppState>,
-    /// aid → cached position (0 or 100). Updated on any successful PUT.
-    pub positions: Mutex<HashMap<u64, u8>>,
-    /// Broadcast channel for position changes. Each connection subscribes and
-    /// fans out EVENT/1.0 frames to its currently subscribed characteristics.
-    pub events: broadcast::Sender<Vec<(u64, u8)>>,
-}
-
-type Subscriptions = HashSet<(u64, u64)>;
-
-pub async fn serve(ctx: Arc<HapContext>) -> Result<()> {
+pub async fn serve<A, S>(ctx: Arc<HapRuntime<A, S>>) -> Result<()>
+where
+    A: HapAccessoryApp,
+    S: HapStore,
+{
     let addr: SocketAddr = ([0, 0, 0, 0], HAP_PORT).into();
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("HAP server listening on {}", addr);
@@ -59,7 +48,14 @@ pub async fn serve(ctx: Arc<HapContext>) -> Result<()> {
     }
 }
 
-async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) -> Result<()> {
+async fn handle_connection<A, S>(
+    stream: tokio::net::TcpStream,
+    ctx: Arc<HapRuntime<A, S>>,
+) -> Result<()>
+where
+    A: HapAccessoryApp,
+    S: HapStore,
+{
     let (read_half, write_half) = stream.into_split();
     let mut reader = HapReader::Plain {
         inner: read_half,
@@ -68,8 +64,8 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
     let mut writer = HapWriter::Plain(write_half);
     let mut pair_setup = PairSetupSession::new();
     let mut pair_verify = PairVerifySession::new();
-    let mut subs: Subscriptions = HashSet::new();
-    let mut event_rx = ctx.events.subscribe();
+    let mut subs: Subscriptions = Subscriptions::default();
+    let mut event_rx = ctx.subscribe_events();
     // The controller identifier learned from the most recent pair-verify on
     // this connection. Only set after the channel becomes encrypted.
     let mut controller_id: Option<String> = None;
@@ -84,6 +80,9 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
                     ("POST", "/pair-setup") => {
                         let mut state = ctx.state.lock().await;
                         let body = pair_setup.handle(&req.body, &mut state);
+                        if let Err(e) = ctx.store.save_state(&state) {
+                            tracing::error!("failed to persist pair-setup state: {e}");
+                        }
                         drop(state);
                         writer
                             .write_response(200, "application/pairing+tlv8", &body)
@@ -120,8 +119,7 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
                             writer.write_status(401, "Unauthorized").await?;
                             continue;
                         }
-                        let positions = snapshot_positions(&ctx).await;
-                        let body = serde_json::to_vec(&accessories::build_accessories(&positions))?;
+                        let body = serde_json::to_vec(&ctx.app.accessories().await?)?;
                         writer.write_response(200, "application/hap+json", &body).await?;
                     }
                     ("GET", "/characteristics") => {
@@ -130,20 +128,18 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
                             continue;
                         }
                         let ids = req.query_param("id").unwrap_or_default();
-                        let body = handle_get_characteristics(&ctx, &ids).await;
-                        writer.write_response(200, "application/hap+json", body.as_bytes()).await?;
+                        let body = handle_get_characteristics(ctx.app.as_ref(), &ids).await?;
+                        writer.write_response(200, "application/hap+json", &body).await?;
                     }
                     ("PUT", "/characteristics") => {
                         if !writer.is_encrypted() {
                             writer.write_status(401, "Unauthorized").await?;
                             continue;
                         }
-                        match handle_put_characteristics(&ctx, &req.body, &mut subs).await {
+                        match handle_put_characteristics(ctx.app.as_ref(), &req.body, &mut subs).await {
                             Ok(changes) => {
                                 writer.write_status(204, "No Content").await?;
-                                if !changes.is_empty() {
-                                    let _ = ctx.events.send(changes);
-                                }
+                                ctx.publish_events(changes);
                             }
                             Err(e) => {
                                 tracing::warn!("PUT /characteristics failed: {e}");
@@ -188,23 +184,15 @@ async fn handle_connection(stream: tokio::net::TcpStream, ctx: Arc<HapContext>) 
     Ok(())
 }
 
-fn build_event_body(changes: &[(u64, u8)], subs: &Subscriptions) -> Option<Vec<u8>> {
+fn build_event_body(changes: &[CharacteristicEvent], subs: &Subscriptions) -> Option<Vec<u8>> {
     let mut out = Vec::new();
-    for &(aid, pos) in changes {
-        for &iid in &[
-            IID_CURRENT_POSITION,
-            IID_TARGET_POSITION,
-            accessories::IID_POSITION_STATE,
-        ] {
-            if !subs.contains(&(aid, iid)) {
-                continue;
-            }
-            let value = if iid == accessories::IID_POSITION_STATE {
-                2u8
-            } else {
-                pos
-            };
-            out.push(serde_json::json!({ "aid": aid, "iid": iid, "value": value }));
+    for event in changes {
+        if subs.contains(&event.id) {
+            out.push(serde_json::json!({
+                "aid": event.id.aid.0,
+                "iid": event.id.iid.0,
+                "value": event.value.clone(),
+            }));
         }
     }
     if out.is_empty() {
@@ -217,66 +205,10 @@ fn build_event_body(changes: &[(u64, u8)], subs: &Subscriptions) -> Option<Vec<u
     )
 }
 
-async fn snapshot_positions(ctx: &HapContext) -> Vec<(u64, u8)> {
-    let positions = ctx.positions.lock().await;
-    accessories::BLINDS
-        .iter()
-        .map(|b| (b.aid, effective_position(&positions, b.aid)))
-        .collect()
-}
-
-async fn handle_get_characteristics(ctx: &HapContext, ids: &str) -> String {
-    let positions = ctx.positions.lock().await;
-    let mut out = Vec::new();
-    for pair in ids.split(',') {
-        let mut parts = pair.split('.');
-        let aid: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let iid: u64 = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let value: Value = match (aid, iid) {
-            (a, i) if accessories::find_blind(a).is_some() && i == IID_CURRENT_POSITION => {
-                serde_json::Value::Number(effective_position(&positions, a).into())
-            }
-            (a, i) if accessories::find_blind(a).is_some() && i == IID_TARGET_POSITION => {
-                serde_json::Value::Number(effective_position(&positions, a).into())
-            }
-            (a, i)
-                if accessories::find_blind(a).is_some() && i == accessories::IID_POSITION_STATE =>
-            {
-                serde_json::Value::Number(2.into())
-            }
-            _ => serde_json::Value::Null,
-        };
-        out.push(serde_json::json!({ "aid": aid, "iid": iid, "value": value }));
-    }
-    serde_json::json!({ "characteristics": out }).to_string()
-}
-
-/// Subscribe to `RemoteControl` position broadcasts and mirror non-HAP
-/// command outcomes (REST, WS) into the HAP position cache. HAP-originated
-/// PUTs already update the cache before the broadcast lands here, so this
-/// path is idempotent — a duplicate update returns no changes and emits no
-/// events.
-pub async fn run_position_listener(
-    ctx: Arc<HapContext>,
-    mut rx: broadcast::Receiver<(crate::gpio::Input, u8)>,
-) {
-    loop {
-        match rx.recv().await {
-            Ok((led, pos)) => {
-                let Some(blind) = accessories::BLINDS.iter().find(|b| b.led == led) else {
-                    continue;
-                };
-                let changes = apply_position_change(&ctx, blind, pos).await;
-                if !changes.is_empty() {
-                    let _ = ctx.events.send(changes);
-                }
-            }
-            Err(broadcast::error::RecvError::Lagged(n)) => {
-                tracing::warn!("position listener lagged by {n}");
-            }
-            Err(broadcast::error::RecvError::Closed) => break,
-        }
-    }
+async fn handle_get_characteristics(app: &impl HapAccessoryApp, ids: &str) -> Result<Vec<u8>> {
+    let ids = parse_characteristic_ids(ids);
+    let values = app.read_characteristics(&ids).await?;
+    Ok(characteristics_body(values))
 }
 
 // HAP §5.10 pair-add / §5.11 pair-remove / §5.12 pair-list. We only ship
@@ -286,7 +218,15 @@ const PAIRING_METHOD_ADD: u8 = 3;
 const PAIRING_METHOD_REMOVE: u8 = 4;
 const PAIRING_METHOD_LIST: u8 = 5;
 
-async fn handle_pairings(ctx: &HapContext, caller_id: Option<&str>, body: &[u8]) -> Vec<u8> {
+async fn handle_pairings<A, S>(
+    ctx: &HapRuntime<A, S>,
+    caller_id: Option<&str>,
+    body: &[u8],
+) -> Vec<u8>
+where
+    A: HapAccessoryApp,
+    S: HapStore,
+{
     let parsed = match ParsedTlv::parse(body) {
         Ok(p) => p,
         Err(e) => {
@@ -317,7 +257,7 @@ async fn handle_pairings(ctx: &HapContext, caller_id: Option<&str>, body: &[u8])
                 None => return error_tlv(2, HapError::Unknown),
             };
             state.remove_pairing(&target);
-            if let Err(e) = state::save_current(&state) {
+            if let Err(e) = ctx.store.save_state(&state) {
                 tracing::error!("failed to persist pair-remove: {e}");
                 return error_tlv(2, HapError::Unknown);
             }
@@ -348,170 +288,59 @@ fn error_tlv(state: u8, err: HapError) -> Vec<u8> {
 }
 
 async fn handle_put_characteristics(
-    ctx: &HapContext,
+    app: &impl HapAccessoryApp,
     body: &[u8],
     subs: &mut Subscriptions,
-) -> Result<Vec<(u64, u8)>> {
+) -> Result<Vec<CharacteristicEvent>> {
     let parsed: Value = serde_json::from_slice(body)?;
     let chars = parsed
         .get("characteristics")
         .and_then(|c| c.as_array())
         .ok_or_else(|| anyhow!("missing characteristics array"))?;
 
-    let mut changes: Vec<(u64, u8)> = Vec::new();
-    for entry in chars {
-        let aid = entry.get("aid").and_then(|v| v.as_u64()).unwrap_or(0);
-        let iid = entry.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
-
-        // Event subscription toggle. `{aid, iid, ev: true|false}` has no
-        // `value` key — handle it before the value-write path.
-        if let Some(ev) = entry.get("ev").and_then(|v| v.as_bool()) {
-            if ev {
-                subs.insert((aid, iid));
-            } else {
-                subs.remove(&(aid, iid));
-            }
-            continue;
-        }
-
-        if iid != IID_TARGET_POSITION {
-            continue;
-        }
-        let value = match entry.get("value").and_then(|v| v.as_u64()) {
-            Some(v) => v as u8,
-            None => continue,
-        };
-        let blind: &Blind = match accessories::find_blind(aid) {
-            Some(b) => b,
-            None => continue,
-        };
-        let snapped = if value >= 50 { 100u8 } else { 0u8 };
-
-        let positions = ctx.positions.lock().await;
-        // Skip the physical command when the target is already satisfied.
-        // iOS replays the last-seen TargetPosition right after pairing; without
-        // this check we'd send an unwanted UP/DOWN on registration.
-        //
-        // For ALL we can't trust the cached aggregate value (it may be stale
-        // when individuals are mixed), so check the individuals directly.
-        let already_at_target = if matches!(blind.led, crate::gpio::Input::ALL) {
-            accessories::BLINDS
-                .iter()
-                .filter(|b| !matches!(b.led, crate::gpio::Input::ALL))
-                .all(|b| positions.get(&b.aid).copied() == Some(snapped))
-        } else {
-            positions.get(&aid).copied() == Some(snapped)
-        };
-        if already_at_target {
-            tracing::debug!("PUT TargetPosition aid={aid} value={snapped}: cache hit, no-op");
-            continue;
-        }
-
-        let command = if snapped == 100 {
-            Command::Up
-        } else {
-            Command::Down
-        };
-        // Drop the positions lock before the GPIO call. RemoteControl now
-        // serializes execute() internally, so we no longer need to hold
-        // positions to prevent concurrent double-fire — and dropping it
-        // means /characteristics reads aren't blocked while a blind moves.
-        drop(positions);
-        ctx.app
-            .remote_control
-            .execute(Some(blind.led), command)
-            .await?;
-
-        let local = apply_position_change(ctx, blind, snapped).await;
-        changes.extend(local);
-    }
-    Ok(changes)
+    let writes = chars
+        .iter()
+        .map(parse_characteristic_write)
+        .collect::<Vec<_>>();
+    app.write_characteristics(writes, subs).await
 }
 
-/// Update the cached position for `blind`, propagate the ALL aggregate, and
-/// persist the snapshot. Returns the per-aid changes vs. the prior cache so
-/// the caller can fan them out as HAP EVENTs. Idempotent — a no-op when the
-/// cache already matches `snapped`.
-async fn apply_position_change(ctx: &HapContext, blind: &Blind, snapped: u8) -> Vec<(u64, u8)> {
-    let mut positions = ctx.positions.lock().await;
-    if positions.get(&blind.aid).copied() == Some(snapped) {
-        // For non-ALL accessories an exact match means nothing changed. For
-        // ALL we still want to propagate to individuals if any of them are
-        // out of sync, so check that explicitly before returning.
-        let needs_propagate = matches!(blind.led, crate::gpio::Input::ALL)
-            && accessories::BLINDS
-                .iter()
-                .filter(|b| !matches!(b.led, crate::gpio::Input::ALL))
-                .any(|b| positions.get(&b.aid).copied() != Some(snapped));
-        if !needs_propagate {
-            return Vec::new();
-        }
-    }
-    let before = positions.clone();
-    positions.insert(blind.aid, snapped);
-    propagate_positions(&mut positions, blind, snapped);
-    let snapshot = positions.clone();
-    // Persist while the lock is held so concurrent writers can't reorder
-    // their saves and clobber a newer snapshot with an older one.
-    if let Err(e) = positions::save(&snapshot) {
-        tracing::warn!("failed to persist positions: {e}");
-    }
-    drop(positions);
-    snapshot
-        .iter()
-        .filter_map(|(k, v)| (before.get(k) != Some(v)).then_some((*k, *v)))
+fn parse_characteristic_ids(ids: &str) -> Vec<CharacteristicId> {
+    ids.split(',')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let mut parts = pair.split('.');
+            let aid = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            let iid = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+            CharacteristicId::new(aid, iid)
+        })
         .collect()
 }
 
-fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snapped: u8) {
-    use crate::gpio::Input;
-    if matches!(changed.led, Input::ALL) {
-        for b in accessories::BLINDS
-            .iter()
-            .filter(|b| !matches!(b.led, Input::ALL))
-        {
-            positions.insert(b.aid, snapped);
-        }
-        return;
-    }
-    let individuals: Vec<&Blind> = accessories::BLINDS
-        .iter()
-        .filter(|b| !matches!(b.led, Input::ALL))
-        .collect();
-    let all_match = individuals
-        .iter()
-        .all(|b| positions.get(&b.aid).copied() == Some(snapped));
-    let all_blind = accessories::BLINDS
-        .iter()
-        .find(|b| matches!(b.led, Input::ALL));
-    if let Some(all_blind) = all_blind {
-        if all_match {
-            positions.insert(all_blind.aid, snapped);
-        }
+fn parse_characteristic_write(entry: &Value) -> CharacteristicWrite {
+    let aid = entry.get("aid").and_then(|v| v.as_u64()).unwrap_or(0);
+    let iid = entry.get("iid").and_then(|v| v.as_u64()).unwrap_or(0);
+    CharacteristicWrite {
+        id: CharacteristicId::new(aid, iid),
+        value: entry.get("value").cloned(),
+        ev: entry.get("ev").and_then(|v| v.as_bool()),
     }
 }
 
-fn effective_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
-    use crate::gpio::Input;
-    let Some(blind) = accessories::find_blind(aid) else {
-        return 100;
-    };
-    if !matches!(blind.led, Input::ALL) {
-        return positions.get(&aid).copied().unwrap_or(100);
-    }
-
-    let mut individual_positions = accessories::BLINDS
-        .iter()
-        .filter(|b| !matches!(b.led, Input::ALL))
-        .map(|b| positions.get(&b.aid).copied());
-    let Some(Some(first)) = individual_positions.next() else {
-        return positions.get(&aid).copied().unwrap_or(100);
-    };
-    if individual_positions.all(|pos| pos == Some(first)) {
-        first
-    } else {
-        positions.get(&aid).copied().unwrap_or(100)
-    }
+fn characteristics_body(values: Vec<CharacteristicValue>) -> Vec<u8> {
+    let characteristics = values
+        .into_iter()
+        .map(|value| {
+            serde_json::json!({
+                "aid": value.id.aid.0,
+                "iid": value.id.iid.0,
+                "value": value.value,
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({ "characteristics": characteristics })
+        .to_string()
+        .into_bytes()
 }
 
 // --- HTTP request reading ----------------------------------------------------
@@ -703,61 +532,42 @@ fn status_phrase(code: u16) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
-    fn all_blinds_position_uses_matching_individual_positions() {
-        let mut positions = HashMap::new();
-        positions.insert(2, 0);
-        positions.insert(3, 0);
-        positions.insert(4, 0);
-        positions.insert(5, 0);
+    fn event_body_filters_to_subscribed_characteristics() {
+        let event = CharacteristicEvent {
+            id: CharacteristicId::new(2, 9),
+            value: json!(100),
+        };
+        let mut subs = Subscriptions::default();
+        assert!(build_event_body(std::slice::from_ref(&event), &subs).is_none());
 
-        assert_eq!(effective_position(&positions, 6), 0);
+        subs.insert(event.id);
+        let body = build_event_body(&[event], &subs).unwrap();
+        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["characteristics"][0]["aid"], 2);
+        assert_eq!(parsed["characteristics"][0]["iid"], 9);
+        assert_eq!(parsed["characteristics"][0]["value"], 100);
     }
 
     #[test]
-    fn propagate_keeps_aggregate_when_individuals_diverge() {
-        use crate::gpio::Input;
-        let mut positions = HashMap::new();
-        positions.insert(2, 0);
-        positions.insert(3, 0);
-        positions.insert(4, 0);
-        positions.insert(5, 0);
-        positions.insert(6, 0);
+    fn parses_characteristic_ids() {
+        let ids = parse_characteristic_ids("2.9,3.10,bad");
 
-        // Open one individual — aid=6 keeps its own last persisted value.
-        let changed = accessories::find_blind(2).unwrap();
-        positions.insert(2, 100);
-        propagate_positions(&mut positions, changed, 100);
-        assert_eq!(
-            positions.get(&6),
-            Some(&0),
-            "ALL keeps its last persisted state while individuals are mixed"
-        );
-
-        // Subsequent ALL-Close must not be deduped against a stale 0.
-        let all_blind = accessories::find_blind(6).unwrap();
-        assert!(matches!(all_blind.led, Input::ALL));
-        let already = accessories::BLINDS
-            .iter()
-            .filter(|b| !matches!(b.led, Input::ALL))
-            .all(|b| positions.get(&b.aid).copied() == Some(0));
-        assert!(!already, "individuals are mixed; ALL→0 must not be skipped");
+        assert_eq!(ids[0], CharacteristicId::new(2, 9));
+        assert_eq!(ids[1], CharacteristicId::new(3, 10));
+        assert_eq!(ids[2], CharacteristicId::new(0, 0));
     }
 
     #[test]
-    fn all_blinds_position_falls_back_when_individual_positions_are_missing_or_mixed() {
-        let mut positions = HashMap::new();
-        positions.insert(6, 100);
-        positions.insert(2, 0);
-        positions.insert(3, 0);
-        positions.insert(4, 100);
-        positions.insert(5, 0);
+    fn server_runtime_layer_does_not_import_somfy_modules() {
+        let server =
+            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/hap/server.rs"))
+                .unwrap();
 
-        assert_eq!(effective_position(&positions, 6), 100);
-
-        positions.insert(6, 0);
-        positions.remove(&4);
-        assert_eq!(effective_position(&positions, 6), 0);
+        assert!(!server.contains(concat!("crate::", "gpio")));
+        assert!(!server.contains(concat!("crate::", "remote")));
+        assert!(!server.contains(concat!("crate::server::", "AppState")));
     }
 }

@@ -13,10 +13,12 @@ pub async fn run() -> Result<()> {
         std::process::exit(1);
     }
 
-    let remote_control = RemoteControl::new().await?;
-    let shared_state = Arc::new(AppState { remote_control });
+    let remote_control = Arc::new(RemoteControl::new().await?);
+    let shared_state = Arc::new(AppState {
+        remote_control: remote_control.clone(),
+    });
 
-    let _hap_announcement = match hap::start(shared_state.clone()).await {
+    let _hap_announcement = match hap::start(remote_control).await {
         Ok(a) => Some(a),
         Err(e) => {
             tracing::warn!(
