@@ -69,13 +69,9 @@ run = [
   "cargo zigbuild --release --no-default-features --features hw --target armv7-unknown-linux-gnueabihf.2.31",
 ]
 
-[tasks."release:dry"]
-description = "Preview the next patch release without writing commits or tags"
-run = "cargo release patch --no-publish --no-verify"
-
-[tasks."release:patch"]
-description = "Bump patch version, commit, tag, and push"
-run = "cargo release patch --execute --no-publish --no-verify"
+[tasks.release]
+description = "Run cargo-release; pass the bump/version and flags after the task name"
+run = "cargo release"
 
 [tasks.server-dev]
 hide = true
