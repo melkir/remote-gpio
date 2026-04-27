@@ -3096,6 +3096,7 @@ dependencies = [
  "gpiocdev",
  "hex",
  "hkdf",
+ "http",
  "httparse",
  "mdns-sd",
  "mime_guess",

@@ -2,7 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::commands::doctor;
-use crate::hap;
+use crate::homekit;
 use crate::remote::RemoteControl;
 use crate::server::{serve, AppState};
 
@@ -18,7 +18,7 @@ pub async fn run() -> Result<()> {
         remote_control: remote_control.clone(),
     });
 
-    let _hap_announcement = match hap::start(remote_control).await {
+    let _hap_announcement = match homekit::start(remote_control).await {
         Ok(a) => Some(a),
         Err(e) => {
             tracing::warn!(

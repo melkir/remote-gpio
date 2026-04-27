@@ -11,13 +11,7 @@ use std::path::{Path, PathBuf};
 
 use crate::hap::runtime::HapStore;
 
-pub const HAP_PORT: u16 = 5010;
-pub const MODEL: &str = "Somfy Telis 4";
-pub const MANUFACTURER: &str = "Somfy";
-/// Accessory Category Identifier advertised over mDNS.
-pub const HAP_CATEGORY: &str = "2";
 pub const STATE_FILE: &str = "hap.json";
-pub const SYSTEM_STATE_DIR: &str = "/var/lib/somfy";
 
 /// Persistent HAP accessory identity.
 ///
@@ -148,36 +142,12 @@ fn srp_setup_code(code_num: u32) -> String {
     )
 }
 
-pub fn state_dir() -> PathBuf {
-    if let Ok(dir) = std::env::var("STATE_DIRECTORY") {
-        return PathBuf::from(dir);
-    }
-    if let Ok(dir) = std::env::var("SOMFY_STATE_DIR") {
-        return PathBuf::from(dir);
-    }
-    default_state_dir()
-}
-
-#[cfg(debug_assertions)]
-fn default_state_dir() -> PathBuf {
-    PathBuf::from("./hap-state")
-}
-
-#[cfg(not(debug_assertions))]
-fn default_state_dir() -> PathBuf {
-    PathBuf::from(SYSTEM_STATE_DIR)
-}
-
 #[derive(Clone, Debug)]
 pub struct FileHapStore {
     dir: PathBuf,
 }
 
 impl FileHapStore {
-    pub fn current() -> Self {
-        Self { dir: state_dir() }
-    }
-
     pub fn new(dir: impl Into<PathBuf>) -> Self {
         Self { dir: dir.into() }
     }

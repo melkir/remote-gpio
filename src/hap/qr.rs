@@ -9,17 +9,17 @@ use anyhow::{Context, Result};
 use qrcode::render::unicode::Dense1x2;
 use qrcode::{EcLevel, QrCode};
 
-use crate::hap::state::{HapState, HAP_CATEGORY};
+use crate::hap::state::HapState;
 
 /// HomeKit feature flags. Bit 1 = supports pairing over IP.
 const FLAGS_IP: u64 = 0b0010;
 
-pub fn setup_uri(state: &HapState) -> Result<String> {
+pub fn setup_uri(state: &HapState, category: &str) -> Result<String> {
     let setup_code = parse_setup_code(&state.setup_code)
         .with_context(|| format!("invalid setup code {:?}", state.setup_code))?;
-    let category: u64 = HAP_CATEGORY
+    let category: u64 = category
         .parse()
-        .with_context(|| format!("invalid HAP_CATEGORY {:?}", HAP_CATEGORY))?;
+        .with_context(|| format!("invalid HAP category {:?}", category))?;
 
     // 44-bit payload: version(3) | reserved(4) | category(8) | flags(4) | setup_code(27)
     let payload: u64 = (category << 31) | (FLAGS_IP << 27) | u64::from(setup_code);
@@ -64,6 +64,8 @@ fn encode_base36(mut value: u64, width: usize) -> String {
 mod tests {
     use super::*;
 
+    const TEST_CATEGORY: &str = "2";
+
     fn fixture_state(setup_code: &str, setup_id: &str) -> HapState {
         serde_json::from_value(serde_json::json!({
             "device_id": "AB:CD:EF:12:34:56",
@@ -84,7 +86,7 @@ mod tests {
         // category=2 (bridge), code=518-08-582, id=7OSX. We assert the URI is
         // a stable function of our project's setup inputs.
         let state = fixture_state("101-48-005", "7OSX");
-        let uri = setup_uri(&state).unwrap();
+        let uri = setup_uri(&state, TEST_CATEGORY).unwrap();
         assert!(uri.starts_with("X-HM://"));
         // Suffix is the 4-char setup_id verbatim.
         assert!(uri.ends_with("7OSX"));
@@ -100,7 +102,7 @@ mod tests {
     #[test]
     fn packs_category_and_flags_at_hap_bit_positions() {
         let state = fixture_state("101-48-005", "7OSX");
-        let uri = setup_uri(&state).unwrap();
+        let uri = setup_uri(&state, TEST_CATEGORY).unwrap();
         let payload = decode_base36(&uri[7..16]).unwrap();
 
         assert_eq!((payload >> 39) & 0b111, 0);
@@ -112,22 +114,22 @@ mod tests {
 
     #[test]
     fn setup_uri_is_deterministic() {
-        let a = setup_uri(&fixture_state("101-48-005", "7OSX")).unwrap();
-        let b = setup_uri(&fixture_state("101-48-005", "7OSX")).unwrap();
+        let a = setup_uri(&fixture_state("101-48-005", "7OSX"), TEST_CATEGORY).unwrap();
+        let b = setup_uri(&fixture_state("101-48-005", "7OSX"), TEST_CATEGORY).unwrap();
         assert_eq!(a, b);
     }
 
     #[test]
     fn different_setup_code_yields_different_uri() {
-        let a = setup_uri(&fixture_state("101-48-005", "7OSX")).unwrap();
-        let b = setup_uri(&fixture_state("101-48-006", "7OSX")).unwrap();
+        let a = setup_uri(&fixture_state("101-48-005", "7OSX"), TEST_CATEGORY).unwrap();
+        let b = setup_uri(&fixture_state("101-48-006", "7OSX"), TEST_CATEGORY).unwrap();
         assert_ne!(a, b);
     }
 
     #[test]
     fn renders_terminal_qr_without_error() {
         let state = fixture_state("101-48-005", "7OSX");
-        let uri = setup_uri(&state).unwrap();
+        let uri = setup_uri(&state, TEST_CATEGORY).unwrap();
         let rendered = render_terminal(&uri).unwrap();
         assert!(!rendered.is_empty());
         assert!(rendered.contains('\n'));
@@ -136,7 +138,7 @@ mod tests {
     #[test]
     fn rejects_malformed_setup_code() {
         let state = fixture_state("not-a-code", "7OSX");
-        assert!(setup_uri(&state).is_err());
+        assert!(setup_uri(&state, TEST_CATEGORY).is_err());
     }
 
     #[test]

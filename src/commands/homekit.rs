@@ -4,7 +4,8 @@ use serde::Serialize;
 use crate::cli::HomekitCommand;
 use crate::hap::qr;
 use crate::hap::runtime::HapStore;
-use crate::hap::state::{display_setup_code, FileHapStore, HAP_PORT};
+use crate::hap::state::display_setup_code;
+use crate::homekit::{self, config};
 
 #[derive(Serialize)]
 struct StatusReport {
@@ -36,9 +37,9 @@ pub fn run(command: HomekitCommand) -> Result<()> {
 }
 
 fn status(json: bool, uri_only: bool) -> Result<()> {
-    let store = FileHapStore::current();
+    let store = homekit::store();
     let state = store.load_or_init()?;
-    let uri = qr::setup_uri(&state)?;
+    let uri = homekit::setup_uri(&state)?;
 
     if uri_only {
         println!("{uri}");
@@ -51,7 +52,7 @@ fn status(json: bool, uri_only: bool) -> Result<()> {
         setup_id: state.setup_id.clone(),
         setup_code: display_setup_code(&state.setup_code),
         setup_uri: uri.clone(),
-        port: HAP_PORT,
+        port: config::HAP_PORT,
         paired: state.is_paired(),
         paired_controllers: state.paired_controllers.len(),
         config_number: state.config_number,
@@ -86,7 +87,7 @@ fn status(json: bool, uri_only: bool) -> Result<()> {
 }
 
 fn reset() -> Result<()> {
-    let state = FileHapStore::current().reset()?;
+    let state = homekit::store().reset()?;
     println!("HomeKit state reset");
     println!("  device id  : {}", state.device_id);
     println!("  setup id   : {}", state.setup_id);
@@ -97,7 +98,7 @@ fn reset() -> Result<()> {
 }
 
 fn pairings(json: bool) -> Result<()> {
-    let state = FileHapStore::current().load_or_init()?;
+    let state = homekit::store().load_or_init()?;
     let pairings: Vec<PairingReport> = state
         .paired_controllers
         .iter()
@@ -126,7 +127,7 @@ fn pairings(json: bool) -> Result<()> {
 }
 
 fn unpair(identifier: &str) -> Result<()> {
-    let store = FileHapStore::current();
+    let store = homekit::store();
     let mut state = store.load_or_init()?;
     let before = state.paired_controllers.len();
     state.remove_pairing(identifier);

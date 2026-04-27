@@ -12,23 +12,24 @@
 
 `$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`; otherwise defaults to `/var/lib/somfy` in release builds and `./hap-state` in debug builds; override with `SOMFY_STATE_DIR`):
 
-| File             | Owner          | Contents                                                                                |
-| ---------------- | -------------- | --------------------------------------------------------------------------------------- |
-| `hap.json`       | `state.rs`     | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
+| File             | Owner                  | Contents                                                                                |
+| ---------------- | ---------------------- | --------------------------------------------------------------------------------------- |
+| `hap.json`       | `state.rs`             | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
 | `positions.json` | `homekit/positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
 
 Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
 
 ## Crypto + protocol
 
-| Concern             | Implementation                                                                                                                              |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
-| TLV8 codec          | `src/hap/tlv.rs` with fragment reassembly (HAP §14.1).                                                                                      |
-| SRP-6a / SHA-512    | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects. |
-| Pair-Setup (M1–M6)  | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs.                                   |
-| Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                    |
-| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.                                  |
-| HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser.                                       |
+| Concern             | Implementation                                                                                                                                         |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TLV8 codec          | `src/hap/tlv.rs` with fragment reassembly (HAP §14.1).                                                                                                 |
+| SRP-6a / SHA-512    | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects.            |
+| Pair-Setup (M1–M6)  | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs.                                              |
+| Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                               |
+| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.                                             |
+| HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser; `http::StatusCode` owns response status phrases. |
+| App wiring          | `src/homekit/mod.rs` wires Somfy config, mDNS advertisement, state store, position listener, and the generic HAP server.                               |
 
 ## Connection lifecycle
 
@@ -58,7 +59,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 ## Dependencies
 
-`mdns-sd`, `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `hkdf`, `rand`, `httparse`, `num-bigint`. All pure Rust, all cross-compile cleanly for `armv7-unknown-linux-gnueabihf`.
+`mdns-sd`, `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `hkdf`, `rand`, `httparse`, `http`, `num-bigint`. All pure Rust, all cross-compile cleanly for `armv7-unknown-linux-gnueabihf`.
 
 ## Pairing
 

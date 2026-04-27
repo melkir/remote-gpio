@@ -2,6 +2,7 @@
 //! pair-verify, and (post-verify) the encrypted accessory protocol.
 
 use anyhow::{anyhow, bail, Result};
+use http::StatusCode;
 use serde_json::Value;
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -19,15 +20,14 @@ use crate::hap::runtime::{
     HapStore, Subscriptions,
 };
 use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
-use crate::hap::state::HAP_PORT;
 use crate::hap::tlv::{HapError, ParsedTlv, Tag as TlvTag, Tlv};
 
-pub async fn serve<A, S>(ctx: Arc<HapRuntime<A, S>>) -> Result<()>
+pub async fn serve<A, S>(ctx: Arc<HapRuntime<A, S>>, port: u16) -> Result<()>
 where
     A: HapAccessoryApp,
     S: HapStore,
 {
-    let addr: SocketAddr = ([0, 0, 0, 0], HAP_PORT).into();
+    let addr: SocketAddr = ([0, 0, 0, 0], port).into();
     let listener = TcpListener::bind(addr).await?;
     tracing::info!("HAP server listening on {}", addr);
 
@@ -63,121 +63,18 @@ where
         buf: Vec::new(),
     };
     let mut writer = HapWriter::Plain(write_half);
-    let mut pair_setup = PairSetupSession::new();
-    let mut pair_verify = PairVerifySession::new();
-    let mut subs: Subscriptions = Subscriptions::default();
+    let mut conn = ConnectionState::new();
     let mut event_rx = ctx.subscribe_events();
-    // The controller identifier learned from the most recent pair-verify on
-    // this connection. Only set after the channel becomes encrypted.
-    let mut controller_id: Option<String> = None;
 
     loop {
         tokio::select! {
             req = reader.next_request() => {
                 let req = req?;
                 tracing::debug!("hap request: {} {}", req.method, req.path);
-
-                match (req.method.as_str(), req.path_only()) {
-                    ("POST", "/pair-setup") => {
-                        let mut state = ctx.state.lock().await;
-                        let outcome = pair_setup.handle(&req.body, &mut state);
-                        let body = match (ctx.store.save_state(&state), outcome.persist) {
-                            (Ok(()), _) => outcome.body,
-                            (Err(e), PersistPolicy::BestEffort) => {
-                                tracing::error!("failed to persist pair-setup state: {e}");
-                                outcome.body
-                            }
-                            (Err(e), PersistPolicy::Required) => {
-                                tracing::error!(
-                                    "pair-setup M5: refusing to claim success after persist failure: {e}"
-                                );
-                                error_tlv(6, HapError::Unknown)
-                            }
-                        };
-                        drop(state);
-                        writer
-                            .write_response(200, "application/pairing+tlv8", &body)
-                            .await?;
-                    }
-                    ("POST", "/pair-verify") => {
-                        let state = ctx.state.lock().await;
-                        let outcome = pair_verify.handle(&req.body, &state);
-                        drop(state);
-                        match outcome {
-                            HandleOutcome::Reply(body) => {
-                                writer
-                                    .write_response(200, "application/pairing+tlv8", &body)
-                                    .await?;
-                            }
-                            HandleOutcome::Verified {
-                                reply,
-                                shared_secret,
-                                controller_id: id,
-                            } => {
-                                writer
-                                    .write_response(200, "application/pairing+tlv8", &reply)
-                                    .await?;
-                                let keys = SessionKeys::derive(&shared_secret)?;
-                                reader = reader.upgrade(keys.read);
-                                writer = writer.upgrade(keys.write);
-                                controller_id = Some(id);
-                                tracing::info!("hap session encrypted; switched to control channel");
-                            }
-                        }
-                    }
-                    ("GET", "/accessories") => {
-                        if !writer.is_encrypted() {
-                            writer.write_status(401, "Unauthorized").await?;
-                            continue;
-                        }
-                        let body = serde_json::to_vec(&ctx.app.accessories().await?)?;
-                        writer.write_response(200, "application/hap+json", &body).await?;
-                    }
-                    ("GET", "/characteristics") => {
-                        if !writer.is_encrypted() {
-                            writer.write_status(401, "Unauthorized").await?;
-                            continue;
-                        }
-                        let ids = req.query_param("id").unwrap_or_default();
-                        let body = handle_get_characteristics(ctx.app.as_ref(), &ids).await?;
-                        writer.write_response(200, "application/hap+json", &body).await?;
-                    }
-                    ("PUT", "/characteristics") => {
-                        if !writer.is_encrypted() {
-                            writer.write_status(401, "Unauthorized").await?;
-                            continue;
-                        }
-                        match handle_put_characteristics(ctx.app.as_ref(), &req.body, &mut subs).await {
-                            Ok(outcome) => {
-                                if outcome.all_success() {
-                                    writer.write_status(204, "No Content").await?;
-                                } else {
-                                    let body = write_statuses_body(outcome.statuses);
-                                    writer.write_response(207, "application/hap+json", &body).await?;
-                                }
-                                ctx.publish_events(outcome.events);
-                            }
-                            Err(e) => {
-                                tracing::warn!("PUT /characteristics failed: {e}");
-                                writer.write_status(400, "Bad Request").await?;
-                            }
-                        }
-                    }
-                    ("POST", "/pairings") => {
-                        if !writer.is_encrypted() {
-                            writer.write_status(401, "Unauthorized").await?;
-                            continue;
-                        }
-                        let body = handle_pairings(&ctx, controller_id.as_deref(), &req.body).await;
-                        writer
-                            .write_response(200, "application/pairing+tlv8", &body)
-                            .await?;
-                    }
-                    (method, path) => {
-                        tracing::warn!("hap: unhandled {method} {path}");
-                        writer.write_status(404, "Not Found").await?;
-                    }
-                }
+                let encrypted = writer.is_encrypted();
+                let outcome = handle_request(req, &ctx, &mut conn, encrypted).await?;
+                write_request_response(outcome.response, &mut reader, &mut writer, &mut conn).await?;
+                ctx.publish_events(outcome.events);
             }
             evt = event_rx.recv() => {
                 match evt {
@@ -185,7 +82,7 @@ where
                         if !writer.is_encrypted() {
                             continue;
                         }
-                        if let Some(body) = build_event_body(&changes, &subs) {
+                        if let Some(body) = build_event_body(&changes, &conn.subs) {
                             writer.write_event(&body).await?;
                         }
                     }
@@ -198,6 +95,239 @@ where
         }
     }
     Ok(())
+}
+
+struct ConnectionState {
+    pair_setup: PairSetupSession,
+    pair_verify: PairVerifySession,
+    subs: Subscriptions,
+    /// The controller identifier learned from the most recent pair-verify on
+    /// this connection. Only set after the channel becomes encrypted.
+    controller_id: Option<String>,
+}
+
+impl ConnectionState {
+    fn new() -> Self {
+        Self {
+            pair_setup: PairSetupSession::new(),
+            pair_verify: PairVerifySession::new(),
+            subs: Subscriptions::default(),
+            controller_id: None,
+        }
+    }
+}
+
+struct RequestOutcome {
+    response: OutboundResponse,
+    events: Vec<CharacteristicEvent>,
+}
+
+impl RequestOutcome {
+    fn response(response: OutboundResponse) -> Self {
+        Self {
+            response,
+            events: Vec::new(),
+        }
+    }
+}
+
+enum OutboundResponse {
+    Status(StatusCode),
+    Body {
+        status: StatusCode,
+        content_type: &'static str,
+        body: Vec<u8>,
+    },
+    Upgrade {
+        reply: Vec<u8>,
+        keys: SessionKeys,
+        controller_id: String,
+    },
+}
+
+async fn handle_request<A, S>(
+    req: RawRequest,
+    ctx: &HapRuntime<A, S>,
+    conn: &mut ConnectionState,
+    encrypted: bool,
+) -> Result<RequestOutcome>
+where
+    A: HapAccessoryApp,
+    S: HapStore,
+{
+    match (req.method.as_str(), req.path_only()) {
+        ("POST", "/pair-setup") => handle_pair_setup(ctx, conn, &req.body).await,
+        ("POST", "/pair-verify") => handle_pair_verify(ctx, conn, &req.body).await,
+        ("GET", "/accessories") => {
+            if !encrypted {
+                return Ok(RequestOutcome::response(OutboundResponse::Status(
+                    StatusCode::UNAUTHORIZED,
+                )));
+            }
+            let body = serde_json::to_vec(&ctx.app.accessories().await?)?;
+            Ok(RequestOutcome::response(OutboundResponse::Body {
+                status: StatusCode::OK,
+                content_type: "application/hap+json",
+                body,
+            }))
+        }
+        ("GET", "/characteristics") => {
+            if !encrypted {
+                return Ok(RequestOutcome::response(OutboundResponse::Status(
+                    StatusCode::UNAUTHORIZED,
+                )));
+            }
+            let ids = req.query_param("id").unwrap_or_default();
+            let body = handle_get_characteristics(ctx.app.as_ref(), &ids).await?;
+            Ok(RequestOutcome::response(OutboundResponse::Body {
+                status: StatusCode::OK,
+                content_type: "application/hap+json",
+                body,
+            }))
+        }
+        ("PUT", "/characteristics") => {
+            if !encrypted {
+                return Ok(RequestOutcome::response(OutboundResponse::Status(
+                    StatusCode::UNAUTHORIZED,
+                )));
+            }
+            match handle_put_characteristics(ctx.app.as_ref(), &req.body, &mut conn.subs).await {
+                Ok(write) => {
+                    let response = if write.all_success() {
+                        OutboundResponse::Status(StatusCode::NO_CONTENT)
+                    } else {
+                        OutboundResponse::Body {
+                            status: StatusCode::MULTI_STATUS,
+                            content_type: "application/hap+json",
+                            body: write_statuses_body(write.statuses),
+                        }
+                    };
+                    Ok(RequestOutcome {
+                        response,
+                        events: write.events,
+                    })
+                }
+                Err(e) => {
+                    tracing::warn!("PUT /characteristics failed: {e}");
+                    Ok(RequestOutcome::response(OutboundResponse::Status(
+                        StatusCode::BAD_REQUEST,
+                    )))
+                }
+            }
+        }
+        ("POST", "/pairings") => {
+            if !encrypted {
+                return Ok(RequestOutcome::response(OutboundResponse::Status(
+                    StatusCode::UNAUTHORIZED,
+                )));
+            }
+            let body = handle_pairings(ctx, conn.controller_id.as_deref(), &req.body).await;
+            Ok(RequestOutcome::response(OutboundResponse::Body {
+                status: StatusCode::OK,
+                content_type: "application/pairing+tlv8",
+                body,
+            }))
+        }
+        (method, path) => {
+            tracing::warn!("hap: unhandled {method} {path}");
+            Ok(RequestOutcome::response(OutboundResponse::Status(
+                StatusCode::NOT_FOUND,
+            )))
+        }
+    }
+}
+
+async fn handle_pair_setup<A, S>(
+    ctx: &HapRuntime<A, S>,
+    conn: &mut ConnectionState,
+    body: &[u8],
+) -> Result<RequestOutcome>
+where
+    A: HapAccessoryApp,
+    S: HapStore,
+{
+    let mut state = ctx.state.lock().await;
+    let outcome = conn.pair_setup.handle(body, &mut state);
+    let body = match (ctx.store.save_state(&state), outcome.persist) {
+        (Ok(()), _) => outcome.body,
+        (Err(e), PersistPolicy::BestEffort) => {
+            tracing::error!("failed to persist pair-setup state: {e}");
+            outcome.body
+        }
+        (Err(e), PersistPolicy::Required) => {
+            tracing::error!("pair-setup M5: refusing to claim success after persist failure: {e}");
+            error_tlv(6, HapError::Unknown)
+        }
+    };
+    Ok(RequestOutcome::response(OutboundResponse::Body {
+        status: StatusCode::OK,
+        content_type: "application/pairing+tlv8",
+        body,
+    }))
+}
+
+async fn handle_pair_verify<A, S>(
+    ctx: &HapRuntime<A, S>,
+    conn: &mut ConnectionState,
+    body: &[u8],
+) -> Result<RequestOutcome>
+where
+    A: HapAccessoryApp,
+    S: HapStore,
+{
+    let state = ctx.state.lock().await;
+    let outcome = conn.pair_verify.handle(body, &state);
+    drop(state);
+    match outcome {
+        HandleOutcome::Reply(body) => Ok(RequestOutcome::response(OutboundResponse::Body {
+            status: StatusCode::OK,
+            content_type: "application/pairing+tlv8",
+            body,
+        })),
+        HandleOutcome::Verified {
+            reply,
+            shared_secret,
+            controller_id,
+        } => Ok(RequestOutcome::response(OutboundResponse::Upgrade {
+            reply,
+            keys: SessionKeys::derive(&shared_secret)?,
+            controller_id,
+        })),
+    }
+}
+
+async fn write_request_response(
+    response: OutboundResponse,
+    reader: &mut HapReader,
+    writer: &mut HapWriter,
+    conn: &mut ConnectionState,
+) -> Result<()> {
+    match response {
+        OutboundResponse::Status(status) => writer.write_status(status).await,
+        OutboundResponse::Body {
+            status,
+            content_type,
+            body,
+        } => writer.write_response(status, content_type, &body).await,
+        OutboundResponse::Upgrade {
+            reply,
+            keys,
+            controller_id,
+        } => {
+            writer
+                .write_response(StatusCode::OK, "application/pairing+tlv8", &reply)
+                .await?;
+            let upgraded_reader =
+                std::mem::replace(reader, HapReader::Upgrading).upgrade(keys.read);
+            let upgraded_writer =
+                std::mem::replace(writer, HapWriter::Upgrading).upgrade(keys.write);
+            *reader = upgraded_reader;
+            *writer = upgraded_writer;
+            conn.controller_id = Some(controller_id);
+            tracing::info!("hap session encrypted; switched to control channel");
+            Ok(())
+        }
+    }
 }
 
 fn build_event_body(changes: &[CharacteristicEvent], subs: &Subscriptions) -> Option<Vec<u8>> {
@@ -412,6 +542,7 @@ impl RawRequest {
 enum HapReader {
     Plain { inner: OwnedReadHalf, buf: Vec<u8> },
     Encrypted(EncryptedReader),
+    Upgrading,
 }
 
 impl HapReader {
@@ -419,6 +550,7 @@ impl HapReader {
         match self {
             HapReader::Plain { inner, buf } => read_request_plain(inner, buf).await,
             HapReader::Encrypted(r) => read_request_encrypted(r).await,
+            HapReader::Upgrading => bail!("reader temporarily unavailable during upgrade"),
         }
     }
 
@@ -435,6 +567,7 @@ impl HapReader {
 enum HapWriter {
     Plain(OwnedWriteHalf),
     Encrypted(EncryptedWriter),
+    Upgrading,
 }
 
 impl HapWriter {
@@ -449,11 +582,16 @@ impl HapWriter {
         }
     }
 
-    async fn write_response(&mut self, status: u16, content_type: &str, body: &[u8]) -> Result<()> {
+    async fn write_response(
+        &mut self,
+        status: StatusCode,
+        content_type: &str,
+        body: &[u8],
+    ) -> Result<()> {
         let head = format!(
             "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
-            status,
-            status_phrase(status),
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown"),
             content_type,
             body.len()
         );
@@ -474,10 +612,11 @@ impl HapWriter {
         self.write_all(&out).await
     }
 
-    async fn write_status(&mut self, status: u16, phrase: &str) -> Result<()> {
+    async fn write_status(&mut self, status: StatusCode) -> Result<()> {
         let head = format!(
             "HTTP/1.1 {} {}\r\nContent-Length: 0\r\n\r\n",
-            status, phrase
+            status.as_u16(),
+            status.canonical_reason().unwrap_or("Unknown")
         );
         self.write_all(head.as_bytes()).await
     }
@@ -492,6 +631,7 @@ impl HapWriter {
                 w.write_all(data).await?;
                 w.flush().await?;
             }
+            HapWriter::Upgrading => bail!("writer temporarily unavailable during upgrade"),
         }
         Ok(())
     }
@@ -555,19 +695,6 @@ fn try_parse(buf: &mut Vec<u8>) -> Result<Option<RawRequest>> {
     let body = buf[header_len..header_len + content_length].to_vec();
     buf.drain(..header_len + content_length);
     Ok(Some(RawRequest { method, path, body }))
-}
-
-fn status_phrase(code: u16) -> &'static str {
-    match code {
-        200 => "OK",
-        204 => "No Content",
-        207 => "Multi-Status",
-        400 => "Bad Request",
-        401 => "Unauthorized",
-        404 => "Not Found",
-        503 => "Service Unavailable",
-        _ => "Unknown",
-    }
 }
 
 #[cfg(test)]

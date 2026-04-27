@@ -7,16 +7,17 @@ use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-use crate::hap::state::{atomic_save_bytes, state_dir};
+use crate::hap::state::atomic_save_bytes;
+use crate::homekit::config;
 
 const POSITIONS_FILE: &str = "positions.json";
 
 pub fn load() -> HashMap<u64, u8> {
-    load_from(&state_dir().join(POSITIONS_FILE))
+    load_from(&config::state_dir().join(POSITIONS_FILE))
 }
 
 pub fn save(positions: &HashMap<u64, u8>) -> Result<()> {
-    let dir = state_dir();
+    let dir = config::state_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("creating state directory {}", dir.display()))?;
     save_to(&dir.join(POSITIONS_FILE), positions)
