@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use crate::cli::HomekitCommand;
@@ -38,7 +38,12 @@ pub fn run(command: HomekitCommand) -> Result<()> {
 
 fn status(json: bool, uri_only: bool) -> Result<()> {
     let store = homekit::store();
-    let state = store.load_or_init()?;
+    let state = store.load_or_init().with_context(|| {
+        format!(
+            "HomeKit status needs writable state at {}. Run `sudo somfy install` first, or set SOMFY_STATE_DIR to a writable directory.",
+            store.state_path().display()
+        )
+    })?;
     let uri = homekit::setup_uri(&state)?;
 
     if uri_only {
@@ -98,7 +103,14 @@ fn reset() -> Result<()> {
 }
 
 fn pairings(json: bool) -> Result<()> {
-    let state = homekit::store().load_or_init()?;
+    let Some(state) = homekit::store().load_state()? else {
+        if json {
+            println!("[]");
+        } else {
+            println!("No HomeKit state found. Run `somfy homekit status` after install to initialize pairing.");
+        }
+        return Ok(());
+    };
     let pairings: Vec<PairingReport> = state
         .paired_controllers
         .iter()
@@ -128,7 +140,9 @@ fn pairings(json: bool) -> Result<()> {
 
 fn unpair(identifier: &str) -> Result<()> {
     let store = homekit::store();
-    let mut state = store.load_or_init()?;
+    let Some(mut state) = store.load_state()? else {
+        bail!("no HomeKit state found; nothing is paired");
+    };
     let before = state.paired_controllers.len();
     state.remove_pairing(identifier);
     if state.paired_controllers.len() == before {

@@ -321,6 +321,29 @@ mod tests {
     }
 
     #[test]
+    fn load_state_missing_file_does_not_create_state_dir() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("missing");
+        let store = FileHapStore::new(&state_dir);
+
+        assert!(store.load_state().unwrap().is_none());
+        assert!(!state_dir.exists());
+    }
+
+    #[test]
+    fn load_or_init_creates_state_dir_and_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_dir = dir.path().join("created");
+        let store = FileHapStore::new(&state_dir);
+
+        let state = store.load_or_init().unwrap();
+
+        assert!(!state.is_paired());
+        assert!(state_dir.is_dir());
+        assert!(store.state_path().is_file());
+    }
+
+    #[test]
     fn state_without_setup_id_is_invalid() {
         let json = r#"{
             "device_id": "AB:CD:EF:12:34:56",

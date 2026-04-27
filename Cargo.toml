@@ -1,6 +1,6 @@
 [package]
 name = "somfy"
-version = "0.1.8"
+version = "0.1.9"
 edition = "2021"
 
 [features]
@@ -34,7 +34,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 sha2 = "0.11"
 hex = "0.4"
 tempfile = "3.27"
-nix = { version = "0.31", features = ["user"] }
+nix = { version = "0.31", features = ["fs", "user"] }
 semver = "1.0"
 mdns-sd = { version = "0.19", default-features = false, features = ["async"] }
 ed25519-dalek = { version = "2.2", features = ["rand_core"] }

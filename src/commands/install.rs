@@ -1,11 +1,12 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
 use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
 use crate::commands::upgrade::BIN_PREV;
+use crate::homekit::config;
 use crate::systemd;
 
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
@@ -23,9 +24,8 @@ pub fn run(user_override: Option<String>) -> Result<()> {
 
     let user_lookup = nix::unistd::User::from_name(&service_user)
         .with_context(|| format!("looking up user {service_user}"))?;
-    if user_lookup.is_none() {
-        bail!("service user `{service_user}` does not exist");
-    }
+    let service_user_info = user_lookup
+        .ok_or_else(|| anyhow::anyhow!("service user `{service_user}` does not exist"))?;
 
     let current_exe = std::env::current_exe()?
         .canonicalize()?
@@ -58,6 +58,7 @@ pub fn run(user_override: Option<String>) -> Result<()> {
         tracing::info!("{} already in sync", UNIT_PATH);
     }
 
+    prepare_state_dir(&service_user_info)?;
     systemd::systemctl(&["enable", "--now", "somfy"])?;
     println!("somfy installed as {service_user}, service enabled");
     Ok(())
@@ -101,6 +102,27 @@ fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     }
 
     fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn prepare_state_dir(user: &nix::unistd::User) -> Result<()> {
+    let dir = Path::new(config::SYSTEM_STATE_DIR);
+    fs::create_dir_all(dir)
+        .with_context(|| format!("creating HomeKit state directory {}", dir.display()))?;
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
+        .with_context(|| format!("setting permissions on {}", dir.display()))?;
+    chown_path(dir, user).with_context(|| format!("setting owner on {}", dir.display()))?;
+
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let path = entry?.path();
+        chown_path(&path, user).with_context(|| format!("setting owner on {}", path.display()))?;
+    }
+
+    Ok(())
+}
+
+fn chown_path(path: &Path, user: &nix::unistd::User) -> Result<()> {
+    nix::unistd::chown(path, Some(user.uid), Some(user.gid))?;
     Ok(())
 }
 
