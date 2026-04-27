@@ -70,7 +70,7 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 
 /// Handles LED state requests
 async fn handle_led(State(state): State<Arc<AppState>>) -> String {
-    state.remote_control.receiver.borrow().to_string()
+    state.remote_control.current_selection().to_string()
 }
 
 /// Handles command requests via HTTP
@@ -106,7 +106,7 @@ async fn ws_handler(
 /// Manages WebSocket connections and message handling
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
-    let mut rx_led = state.remote_control.receiver.clone();
+    let mut rx_led = state.remote_control.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
     // Send initial LED state

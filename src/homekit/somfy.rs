@@ -18,7 +18,7 @@ use crate::hap::runtime::{
     Subscriptions,
 };
 use crate::homekit::positions;
-use crate::remote::{Command, RemoteControl};
+use crate::remote::{Command, PositionUpdate, RemoteControl};
 
 #[derive(Copy, Clone, Debug)]
 struct Blind {
@@ -100,12 +100,14 @@ impl SomfyHapApp {
     pub async fn run_position_listener(
         self: Arc<Self>,
         event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
-        mut rx: broadcast::Receiver<(Input, u8)>,
+        mut rx: broadcast::Receiver<PositionUpdate>,
     ) {
         loop {
             match rx.recv().await {
-                Ok((led, pos)) => {
-                    let changes = self.apply_position_for_input(led, pos).await;
+                Ok(update) => {
+                    let changes = self
+                        .apply_position_for_input(update.led, update.position)
+                        .await;
                     if !changes.is_empty() {
                         let _ = event_tx.send(changes);
                     }

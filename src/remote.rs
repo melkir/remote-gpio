@@ -9,6 +9,14 @@ use crate::gpio::{trigger_output, watch_inputs, Input, Output};
 
 const MAX_SELECT_CYCLES: usize = 8;
 
+pub type LedSelectionRx = Receiver<Input>;
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub struct PositionUpdate {
+    pub led: Input,
+    pub position: u8,
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Command {
     Up,
@@ -36,12 +44,12 @@ impl FromStr for Command {
 pub struct RemoteControl {
     /// Sender for broadcasting LED state changes to all subscribers
     sender: Sender<Input>,
-    /// Receiver for monitoring LED state changes
-    pub receiver: Receiver<Input>,
-    /// Fan-out of completed Up/Down commands as `(led, position)` where
-    /// position is 100 for Up and 0 for Down. Subscribers use this to mirror
-    /// the physical state when commands originate outside HomeKit (REST, WS).
-    position_tx: broadcast::Sender<(Input, u8)>,
+    /// Current LED selector state. This is a `watch` channel so new UI clients
+    /// immediately receive the current selection.
+    selection_rx: LedSelectionRx,
+    /// Fan-out of completed Up/Down commands. This is a transient event stream
+    /// used to mirror inferred blind position into HomeKit.
+    position_tx: broadcast::Sender<PositionUpdate>,
     /// Serializes the select-cycle + GPIO pulse + position broadcast as a
     /// single critical section. Without this, concurrent callers (REST, WS,
     /// HAP) could interleave their `select()` cycles between another
@@ -59,14 +67,25 @@ impl RemoteControl {
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             sender,
-            receiver,
+            selection_rx: receiver,
             position_tx,
             execute_lock: Mutex::new(()),
         })
     }
 
+    /// Return the latest known LED selector state.
+    pub fn current_selection(&self) -> Input {
+        *self.selection_rx.borrow()
+    }
+
+    /// Subscribe to LED selector changes. New subscribers can immediately read
+    /// the latest selection from the returned receiver.
+    pub fn subscribe_selection(&self) -> LedSelectionRx {
+        self.selection_rx.clone()
+    }
+
     /// Subscribe to position updates emitted after every successful Up/Down.
-    pub fn subscribe_positions(&self) -> broadcast::Receiver<(Input, u8)> {
+    pub fn subscribe_positions(&self) -> broadcast::Receiver<PositionUpdate> {
         self.position_tx.subscribe()
     }
 
@@ -105,7 +124,7 @@ impl RemoteControl {
         let _guard = self.execute_lock.lock().await;
         if let Some(target) = led {
             let mut attempts = 0;
-            while *self.receiver.borrow() != target {
+            while self.current_selection() != target {
                 if attempts >= MAX_SELECT_CYCLES {
                     bail!("LED selection did not reach {target} after {attempts} select cycles");
                 }
@@ -132,8 +151,10 @@ impl RemoteControl {
                 _ => None,
             };
             if let Some(pos) = position {
-                let active = *self.receiver.borrow();
-                let _ = self.position_tx.send((active, pos));
+                let _ = self.position_tx.send(PositionUpdate {
+                    led: self.current_selection(),
+                    position: pos,
+                });
             }
         }
         outcome
