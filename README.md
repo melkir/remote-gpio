@@ -14,8 +14,6 @@ mise install
 mise run dev
 ```
 
-`mise tasks` lists everything (`dev`, `check`, `build`, `cross-build`, `fmt`). `mise install` provisions Rust (with the armv7 target), Bun, Zig, and `cargo-zigbuild`.
-
 ### Install on a Pi
 
 Fresh bootstrap:
@@ -71,10 +69,6 @@ ssh pi somfy homekit status
 
 In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
 
-```bash
-ssh pi 'somfy homekit status'
-```
-
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
 For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
@@ -87,7 +81,7 @@ For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTUR
 Release from a clean, up-to-date `main`:
 
 ```bash
-mise run release
+mise run release --execute
 ```
 
 CI never touches the Pi. Deployment is a pull from the device over SSH.
