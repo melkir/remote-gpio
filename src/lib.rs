@@ -2,6 +2,8 @@ pub mod cli;
 pub mod commands;
 pub mod embed;
 pub mod gpio;
+pub mod hap;
+pub mod homekit;
 pub mod logging;
 pub mod remote;
 pub mod server;

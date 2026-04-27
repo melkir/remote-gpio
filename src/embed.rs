@@ -1,4 +1,6 @@
-use axum::http::{header, StatusCode, Uri};
+#[cfg(not(debug_assertions))]
+use axum::http::header;
+use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
 
 #[cfg(not(debug_assertions))]
@@ -35,23 +37,12 @@ async fn serve_asset(path: &str) -> Response {
 
 #[cfg(debug_assertions)]
 async fn serve_asset(path: &str) -> Response {
-    use std::path::PathBuf;
-
-    let base = PathBuf::from("app/dist");
-    let Ok(base_real) = tokio::fs::canonicalize(&base).await else {
+    if path == "sw.js" {
         return StatusCode::NOT_FOUND.into_response();
-    };
-    let candidate = base.join(path);
-    if let Ok(candidate_real) = tokio::fs::canonicalize(&candidate).await {
-        if candidate_real.starts_with(&base_real) {
-            if let Ok(bytes) = tokio::fs::read(&candidate_real).await {
-                let mime = mime_guess::from_path(&candidate_real).first_or_octet_stream();
-                return ([(header::CONTENT_TYPE, mime.as_ref())], bytes).into_response();
-            }
-        }
     }
-    if let Ok(bytes) = tokio::fs::read(base_real.join("index.html")).await {
-        return ([(header::CONTENT_TYPE, "text/html")], bytes).into_response();
-    }
-    StatusCode::NOT_FOUND.into_response()
+    (
+        StatusCode::NOT_FOUND,
+        "Frontend assets are not served by the Rust server in debug builds. Use http://127.0.0.1:5173 for local UI development.",
+    )
+        .into_response()
 }

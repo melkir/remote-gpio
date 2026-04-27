@@ -1,5 +1,5 @@
 use crate::gpio::Input;
-use crate::remote::RemoteControl;
+use crate::remote::{Command, RemoteControl};
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
@@ -10,6 +10,7 @@ use axum::{routing::get, Json, Router};
 use futures_util::{sink::SinkExt, stream::StreamExt};
 use serde::Deserialize;
 use std::net::SocketAddr;
+use std::str::FromStr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::DefaultMakeSpan;
@@ -17,7 +18,7 @@ use tower_http::trace::TraceLayer;
 
 /// Application state shared across all routes
 pub struct AppState {
-    pub remote_control: RemoteControl,
+    pub remote_control: Arc<RemoteControl>,
 }
 
 /// Command request structure for HTTP and WebSocket endpoints
@@ -69,7 +70,7 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 
 /// Handles LED state requests
 async fn handle_led(State(state): State<Arc<AppState>>) -> String {
-    state.remote_control.receiver.borrow().to_string()
+    state.remote_control.current_selection().to_string()
 }
 
 /// Handles command requests via HTTP
@@ -78,41 +79,15 @@ async fn handle_command(
     Json(payload): Json<CommandRequest>,
 ) -> Response {
     let CommandRequest { command, led } = payload;
-    let rc = &state.remote_control;
-
-    match process_command(rc, &command, led).await {
+    match dispatch(&state.remote_control, &command, led).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
-/// Processes a command and handles LED selection if specified
-async fn process_command(
-    rc: &RemoteControl,
-    command: &str,
-    led: Option<Input>,
-) -> Result<(), String> {
-    // Wait for specific LED if requested
-    if let Some(led) = led {
-        while rc.receiver.borrow().to_owned() != led {
-            rc.select().await.map_err(|e| e.to_string())?;
-        }
-    }
-
-    // Execute the command
-    match command {
-        "select" => {
-            if led.is_none() {
-                rc.select().await.map_err(|e| e.to_string())?;
-            }
-        }
-        "up" => rc.up().await.map_err(|e| e.to_string())?,
-        "down" => rc.down().await.map_err(|e| e.to_string())?,
-        "stop" => rc.stop().await.map_err(|e| e.to_string())?,
-        _ => return Err(format!("Invalid command: {}", command)),
-    };
-
-    Ok(())
+async fn dispatch(rc: &RemoteControl, command: &str, led: Option<Input>) -> Result<(), String> {
+    let cmd = Command::from_str(command).map_err(|e| e.to_string())?;
+    rc.execute(led, cmd).await.map_err(|e| e.to_string())
 }
 
 /// Handles WebSocket upgrade requests
@@ -131,7 +106,7 @@ async fn ws_handler(
 /// Manages WebSocket connections and message handling
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
-    let mut rx_led = state.remote_control.receiver.clone();
+    let mut rx_led = state.remote_control.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
     // Send initial LED state
@@ -168,7 +143,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
-                                    match process_command(&state.remote_control, &command, led).await {
+                                    match dispatch(&state.remote_control, &command, led).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, led)
                                         }

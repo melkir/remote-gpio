@@ -1,6 +1,6 @@
-# Hardware & Architecture
+# Hardware Notes
 
-A deeper look at how `somfy` is wired to the Somfy Telis 4 and how the backend turns GPIO edges into synchronized UI state.
+A deeper look at how `somfy` is wired to the Somfy Telis 4 and how the backend turns GPIO edges into synchronized UI state. For a broader codebase tour, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Raspberry Pi ↔ Somfy Telis 4
 

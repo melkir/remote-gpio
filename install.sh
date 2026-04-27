@@ -4,17 +4,10 @@ set -euo pipefail
 REPO="melkir/remote-gpio"
 TARGET_ARCH="armv7l"
 
-WITH_HOMEKIT=0
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --with-homekit) WITH_HOMEKIT=1; shift ;;
         -h|--help)
-            cat <<EOF
-Usage: install.sh [--with-homekit]
-
-  --with-homekit  Also install Homebridge and the homebridge-somfy-remote
-                  plugin so the blinds show up in Apple Home.
-EOF
+            echo "Usage: install.sh"
             exit 0
             ;;
         *) echo "error: unknown flag: $1" >&2; exit 1 ;;
@@ -80,27 +73,12 @@ echo "Running somfy install..."
 # Preserve SUDO_USER so the unit runs as the invoking user
 /usr/local/bin/somfy install
 
-if [[ "$WITH_HOMEKIT" == "1" ]]; then
-    if ! command -v hb-service >/dev/null 2>&1; then
-        echo "Installing Homebridge from repo.homebridge.io..."
-        curl -fsSL https://repo.homebridge.io/KEY.gpg \
-            | gpg --dearmor --yes -o /usr/share/keyrings/homebridge.gpg
-        echo "deb [signed-by=/usr/share/keyrings/homebridge.gpg] https://repo.homebridge.io stable main" \
-            > /etc/apt/sources.list.d/homebridge.list
-        apt-get update
-        apt-get install -y homebridge
-    else
-        echo "Homebridge already installed; skipping apt step."
-    fi
+cat <<EOF
 
-    echo "Installing homebridge-somfy-remote plugin..."
-    hb-service add homebridge-somfy-remote
+HomeKit pairing: the somfy binary advertises itself natively over mDNS.
+Show the pairing QR code and setup code:
 
-    cat <<EOF
+  somfy homekit status
 
-HomeKit bootstrap complete. Next:
-  1. Open the Homebridge UI at http://$(hostname -I | awk '{print $1}'):8581
-  2. On your iPhone: Home → Add Accessory → More Options → scan the
-     Homebridge setup code shown in the UI.
+In the iOS Home app: Add Accessory → scan the QR code.
 EOF
-fi

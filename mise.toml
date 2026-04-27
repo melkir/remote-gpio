@@ -12,17 +12,12 @@ run = "cargo fetch"
 hide = true
 run = "bun --cwd=app install --frozen-lockfile"
 
-[tasks."install:homebridge"]
-hide = true
-run = "bun --cwd=homebridge install --frozen-lockfile"
-
 [tasks.install]
 description = "Install repo dependencies"
 depends = ["install:rust", "install:app"]
 
 [tasks.dev]
 description = "Run the app locally"
-depends = ["install"]
 run = [{ tasks = ["server-dev", "app-dev"] }]
 
 [tasks.build]
@@ -80,23 +75,3 @@ run = "cargo run"
 [tasks.app-dev]
 hide = true
 run = "bun --cwd=app run dev"
-
-[tasks."homebridge-build"]
-description = "Compile the Homebridge plugin (TypeScript → dist/)"
-depends = ["install:homebridge"]
-run = "bun --cwd=homebridge run build"
-
-[tasks."homebridge-pack"]
-description = "Produce the Homebridge plugin tarball for release"
-depends = ["install:homebridge"]
-run = [
-  "rm -rf target/homebridge",
-  "mkdir -p target/homebridge",
-  "bun --cwd=homebridge pm pack --destination=../target/homebridge",
-  "mv target/homebridge/homebridge-somfy-remote-*.tgz target/homebridge/homebridge-somfy-remote.tgz",
-]
-
-[tasks."check:homebridge"]
-description = "Homebridge plugin validation (typecheck + build)"
-depends = ["install:homebridge"]
-run = "bun --cwd=homebridge run build"

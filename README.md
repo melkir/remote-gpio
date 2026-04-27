@@ -24,13 +24,7 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-Add `-s -- --with-homekit` to the pipe to also install Homebridge + the plugin (see below):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash -s -- --with-homekit
-```
-
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
 ### Day-to-day Operation
 
@@ -38,7 +32,11 @@ The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-g
 ssh pi sudo somfy upgrade                 # latest stable release
 ssh pi sudo somfy upgrade --channel main  # moving prerelease built from main
 ssh pi sudo somfy upgrade --version v0.2.0  # pin or roll back
+ssh pi sudo somfy restart                 # restart the service
 ssh pi somfy doctor                       # health check (GPIO, unit, version)
+ssh pi somfy homekit status               # HomeKit pairing/status + QR
+ssh pi somfy homekit pairings             # paired controller list
+ssh pi somfy homekit reset                # regenerate HomeKit identity
 ssh pi somfy --version                    # embedded git SHA + build date
 ```
 
@@ -62,9 +60,20 @@ Server listens on `0.0.0.0:5002`.
 {"command": "select", "led": "L3"}
 ```
 
-### HomeKit (optional)
+### HomeKit
 
-A Homebridge plugin in [`homebridge/`](homebridge/) exposes each blind as a HomeKit `WindowCovering` so Siri, the iOS Home app, and HomePod all work without a custom iOS app. It's a thin shim over `/command` — no Rust changes. The fastest path is the `--with-homekit` flag on the bootstrap script shown above. See [`homebridge/README.md`](homebridge/README.md) for install, config, and pairing details.
+`somfy serve` runs a native HAP server on port `5010`, advertised via mDNS as a Bridge with one `WindowCovering` per LED selector (`L1`–`L4` + `ALL`). No Homebridge, no plugin, no Node — Siri, the Home app, and HomePod talk directly to the Rust binary.
+
+Pair on first install:
+
+```bash
+ssh pi somfy homekit status
+```
+
+In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps. Use `somfy homekit reset` before re-pairing from scratch.
+
+See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
+For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Versioning
 
@@ -76,5 +85,6 @@ CI never touches the Pi. Deployment is a pull from the device over SSH.
 
 ### More
 
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — codebase tour, data flow, concurrency model, and major tradeoffs.
 - [docs/HARDWARE.md](docs/HARDWARE.md) — wiring, GPIO timing, concurrency model, and the "why" behind the design.
 - [CLAUDE.md](CLAUDE.md) — build commands, repo layout, and patterns worth knowing before editing.
