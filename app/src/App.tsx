@@ -3,7 +3,7 @@ import { ReadyState, useSelectionEvents } from '@/hooks/use-selection-events';
 import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
-import { useCallback, useState } from 'preact/hooks';
+import { useCallback, useEffect, useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
 
 export function App() {
@@ -24,6 +24,32 @@ export function App() {
   const { readyState } = useSelectionEvents('/events', {
     onSelection: setActiveLed,
   });
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function syncSelection() {
+      try {
+        const response = await fetch('/led', {
+          cache: 'no-store',
+          signal: controller.signal,
+        });
+
+        if (response.ok) {
+          setActiveLed((await response.text()).trim());
+        }
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.warn('[Selection] Snapshot request failed:', error);
+        }
+      }
+    }
+
+    syncSelection();
+
+    return () => controller.abort();
+  }, []);
+
   const attrs = useLongPress(
     () => {
       send({ command: 'select', led: 'ALL' });
