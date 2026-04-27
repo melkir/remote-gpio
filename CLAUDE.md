@@ -40,4 +40,4 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 
 ## CI / Deployment
 
-One workflow at `.github/workflows/release.yml`. Pushes to `main` refresh a moving `main` prerelease; tag pushes (`v*`) publish a stable release + `SHA256SUMS`. CI never touches the Pi — updates happen via `ssh -t pi 'sudo somfy upgrade'`. See [README.md](README.md) for the operator-facing flow.
+One workflow at `.github/workflows/release.yml`. Pushes to `main` refresh a moving `main` prerelease; tag pushes (`v*`) publish a stable release + `SHA256SUMS`. CI never touches the Pi — the device pulls updates with `sudo somfy upgrade`. See [README.md](README.md) for the operator-facing flow.

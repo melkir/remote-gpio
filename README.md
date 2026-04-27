@@ -16,16 +16,16 @@ mise run dev
 
 ### Install on a Pi
 
+Commands in this section run on the Pi. From another machine, wrap them with SSH; `-t` allocates a terminal for commands that may prompt through `sudo`:
+
+```bash
+ssh -t pi '<command>'
+```
+
 Fresh bootstrap:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
-```
-
-From another machine, allocate a TTY so `sudo` can prompt on the Pi:
-
-```bash
-ssh -t pi 'curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash'
 ```
 
 The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
@@ -33,10 +33,10 @@ The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-g
 ### Upgrade
 
 ```bash
-ssh -t pi 'sudo somfy upgrade'
+sudo somfy upgrade
 ```
 
-Use `ssh -t` because `sudo` may need an interactive terminal to read the Pi user's password. The upgrade command pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
+The upgrade command pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
 
 ### API
 
@@ -64,10 +64,16 @@ Server listens on `0.0.0.0:5002`.
 Pair on first install:
 
 ```bash
-ssh pi somfy homekit status
+somfy homekit status
 ```
 
 In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
+
+For pairing management, reset, and other HomeKit subcommands, ask the installed binary:
+
+```bash
+somfy homekit --help
+```
 
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
 For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

@@ -66,7 +66,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 Show the setup code and pairing QR:
 
 ```bash
-ssh pi somfy homekit status
+somfy homekit status
 ```
 
 In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
@@ -74,10 +74,10 @@ In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somf
 Pairing lifecycle commands are exposed by the CLI:
 
 ```bash
-ssh pi 'somfy homekit --help'
+somfy homekit --help
 ```
 
-`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. Resetting or removing pairings requires a service restart so the in-memory HAP server advertises and enforces the updated state; use `ssh -t pi 'sudo somfy restart'` when running that restart remotely.
+`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. Resetting or removing pairings requires `sudo somfy restart` so the in-memory HAP server advertises and enforces the updated state.
 
 ## Accessory Identity Stability
 
