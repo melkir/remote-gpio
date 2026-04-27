@@ -167,14 +167,6 @@ fn default_state_dir() -> PathBuf {
     PathBuf::from(SYSTEM_STATE_DIR)
 }
 
-pub fn load_or_init() -> Result<HapState> {
-    FileHapStore::current().load_or_init()
-}
-
-pub fn save_current(state: &HapState) -> Result<()> {
-    FileHapStore::current().save_state(state)
-}
-
 #[derive(Clone, Debug)]
 pub struct FileHapStore {
     dir: PathBuf,
@@ -235,10 +227,6 @@ impl HapStore for FileHapStore {
         fs::create_dir_all(&self.dir)?;
         save(&self.state_path(), state)
     }
-}
-
-pub fn reset_current() -> Result<HapState> {
-    FileHapStore::current().reset()
 }
 
 pub fn save(path: &Path, state: &HapState) -> Result<()> {

@@ -32,6 +32,23 @@ pub struct PairSetupSession {
     pub state: PairSetupState,
 }
 
+/// Whether the caller must persist HapState before replying to the controller.
+#[derive(Copy, Clone, Debug)]
+pub enum PersistPolicy {
+    /// Persist; on failure log and reply normally.
+    BestEffort,
+    /// Persist; on failure the caller MUST replace the response with an
+    /// error TLV. Used for M5 success — replying with the success body
+    /// without durable state would leave iOS believing the pairing was
+    /// completed while the accessory restarts unpaired.
+    Required,
+}
+
+pub struct PairSetupOutcome {
+    pub body: Vec<u8>,
+    pub persist: PersistPolicy,
+}
+
 impl PairSetupSession {
     pub fn new() -> Self {
         Self {
@@ -39,12 +56,15 @@ impl PairSetupSession {
         }
     }
 
-    pub fn handle(&mut self, body: &[u8], state: &mut HapState) -> Vec<u8> {
+    pub fn handle(&mut self, body: &[u8], state: &mut HapState) -> PairSetupOutcome {
         let parsed = match ParsedTlv::parse(body) {
             Ok(p) => p,
             Err(e) => {
                 tracing::warn!("pair-setup: malformed TLV: {e}");
-                return error_response(2, HapError::Unknown);
+                return PairSetupOutcome {
+                    body: error_response(2, HapError::Unknown),
+                    persist: PersistPolicy::BestEffort,
+                };
             }
         };
 
@@ -59,10 +79,16 @@ impl PairSetupSession {
             }
         };
 
-        result.unwrap_or_else(|(state_byte, err)| {
+        let persist = if matches!(m_state, 5) && result.is_ok() {
+            PersistPolicy::Required
+        } else {
+            PersistPolicy::BestEffort
+        };
+        let body = result.unwrap_or_else(|(state_byte, err)| {
             self.state = PairSetupState::Initial;
             error_response(state_byte, err)
-        })
+        });
+        PairSetupOutcome { body, persist }
     }
 
     fn handle_m1(&mut self, state: &HapState) -> Result<Vec<u8>, (u8, HapError)> {

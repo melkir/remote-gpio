@@ -11,7 +11,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast;
 
-use crate::hap::pair_setup::PairSetupSession;
+use crate::hap::pair_setup::{PairSetupSession, PersistPolicy};
 use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicValue, CharacteristicWrite,
@@ -79,10 +79,20 @@ where
                 match (req.method.as_str(), req.path_only()) {
                     ("POST", "/pair-setup") => {
                         let mut state = ctx.state.lock().await;
-                        let body = pair_setup.handle(&req.body, &mut state);
-                        if let Err(e) = ctx.store.save_state(&state) {
-                            tracing::error!("failed to persist pair-setup state: {e}");
-                        }
+                        let outcome = pair_setup.handle(&req.body, &mut state);
+                        let body = match (ctx.store.save_state(&state), outcome.persist) {
+                            (Ok(()), _) => outcome.body,
+                            (Err(e), PersistPolicy::BestEffort) => {
+                                tracing::error!("failed to persist pair-setup state: {e}");
+                                outcome.body
+                            }
+                            (Err(e), PersistPolicy::Required) => {
+                                tracing::error!(
+                                    "pair-setup M5: refusing to claim success after persist failure: {e}"
+                                );
+                                error_tlv(6, HapError::Unknown)
+                            }
+                        };
                         drop(state);
                         writer
                             .write_response(200, "application/pairing+tlv8", &body)
