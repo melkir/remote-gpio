@@ -35,7 +35,7 @@ export function useSelectionEvents(url: string, options: Options = {}) {
       readyState.value = ReadyState.OPEN;
     };
 
-    es.addEventListener('selection', (event) => {
+    es.addEventListener('selection', (event: MessageEvent<string>) => {
       optsRef.current.onSelection?.(event.data);
     });
 
