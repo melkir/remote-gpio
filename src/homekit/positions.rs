@@ -1,6 +1,4 @@
-//! Persisted position cache. Sibling file to `hap.json` so the in-memory
-//! the Somfy HAP adapter's position cache survives restarts and the dedupe stays
-//! effective across process boundaries.
+//! Persisted position cache for the Somfy HomeKit adapter.
 //!
 //! Reload is read-only: we never replay a saved position to GPIO.
 
@@ -39,9 +37,6 @@ fn load_from(path: &Path) -> HashMap<u64, u8> {
     raw.into_iter()
         .filter_map(|(k, v)| {
             let aid = k.parse::<u64>().ok()?;
-            // We only ever persist {0, 100}; clamp anything else so a
-            // hand-edited or corrupt file can't push out-of-range values to
-            // controllers.
             let snapped = if v >= 50 { 100 } else { 0 };
             Some((aid, snapped))
         })

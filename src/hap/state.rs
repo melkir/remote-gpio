@@ -14,7 +14,8 @@ use crate::hap::runtime::HapStore;
 pub const HAP_PORT: u16 = 5010;
 pub const MODEL: &str = "Somfy Telis 4";
 pub const MANUFACTURER: &str = "Somfy";
-pub const HAP_CATEGORY: &str = "14";
+/// Accessory Category Identifier advertised over mDNS.
+pub const HAP_CATEGORY: &str = "2";
 pub const STATE_FILE: &str = "hap.json";
 pub const SYSTEM_STATE_DIR: &str = "/var/lib/somfy";
 

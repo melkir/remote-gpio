@@ -44,10 +44,78 @@ pub struct CharacteristicWrite {
     pub ev: Option<bool>,
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+pub enum HapStatus {
+    Success = 0,
+    ReadOnly = -70404,
+    WriteOnly = -70405,
+    NotificationNotSupported = -70406,
+    ResourceDoesNotExist = -70409,
+    InvalidValue = -70410,
+}
+
+impl HapStatus {
+    pub fn code(self) -> i64 {
+        self as i64
+    }
+}
+
 #[derive(Clone, Debug)]
-pub struct CharacteristicValue {
+pub struct CharacteristicRead {
     pub id: CharacteristicId,
-    pub value: Value,
+    pub value: Option<Value>,
+    pub status: HapStatus,
+}
+
+impl CharacteristicRead {
+    pub fn success(id: CharacteristicId, value: Value) -> Self {
+        Self {
+            id,
+            value: Some(value),
+            status: HapStatus::Success,
+        }
+    }
+
+    pub fn error(id: CharacteristicId, status: HapStatus) -> Self {
+        Self {
+            id,
+            value: None,
+            status,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct CharacteristicWriteStatus {
+    pub id: CharacteristicId,
+    pub status: HapStatus,
+}
+
+impl CharacteristicWriteStatus {
+    pub fn success(id: CharacteristicId) -> Self {
+        Self {
+            id,
+            status: HapStatus::Success,
+        }
+    }
+
+    pub fn error(id: CharacteristicId, status: HapStatus) -> Self {
+        Self { id, status }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct CharacteristicWriteOutcome {
+    pub statuses: Vec<CharacteristicWriteStatus>,
+    pub events: Vec<CharacteristicEvent>,
+}
+
+impl CharacteristicWriteOutcome {
+    pub fn all_success(&self) -> bool {
+        self.statuses
+            .iter()
+            .all(|status| status.status == HapStatus::Success)
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -70,13 +138,13 @@ pub trait HapAccessoryApp: Send + Sync + 'static {
     fn read_characteristics<'a>(
         &'a self,
         ids: &'a [CharacteristicId],
-    ) -> HapFuture<'a, Vec<CharacteristicValue>>;
+    ) -> HapFuture<'a, Vec<CharacteristicRead>>;
 
     fn write_characteristics<'a>(
         &'a self,
         writes: Vec<CharacteristicWrite>,
         subscriptions: &'a mut Subscriptions,
-    ) -> HapFuture<'a, Vec<CharacteristicEvent>>;
+    ) -> HapFuture<'a, CharacteristicWriteOutcome>;
 }
 
 pub struct HapRuntime<A, S>

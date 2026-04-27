@@ -5,7 +5,7 @@
 ## Wire layout
 
 - **Port `5010`** — dedicated TCP listener. Kept off `:5002` because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
-- **mDNS** — `_hap._tcp.local.` advertised via `mdns-sd`. TXT record carries `id`, `c#`, `s#`, `sf`, `ci=14` (Bridge), `md`, `pv=1.1`. The `Announcement` guard's `Drop` impl unregisters and shuts the daemon's worker threads.
+- **mDNS** — `_hap._tcp.local.` advertised via `mdns-sd`. TXT record carries `id`, `c#`, `s#`, `sf`, `ci=2` (Bridge), `md`, `pv=1.1`. The `Announcement` guard's `Drop` impl unregisters and shuts the daemon's worker threads.
 - **Accessory database** — Bridge (`aid=1`) plus 5 bridged `WindowCovering` accessories (`aid=2..6`), one per Somfy LED selector (`L1`–`L4`, `ALL`). IIDs are stable across runs; `config_number` must bump if the schema ever changes.
 
 ## Persistent state
@@ -15,7 +15,7 @@
 | File             | Owner          | Contents                                                                                |
 | ---------------- | -------------- | --------------------------------------------------------------------------------------- |
 | `hap.json`       | `state.rs`     | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
-| `positions.json` | `positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
+| `positions.json` | `homekit/positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
 
 Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
 
@@ -84,7 +84,7 @@ ssh pi sudo somfy restart
 
 ## Accessory Identity Stability
 
-Home remembers accessories by the persisted identity in `hap.json` and by stable accessory/characteristic IDs from `accessories.rs`. Treat these values as compatibility surfaces:
+Home remembers accessories by the persisted identity in `hap.json` and by stable accessory/characteristic IDs from `homekit/somfy.rs`. Treat these values as compatibility surfaces:
 
 - Keep `device_id`, `setup_id`, and the long-term signing key stable across upgrades. Regenerating them is a factory reset and forces re-pairing.
 - Keep AIDs and IIDs stable once shipped. Changing them can make Home lose room/name/automation associations.

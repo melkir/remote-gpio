@@ -80,9 +80,9 @@ mod tests {
     #[test]
     fn encodes_known_setup_payload() {
         // Vector cross-checked against the HAP specification example for
-        // category=2 (bridge, ish), code=518-08-582, id=7OSX.
-        // We use our project's category (14, "sensor"/"bridge"-class — see
-        // src/hap/state.rs) and assert the URI is a stable function of inputs.
+        // Vector cross-checked against the HAP specification example for
+        // category=2 (bridge), code=518-08-582, id=7OSX. We assert the URI is
+        // a stable function of our project's setup inputs.
         let state = fixture_state("101-48-005", "7OSX");
         let uri = setup_uri(&state).unwrap();
         assert!(uri.starts_with("X-HM://"));
@@ -105,7 +105,7 @@ mod tests {
 
         assert_eq!((payload >> 39) & 0b111, 0);
         assert_eq!((payload >> 35) & 0b1111, 0);
-        assert_eq!((payload >> 31) & 0xff, 14);
+        assert_eq!((payload >> 31) & 0xff, 2);
         assert_eq!((payload >> 27) & 0b1111, FLAGS_IP);
         assert_eq!(payload & ((1 << 27) - 1), 10_148_005);
     }
