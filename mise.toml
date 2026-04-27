@@ -70,7 +70,7 @@ run = [
 ]
 
 [tasks.release]
-description = "Run cargo-release; pass the bump/version and flags after the task name"
+description = "Create a new release"
 run = "cargo release"
 
 [tasks.server-dev]
