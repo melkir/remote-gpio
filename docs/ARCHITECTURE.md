@@ -9,7 +9,8 @@ time.
 `somfy` turns one physical Somfy Telis 4 remote into several software-facing
 interfaces:
 
-- HTTP and WebSocket for the web UI.
+- HTTP/SSE for the web UI.
+- WebSocket for bidirectional API clients.
 - Native HomeKit Accessory Protocol (HAP) for Apple Home.
 - GPIO reads and writes against the physical remote.
 
@@ -21,7 +22,7 @@ the real LEDs.
 
 | Area           | Files            | Responsibility                                                                                  |
 | -------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
-| Web API        | `src/server.rs`  | Axum HTTP/WebSocket routes and static app serving.                                              |
+| Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                        |
 | Remote control | `src/remote.rs`  | Serializes physical button sequences, tracks selected LED, emits movement events.               |
 | GPIO           | `src/gpio.rs`    | Low-level Linux GPIO input/output mapping and debounce logic.                                   |
 | HAP core       | `src/hap/*`      | Generic-ish HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing. |
@@ -43,10 +44,10 @@ It has two different async streams:
 
 They are deliberately separate.
 
-The selection watch channel is stateful. A new WebSocket client can subscribe
-and immediately know whether the remote is on `L1`, `L2`, `L3`, `L4`, or `ALL`.
-Selection changes can happen without blind movement, for example when the user
-presses `select`.
+The selection watch channel is stateful. A new SSE or WebSocket client can
+subscribe and immediately know whether the remote is on `L1`, `L2`, `L3`, `L4`,
+or `ALL`. Selection changes can happen without blind movement, for example when
+the user presses `select`.
 
 The position broadcast channel is event-like. It only fires after a successful
 `Up` or `Down` command and carries an inferred HomeKit position: `100` for Up,
@@ -56,8 +57,7 @@ used as a state cache.
 ## Command Serialization
 
 The physical remote can only do one thing at a time. Software callers are more
-flexible: the web UI, REST, WebSocket clients, and HomeKit can all issue
-commands.
+flexible: the web UI, REST/WebSocket clients, and HomeKit can all issue commands.
 
 `RemoteControl::execute` uses `execute_lock` to serialize the full hardware
 transaction:
@@ -81,16 +81,19 @@ hardware behavior coherent.
 
 ## Web Flow
 
-The web server exposes:
+The web server exposes one command endpoint and two live-state transports:
 
 - `GET /led` for the current selection.
 - `POST /command` for one command.
-- `GET /ws` for live LED updates and command messages.
+- `GET /events` for the Preact PWA's SSE stream of LED updates.
+- `GET /ws` for bidirectional clients that want live LED updates and command messages.
 
-WebSocket clients subscribe to `RemoteControl::subscribe_selection()`. They get
-the current LED immediately and then receive updates whenever selection changes.
-Incoming WebSocket commands are spawned as tasks so LED updates keep flowing
-while a command is cycling through the physical remote.
+The Preact PWA uses SSE for live state and `POST /command` for actions. `/ws`
+stays available for bidirectional clients. Both live transports subscribe to
+`RemoteControl::subscribe_selection()`, send the current LED immediately, and
+then forward selection changes. Incoming WebSocket commands are spawned as tasks
+so LED updates keep flowing while a command is cycling through the physical
+remote.
 
 ## HomeKit Flow
 
@@ -158,7 +161,7 @@ automation associations.
 ## Good First Places To Read
 
 1. `src/remote.rs` for the command and concurrency model.
-2. `src/server.rs` for the web API and WebSocket flow.
+2. `src/server.rs` for the web API, SSE stream, and WebSocket flow.
 3. `src/homekit/somfy.rs` for the HomeKit accessory model.
 4. `src/hap/server.rs` for the HAP request/session loop.
 5. `docs/HARDWARE.md` for GPIO wiring and debounce details.

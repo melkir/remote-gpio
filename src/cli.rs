@@ -17,7 +17,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 pub enum Command {
-    /// Run the HTTP/WebSocket server (default)
+    /// Run the HTTP/SSE/WebSocket server (default)
     Serve,
     /// Install or refresh the systemd unit
     Install {

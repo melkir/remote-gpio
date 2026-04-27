@@ -87,12 +87,12 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │                     FRONTEND (Preact/Vite)                  │
-│  WebSocket connection with auto-reconnect + heartbeat       │
+│  EventSource connection with browser-managed reconnect      │
 │  Displays LED indicators & control buttons                  │
 │  Haptic feedback on interactions                            │
 └──────────────────────────┬──────────────────────────────────┘
                            │
-         WebSocket (ws://host/ws) + HTTP (POST /command)
+            SSE (GET /events) + HTTP (POST /command)
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
 │                  BACKEND (Axum/Tokio)                       │
@@ -100,6 +100,7 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 │  Routes:                                                    │
 │  ├─ GET /led      → Current LED selection                   │
 │  ├─ POST /command → Execute button commands                 │
+│  ├─ GET /events   → Server-sent LED selection events        │
 │  ├─ GET /ws       → WebSocket upgrade                       │
 │  └─ /*            → Static files from dist/                 │
 │                                                             │
@@ -119,25 +120,11 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 
 ### Concurrency Model
 
-The WebSocket handler uses a single `tokio::select!` loop that concurrently:
-
-1. **Watches LED changes** via `watch::channel` and forwards to the client.
-2. **Receives messages** (pings, commands) from the client.
-
-Command processing is spawned as a separate task to avoid blocking LED updates. This ensures all clients see intermediate selection states in real time.
-
-```rust
-loop {
-    tokio::select! {
-        result = rx_led.changed() => {
-            // Forward LED state to client
-        }
-        msg = stream.next() => {
-            // Handle ping/pong or spawn command processing
-        }
-    }
-}
-```
+The SSE endpoint and WebSocket handler both subscribe to the same
+`watch::channel`, which sends the current LED first and then every selection
+change. The Preact PWA uses SSE plus `POST /command`; WebSocket remains available
+for bidirectional clients. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
+transport-level details.
 
 ### State Engine: `RemoteControl`
 
@@ -145,7 +132,7 @@ loop {
 
 1. **Startup:** presses SELECT, reads LEDs, seeds the `watch::channel`.
 2. **Methods:** `select()`, `up()`, `down()`, `stop()` trigger GPIO.
-3. **Broadcasts:** LED changes propagate to all WebSocket clients.
+3. **Broadcasts:** LED changes propagate to all SSE and WebSocket clients.
 
 ## Frontend
 
@@ -156,11 +143,11 @@ The Preact PWA features:
 - **LED indicators:** clickable dots for L1–L4; center button for SELECT.
 - **Long-press:** sends `ALL` intent for group mode.
 - **Haptics:** 100ms on press, 200ms on finish.
-- **Auto-reconnect:** exponential backoff (1s → 2s → 4s → 8s → 10s max).
+- **Auto-reconnect:** browser-managed `EventSource` reconnect.
 
 ## Why This Design
 
 - **Single source of truth:** the Pi reads real GPIO state and broadcasts — every UI stays consistent.
-- **Low latency:** WebSockets deliver immediate feedback.
+- **Low latency:** SSE and WebSocket subscribers get immediate LED feedback.
 - **Non-blocking:** async GPIO timing doesn't stall the runtime.
 - **Small footprint:** easy to audit, extend, or port to different hardware.

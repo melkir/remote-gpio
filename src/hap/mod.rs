@@ -1,5 +1,4 @@
 //! Native HomeKit Accessory Protocol server. Replaces the Homebridge plugin.
-//! See `docs/HAP-PLAN.md` for the phased rollout.
 
 pub mod mdns;
 pub mod pair_setup;

@@ -1,15 +1,32 @@
 import { Button } from '@/components/ui/button';
-import { ReadyState, useWebSocket } from '@/hooks/use-websocket';
+import { ReadyState, useSelectionEvents } from '@/hooks/use-selection-events';
 import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
-import { useState } from 'preact/hooks';
+import { useCallback, useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
 
 export function App() {
   const [activeLed, setActiveLed] = useState<string | null>(null);
   const { triggerHaptic: shortHaptic } = useHaptic(100);
   const { triggerHaptic: longHaptic } = useHaptic(200);
+  const send = useCallback(async (payload: { command: string; led?: string }) => {
+    const response = await fetch('/command', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(payload),
+    });
+
+    if (!response.ok) {
+      console.warn('[Command] Request failed:', await response.text());
+    }
+  }, []);
+  const { readyState } = useSelectionEvents('/events', {
+    onSelection: (selection) => {
+      if (!selection) return;
+      setActiveLed(selection);
+    },
+  });
   const attrs = useLongPress(
     () => {
       send({ command: 'select', led: 'ALL' });
@@ -20,30 +37,17 @@ export function App() {
       onFinish: () => longHaptic(),
     },
   );
-  const { sendJsonMessage: send, readyState } = useWebSocket(
-    `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws`,
-    {
-      reconnectAttempts: 10,
-      reconnectInterval: (attemptNumber) => Math.min(2 ** attemptNumber * 1000, 10000),
-      queryParams: { name: 'react-app' },
-      onMessage: (data) => {
-        if (!data) return;
-        setActiveLed(data);
-      },
-    },
-  );
 
   // Map readyState to color and label
   const status = {
     [ReadyState.CONNECTING]: 'bg-loading',
     [ReadyState.OPEN]: 'bg-green-900',
-    [ReadyState.CLOSING]: 'bg-amber-400',
     [ReadyState.CLOSED]: 'bg-red-900',
   }[readyState.value];
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-evenly gap-4 pt-4">
-      {/* WebSocket Status LED */}
+      {/* Connection Status LED */}
       <div className={cn('absolute top-0 h-4 w-72 rounded-b-full bg-accent', status)} />
 
       {/* Up, Stop, Down */}

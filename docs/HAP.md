@@ -1,6 +1,6 @@
 # Native HomeKit (HAP) Server
 
-`somfy serve` runs a native HomeKit Accessory Protocol server alongside the HTTP/WebSocket API. The Home app talks straight to the Rust binary — no Homebridge, no Node.
+`somfy serve` runs a native HomeKit Accessory Protocol server alongside the HTTP, SSE, and WebSocket API. The Home app talks straight to the Rust binary — no Homebridge, no Node.
 
 ## Wire layout
 

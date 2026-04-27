@@ -1,10 +1,10 @@
 ## RemoteGPIO
 
-A Rust + Preact app that controls a Raspberry Pi-attached Somfy Telis 4 remote over WebSocket, keeping all clients synchronized.
+Self-hosted Somfy Telis 4 controller for Raspberry Pi with native HomeKit, a Preact PWA, and live SSE/WebSocket sync.
 
 <video src="https://github.com/user-attachments/assets/4dbb72bf-5b67-4a23-8322-f3749d19901c" autoplay loop muted playsinline></video>
 
-A small study in wiring consumer hardware to the web: the Pi taps the Telis 4's button and LED traces directly, a Rust backend turns GPIO edges into broadcast state, and a Preact PWA stays in sync across every open tab. Deployment is a single self-updating binary, no CI access to the device.
+The Raspberry Pi is wired directly to the remote's button and LED traces, so the software presses the real remote and reads its current selection. The Rust service exposes that state to the web app and HomeKit, while deployment stays simple: one self-updating binary on the Pi, with no CI access to the device.
 
 ### Quick Start
 
@@ -49,6 +49,7 @@ Server listens on `0.0.0.0:5002`.
 | Endpoint   | Method    | Description                            |
 | ---------- | --------- | -------------------------------------- |
 | `/ws`      | WebSocket | Real-time LED state + accepts commands |
+| `/events`  | GET       | SSE stream of LED selection changes    |
 | `/led`     | GET       | Current selection (`L1`-`L4` or `ALL`) |
 | `/command` | POST      | Execute command                        |
 

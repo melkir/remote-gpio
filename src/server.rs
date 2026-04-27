@@ -4,11 +4,16 @@ use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::http::{Method, StatusCode};
+use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
 use axum::{routing::get, Json, Router};
-use futures_util::{sink::SinkExt, stream::StreamExt};
+use futures_util::{
+    sink::SinkExt,
+    stream::{self, StreamExt},
+};
 use serde::Deserialize;
+use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -57,6 +62,7 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 
     Router::new()
         .route("/led", get(handle_led))
+        .route("/events", get(handle_events))
         .route("/command", post(handle_command))
         .route("/ws", get(ws_handler))
         .fallback(crate::embed::static_handler)
@@ -71,6 +77,34 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 /// Handles LED state requests
 async fn handle_led(State(state): State<Arc<AppState>>) -> String {
     state.remote_control.current_selection().to_string()
+}
+
+/// Streams LED selection changes as server-sent events.
+async fn handle_events(
+    State(state): State<Arc<AppState>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let rx_led = state.remote_control.subscribe_selection();
+    let stream = stream::unfold((rx_led, true), |(mut rx_led, initial)| async move {
+        if initial {
+            let selection = rx_led.borrow().to_string();
+            return Some((
+                Ok(Event::default().event("selection").data(selection)),
+                (rx_led, false),
+            ));
+        }
+
+        if rx_led.changed().await.is_err() {
+            return None;
+        }
+
+        let selection = rx_led.borrow().to_string();
+        Some((
+            Ok(Event::default().event("selection").data(selection)),
+            (rx_led, false),
+        ))
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default())
 }
 
 /// Handles command requests via HTTP

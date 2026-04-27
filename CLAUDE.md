@@ -23,17 +23,17 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 ## Repo Layout
 
 - `src/cli.rs` — clap subcommands. Default is `serve`. Per-command logic under `src/commands/`.
-- `src/server.rs` — Axum routes (`/ws`, `/command`, `/led`, embedded static files).
+- `src/server.rs` — Axum routes (`/events`, `/ws`, `/command`, `/led`, embedded static files).
 - `src/remote.rs` — `RemoteControl` state engine; broadcasts LED state via `watch::channel`.
 - `src/gpio.rs` — `gpiocdev` wrapper. Output pulses are 60ms active-low; input debounce uses a 300ms edge-count window.
 - `build.rs` + `vergen` — embeds git SHA and build date at compile time.
 - `app/` — Preact PWA. Vite + Tailwind. React imports aliased to `preact/compat` in `tsconfig.json` and `vite.config.ts`.
-- `src/hap/` — native HomeKit Accessory Protocol server on port 5010 (mDNS advert, SRP-6a/SHA-512 pair-setup, ChaCha20-Poly1305 session, accessory db, EVENT push). State at `$STATE_DIRECTORY/{hap.json,positions.json}`. Replaces the prior `homebridge/` plugin (retired in Phase 8 — see [docs/HAP-PLAN.md](docs/HAP-PLAN.md)).
+- `src/hap/` — native HomeKit Accessory Protocol server on port 5010 (mDNS advert, SRP-6a/SHA-512 pair-setup, ChaCha20-Poly1305 session, accessory db, EVENT push). State at `$STATE_DIRECTORY/{hap.json,positions.json}`. Replaces the prior `homebridge/` plugin.
 
 ## Key Patterns
 
 - **Error handling:** `anyhow::Result<T>` throughout the Rust code.
-- **WebSocket loop:** single `tokio::select!` handles incoming messages and LED updates; command processing is spawned so it can't block broadcasts.
+- **Live web transports:** the Preact PWA uses `GET /events` for SSE state and `POST /command` for actions; `/ws` remains as the bidirectional API client transport.
 - **Static serving:** release builds embed `app/dist/`; debug builds read from disk for hot-reload.
 - **Doctor is the source of truth** for "is this thing healthy" — `somfy doctor` runs on every `serve` startup and is the single JSON contract for deployment/process health (unit drift, GPIO access, service user/group, available updates, deployed SHA). HomeKit pairing lifecycle belongs to `somfy homekit ...`.
 - **Install/upgrade are idempotent.** `somfy install` defaults the service user from `SUDO_USER` and only writes the unit if it differs from the template. `somfy upgrade` downloads, checksums, swaps, restarts, and rolls back to `somfy.prev` if the new binary fails to come up.
