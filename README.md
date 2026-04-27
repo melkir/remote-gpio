@@ -24,23 +24,21 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
-
-### Day-to-day Operation
+From another machine, allocate a TTY so `sudo` can prompt on the Pi:
 
 ```bash
-ssh pi sudo somfy upgrade                 # latest stable release
-ssh pi sudo somfy upgrade --channel main  # moving prerelease built from main
-ssh pi sudo somfy upgrade --version v0.2.0  # pin or roll back
-ssh pi sudo somfy restart                 # restart the service
-ssh pi somfy doctor                       # health check (GPIO, unit, version)
-ssh pi somfy homekit status               # HomeKit pairing/status + QR
-ssh pi somfy homekit pairings             # paired controller list
-ssh pi somfy homekit reset                # regenerate HomeKit identity
-ssh pi somfy --version                    # embedded git SHA + build date
+ssh -t pi 'curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash'
 ```
 
-Read-only verbs (`doctor`, `upgrade --check`, `--version`) work without sudo. Anything that writes to `/usr/local/bin` or `/etc/systemd/system` requires it.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
+
+### Upgrade
+
+```bash
+ssh -t pi 'sudo somfy upgrade'
+```
+
+Use `ssh -t` because `sudo` may need an interactive terminal to read the Pi user's password. The upgrade command pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
 
 ### API
 
@@ -71,7 +69,11 @@ Pair on first install:
 ssh pi somfy homekit status
 ```
 
-In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps. Use `somfy homekit reset` before re-pairing from scratch.
+In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
+
+```bash
+ssh pi 'somfy homekit status'
+```
 
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
 For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).

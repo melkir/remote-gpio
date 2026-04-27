@@ -71,17 +71,13 @@ ssh pi somfy homekit status
 
 In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
 
-Pairing lifecycle commands:
+Pairing lifecycle commands are exposed by the CLI:
 
 ```bash
-ssh pi somfy homekit status
-ssh pi somfy homekit pairings
-ssh pi somfy homekit unpair '<controller-id>'
-ssh pi somfy homekit reset
-ssh pi sudo somfy restart
+ssh pi 'somfy homekit --help'
 ```
 
-`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. `reset` regenerates the HomeKit identity and removes all pairings. Run `sudo somfy restart` after `reset` or `unpair` so the in-memory HAP server advertises and enforces the updated state.
+`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. Resetting or removing pairings requires a service restart so the in-memory HAP server advertises and enforces the updated state; use `ssh -t pi 'sudo somfy restart'` when running that restart remotely.
 
 ## Accessory Identity Stability
 
