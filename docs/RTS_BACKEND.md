@@ -20,7 +20,7 @@ Shared vocabulary across both hardware implementations:
 - **Command**: the user intent — `Up`, `Down`, `My`, `Stop`, or `Prog`.
 - **Transmission**: the backend-specific act that sends a command to a channel.
   In the Telis backend this is a button press on the physical remote. In the
-  RTS backend this is an RF frame written to the CC1101.
+  RTS backend this is an RF frame transmitted via CC1101.
 
 The existing code calls the target type `Input` because it currently represents
 GPIO LED inputs. `Channel` is the better domain term, but the rename can land
@@ -63,7 +63,7 @@ binary; runtime config selects exactly one active backend from the compiled set.
 default = ["fake"]
 fake = []
 telis = ["dep:gpiocdev"]
-rts = ["dep:spidev"]
+rts = ["dep:spidev", "dep:gpiocdev"]  # gpiocdev for the CC1101 data pin; timing crate TBD
 ```
 
 The current `hw` feature should not remain. Use explicit backend names so the
@@ -79,9 +79,10 @@ backend "rts" was selected, but this binary was built without the "rts" feature
 ## Requirements
 
 - Confirm devices are Somfy RTS, not io-homecontrol.
-- Use a CC1101 transceiver module on 433.42 MHz, driven over SPI. CC1101
-  handles modulation in hardware — the Pi only feeds frame bytes, no
-  microsecond pulse timing.
+- Use a CC1101 transceiver module as the 433.42 MHz RF frontend, configured
+  over SPI. The data-path strategy (CC1101 packet/FIFO engine vs. async mode
+  with GPIO-driven waveform on the data pin) is unvalidated for Somfy RTS —
+  see Transmitter Notes.
 - Generate valid Somfy RTS 56-bit frames.
 - Maintain one virtual remote identity per channel (`remote_id` +
   `rolling_code`).
@@ -112,27 +113,51 @@ networks in range.
 }
 ```
 
-## Transmitter Notes
+CC1101 is the 433.42 MHz RF frontend, configured over SPI (`spidev`). How the
+RTS waveform is fed to it is the open question.
 
-Drive a CC1101 module over SPI (`spidev`) in FIFO mode. CC1101 handles
-433.42 MHz OOK modulation in hardware; the Pi configures the radio, writes
-the Manchester-encoded frame bytes to the TX FIFO, and CC1101 transmits
-autonomously. No GPIO bit-banging, no microsecond waveform generation, no
-`pigpiod` dependency.
+**Two candidate data paths:**
 
-Configuration steps at backend startup:
+1. **CC1101 packet/FIFO engine.** Configure CC1101 for OOK + Manchester at
+   ~1 kbps, write the encoded bytes to the TX FIFO, let the radio handle air
+   timing. Simplest if it works. Risk: CC1101's packet engine has fixed
+   preamble/sync formats and may not reproduce the Somfy wake-up burst,
+   hardware-sync, software-sync, and inter-frame-gap timings exactly.
+2. **CC1101 async mode + GPIO-driven waveform.** Configure CC1101 as a dumb
+   OOK transmitter; the Pi drives the data pin with precise microsecond
+   timing for the wake-up burst, sync pulses, Manchester payload, and gaps.
+   This is what real-world implementations (ESPSomfy-RTS and similar) do.
+   Requires a precise timing mechanism — `pigpiod` waveforms via `apigpio`,
+   or an equivalent — because `gpiocdev` alone is too coarse.
 
-- Open `/dev/spidev0.0` and configure CC1101 registers for 433.42 MHz, OOK,
-  ~1 kbps Manchester-like timing matching Somfy RTS.
-- Use ESPSomfy-RTS register values as the reference — they are validated
+**Timing tolerance.** PushStack reports motors accept pulses 20% longer or
+15% shorter than nominal. With a 640us base pulse that is ±~100us of slack,
+which changes the calculus:
+
+- Path 1 (FIFO) is more plausible than worst-case analysis suggests — the
+  motor will likely accept CC1101 packet-engine output even if it doesn't
+  exactly reproduce the Somfy preamble shape.
+- Path 2 (GPIO async) does not strictly require `pigpiod`'s DMA precision.
+  User-space timing on a quiet Pi can hit ±100us; `pigpiod` remains the
+  safest choice under scheduler load (HTTP server, HomeKit, etc. all share
+  the process), but it is not the only viable mechanism.
+
+Plan path 2 as the default and use `pigpiod` if the simpler timing approach
+proves jittery under realistic load. Drop to path 1 only if a hardware spike
+confirms it works against real motors.
+
+**At backend startup, regardless of path:**
+
+- Open `/dev/spidev0.0` and configure CC1101 registers for 433.42 MHz OOK.
+  Use ESPSomfy-RTS register values as the reference — they are validated
   against real motors.
 
-Per-transmission steps:
+**Per transmission:**
 
 - Build the 7-byte RTS frame (encoder module).
-- Write the wake-up burst, hardware sync, software sync, and Manchester-coded
-  payload to the CC1101 TX FIFO.
-- Repeat the frame the standard number of times with the inter-frame gap.
+- Wrap with wake-up burst, hardware/software sync, Manchester encoding, and
+  repeat-with-gap.
+- Push to CC1101 via the chosen data path.
 
 Serialize transmissions behind a mutex (one radio, one in-flight frame). The
 wired Telis backend keeps using `gpiocdev`.
@@ -148,9 +173,12 @@ should only need to validate RF range, wiring, and pairing.
   7-byte RTS frame matches known output from PushStack/homebridge-rpi-rts.
   Checksum, obfuscation, and byte order are covered by the vectors.
 
-Everything below the frame — preamble, sync, Manchester, repeat, SPI/FIFO
-mechanics — is CC1101 driver internals. It either works on real hardware or
-it doesn't; unit tests there would just lock in implementation details.
+If we end up on the GPIO-driven data path (likely — see Transmitter Notes),
+the wake-up burst, sync pulses, Manchester encoding, and repeat-with-gap are
+also our code and worth a structural test (right pulse counts, right gap
+durations) — but not byte-for-byte golden, since timing tolerances exist.
+SPI/FIFO mechanics and CC1101 register writes stay untested at the unit
+level; they only prove themselves on real hardware.
 
 **Transmission abstraction** (integration tests):
 
@@ -182,7 +210,10 @@ Renames (`Input`→`Channel`, `Output`→`TelisButton`, `RemoteControl`→
 convenient.
 
 1. **Encoder + golden tests.** Rust RTS frame encoder. Golden tests for frame
-   bytes against PushStack/homebridge-rpi-rts known-good output.
+   bytes against PushStack/homebridge-rpi-rts known-good output. PushStack
+   notes the lower 4 bits of the key byte can be a constant zero instead of
+   being derived from the rolling code — pick the simpler form unless a
+   golden vector forces otherwise.
 2. **Persistence.** RTS state under `/var/lib/somfy`, separate from HomeKit
    state. Atomic writes with the write-ahead-buffer scheme. Persistence tests
    for rolling-code behavior.
@@ -195,10 +226,12 @@ convenient.
    somfy rts send L1 up | down | my
    ```
 
-4. **CC1101 driver.** SPI register setup (cribbed from ESPSomfy-RTS) and
-   frame-to-FIFO transmission. No physical hardware needed for the driver
-   code itself — it can be exercised with a recording/logging fake until a
-   Pi with CC1101 is available for end-to-end pairing.
+4. **CC1101 driver.** SPI register setup (cribbed from ESPSomfy-RTS). Build
+   both data paths behind the `Transmission` trait if cheap; otherwise start
+   with the GPIO-driven path (path 2) as the safe default. Decide between
+   FIFO and GPIO-driven during the first hardware spike. The driver code
+   itself can be exercised against recording/logging fakes until a Pi with
+   CC1101 is available for end-to-end pairing.
 5. **Backend selection + cleanup.** Add startup-time `backend = "telis" | "rts"`
    config. Wire RTS backend into `RemoteControl`. Replace the `hw` feature with
    explicit `fake` / `telis` / `rts` features. Update hardware/install docs,
@@ -220,6 +253,14 @@ convenient.
 
 3. ESPSomfy-RTS — <https://github.com/rstrouse/ESPSomfy-RTS>
 
-   Best mature reference, and the source for CC1101 register values. Useful
-   for robust RTS command handling, pairing flows, and edge cases. Do not
-   start by porting it — much larger than needed.
+   Best mature reference, and the source for CC1101 register values. Also
+   the reference for the GPIO-driven data path (CC1101 in async mode + timed
+   waveform on the data pin). Useful for robust RTS command handling,
+   pairing flows, and edge cases. Do not start by porting it — much larger
+   than needed.
+
+4. pigpio / `pigpiod_if2` — <https://github.com/joan2937/pigpio>
+
+   If the GPIO-driven CC1101 data path is the one we end up using, this is
+   the Raspberry Pi timing primitive. Drive it via `apigpio` (async Rust
+   client) or a small local FFI wrapper.
