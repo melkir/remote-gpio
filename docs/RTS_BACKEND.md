@@ -20,7 +20,7 @@ Shared vocabulary across both hardware implementations:
 - **Command**: the user intent — `Up`, `Down`, `My`, `Stop`, or `Prog`.
 - **Transmission**: the backend-specific act that sends a command to a channel.
   In the Telis backend this is a button press on the physical remote. In the
-  RTS backend this is an RF waveform.
+  RTS backend this is an RF frame written to the CC1101.
 
 The existing code calls the target type `Input` because it currently represents
 GPIO LED inputs. `Channel` is the better domain term, but the rename can land
@@ -91,13 +91,16 @@ backend "rts" was selected, but this binary was built without the "rts" feature
 **Rolling code persistence.** Each frame increments the on-wire rolling code
 by `+1` (Somfy protocol requirement). To survive crashes and limit SD-card
 writes, persist `next_code + N` to disk up front and serve codes from RAM;
-re-persist only after burning through the buffer. A crash then loses at most
-`N` codes, which the motor's acceptance window absorbs without desync. Losing
-or rolling back the *persisted* value below the motor's last-seen code makes
-the virtual remote stop working until re-paired.
+re-persist only after burning through the buffer. ESPSomfy uses `N = 16`,
+which is a sensible default. A crash then loses at most `N` codes, which the
+motor's acceptance window absorbs without desync. Losing or rolling back the
+*persisted* value below the motor's last-seen code makes the virtual remote
+stop working until re-paired.
 
 Minimum viable command set: `Up`, `Down`, `My / Stop`, `Prog`. One virtual
-remote per channel (`L1`–`L4`, `ALL`), persisted as:
+remote per channel (`L1`–`L4`, `ALL`), persisted as below. IDs are example
+values — generate randomly per install to avoid collision with other RTS
+networks in range.
 
 ```json
 {
@@ -137,27 +140,28 @@ wired Telis backend keeps using `gpiocdev`.
 ## Test Strategy
 
 Most of the backend can be tested before RF hardware arrives. Hardware testing
-should only need to validate RF range, wiring, pairing, and final timing.
+should only need to validate RF range, wiring, and pairing.
 
 **Golden tests** (frame encoding):
 
 - Given a fixed command, remote ID, and rolling code, assert the generated
   7-byte RTS frame matches known output from PushStack/homebridge-rpi-rts.
-- Assert checksum and obfuscation are stable.
-- Assert remote address byte order and rolling-code byte order are correct.
-- Convert the frame into pulses and assert wake-up pulse, hardware sync,
-  software sync, Manchester bit count, inter-frame gap, and repeat count.
+  Checksum, obfuscation, and byte order are covered by the vectors.
+
+Everything below the frame — preamble, sync, Manchester, repeat, SPI/FIFO
+mechanics — is CC1101 driver internals. It either works on real hardware or
+it doesn't; unit tests there would just lock in implementation details.
 
 **Transmission abstraction** (integration tests):
 
 ```rust
 trait Transmission {
-    async fn send(&self, pulses: &[Pulse]) -> Result<()>;
+    async fn send(&self, frame: &[u8]) -> Result<()>;
 }
 ```
 
 ```text
-RecordingTransmission -> stores pulses in memory for tests
+RecordingTransmission -> stores frames in memory for tests
 LoggingTransmission   -> prints/debugs frames locally
 Cc1101Transmission    -> sends via CC1101 over SPI on real Raspberry Pi hardware
 ```
@@ -169,12 +173,6 @@ Cc1101Transmission    -> sends via CC1101 over SPI on real Raspberry Pi hardware
 - Rolling code increments after a successful transmit.
 - Failed-transmit behavior is intentional and tested.
 - State writes are atomic.
-
-Optional debug command for comparing output against reference implementations:
-
-```text
-somfy rts dump L1 up --format json
-```
 
 ## Implementation Path
 
