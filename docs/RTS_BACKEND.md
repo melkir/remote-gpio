@@ -1,266 +1,508 @@
-# RTS Backend Notes
+# RTS Backend Design
 
 ## Goal
 
 Replace the wired physical Somfy Telis 4 RTS remote with Raspberry
-Pi-controlled RF transmission. The Pi acts as a new virtual Somfy RTS remote,
-paired with each motor/group.
+Pi-controlled RF transmission. The Pi acts as a new virtual Somfy RTS remote
+paired with each motor or group.
 
-Only one hardware backend is active at a time, selected once at startup: either
-the wired Telis backend or the RTS backend. Both are intended to remain
-supported long-term so different deployments can pick the right hardware.
+The wired Telis backend remains supported. Only one backend is active per
+process, selected at startup by runtime configuration and gated by compile-time
+features.
 
-## Common Model
+## Backend Model
 
-Shared vocabulary across both hardware implementations:
+Use the same command surface for the web API, HomeKit, and CLI:
 
-- **Channel**: the logical target — `L1`, `L2`, `L3`, `L4`, or `ALL`. In the
-  Telis backend this maps to the selected LED. In the RTS backend it maps to a
-  virtual remote identity.
-- **Command**: the user intent — `Up`, `Down`, `My`, `Stop`, or `Prog`.
-- **Transmission**: the backend-specific act that sends a command to a channel.
-  In the Telis backend this is a button press on the physical remote. In the
-  RTS backend this is an RF frame transmitted via CC1101.
+- **Channel**: logical target, `L1`, `L2`, `L3`, `L4`, or `ALL`.
+- **Command**: user intent, `Up`, `Down`, `My`, `Stop`, or `Prog`.
+- **Backend**: hardware implementation that transmits a command to a channel.
 
-The existing code calls the target type `Input` because it currently represents
-GPIO LED inputs. `Channel` is the better domain term, but the rename can land
-separately from the first RTS prototype.
-
-## Backend Selection
-
-Backend selection is runtime configuration, not hot-swapping. The service
-initializes one backend and all API/HomeKit calls go through the same command
-surface.
+The current code calls the target type `Input` because it represents GPIO LED
+inputs in the Telis backend. Rename it to `Channel` before adding the RTS
+backend so both hardware implementations share the correct domain vocabulary
+from the start.
 
 ```text
 RemoteControl
-  -> TelisBackend | RtsBackend
+  -> ActiveBackend::Fake | ActiveBackend::Telis | ActiveBackend::Rts
 ```
 
-The behavior split stays inside the selected backend:
+The active backend should expose one common execution shape:
+
+```rust
+pub struct CommandOutcome {
+    pub inferred_position: Option<u8>,
+}
+
+impl ActiveBackend {
+    async fn execute(&self, channel: Channel, command: Command) -> Result<CommandOutcome>;
+    fn current_selection(&self) -> Option<Channel>;
+    fn subscribe_selection(&self) -> Option<SelectionRx>;
+}
+```
+
+`current_selection` and `subscribe_selection` only have a value for the Telis
+backend, where the selected LED is a physical state that can change. The RTS
+backend has no selected LED and should return `None`.
+
+Telis behavior stays physical:
 
 ```text
-TelisBackend:
-  transmit(channel=L2, command=Up)
-    -> cycle SELECT until LED L2 is active
-    -> press UP GPIO
-
-RtsBackend:
-  transmit(channel=L2, command=Up)
-    -> load L2 virtual remote state
-    -> send RTS UP frame
-    -> increment and persist L2 rolling code
+transmit(channel=L2, command=Up)
+  -> cycle SELECT until LED L2 is active
+  -> press UP GPIO
 ```
 
-Live switching between backends is not supported — it would add coordination
-and state questions without real benefit.
+RTS behavior is virtual:
 
-Compile-time features control which backend implementations are included in the
-binary; runtime config selects exactly one active backend from the compiled set.
+```text
+transmit(channel=L2, command=Up)
+  -> load L2 virtual remote identity
+  -> allocate one rolling code
+  -> encode one RTS frame
+  -> transmit that frame plus repeats through CC1101
+```
+
+Live backend switching is intentionally unsupported. It adds state and
+coordination questions without a real deployment benefit.
+
+## Public API
+
+Use domain names in external JSON. Backward compatibility with the previous
+`led` payload name is not required.
+
+- `POST /command`: `{ "channel": "L2", "command": "up" }`.
+- `channel` is required for `up`, `down`, `my`, `stop`, and `prog`.
+- `select` is not a public command. It is an internal Telis implementation
+  detail used to reach the requested channel before pressing a physical button.
+- `stop` remains accepted as the UI spelling for the middle button. It maps to
+  RTS `My` and to the Telis physical `Stop` button.
+- `GET /state`: returns `{ "backend": "telis", "selection": "L2" }` for Telis
+  and `{ "backend": "rts", "selection": null }` for RTS.
+- `GET /events`: emits `selection` events only when the active backend has a
+  physical selection. Use JSON payloads such as `{ "channel": "L2" }`.
+
+HomeKit should use `Channel` and `Command` internally. Its external HomeKit
+accessory shape does not need to change.
+
+## Features
+
+Compile-time features describe what the binary can do. Runtime configuration
+selects the active backend from the compiled set.
 
 ```toml
 [features]
 default = ["fake"]
 fake = []
 telis = ["dep:gpiocdev"]
-rts = ["dep:spidev", "dep:gpiocdev"]  # gpiocdev for CC1101 data pin; swap for pigpio if scheduler jitter requires it
+rts = ["dep:spidev"]
 ```
 
-The current `hw` feature should not remain. Use explicit backend names so the
-binary's hardware capabilities are clear from the build command.
-
-If runtime config selects a backend that was not compiled in, startup should
-fail clearly:
+The current `hw` feature should be replaced with explicit backend names. If
+runtime config selects a backend that was not compiled in, startup should fail
+clearly:
 
 ```text
 backend "rts" was selected, but this binary was built without the "rts" feature
 ```
 
-## Requirements
+## Runtime Configuration
 
-- Confirm devices are Somfy RTS, not io-homecontrol.
-- Use a CC1101 transceiver module as the 433.42 MHz RF frontend, configured
-  over SPI. The data-path strategy (CC1101 packet/FIFO engine vs. async mode
-  with GPIO-driven waveform on the data pin) is unvalidated for Somfy RTS —
-  see Transmitter Notes.
-- Generate valid Somfy RTS 56-bit frames.
-- Maintain one virtual remote identity per channel (`remote_id` +
-  `rolling_code`).
-- Persist rolling codes atomically with a write-ahead buffer (see below).
-- Add a pairing flow using `PROG`.
+Keep the first implementation on clap arguments with environment fallbacks; do
+not add a config file until the setting surface grows.
 
-**Rolling code persistence.** Each frame increments the on-wire rolling code
-by `+1` (Somfy protocol requirement). To survive crashes and limit SD-card
-writes, persist `next_code + N` to disk up front and serve codes from RAM;
-re-persist only after burning through the buffer. ESPSomfy uses `N = 16`,
-which is a sensible default. A crash then loses at most `N` codes, which the
-motor's acceptance window absorbs without desync. Losing or rolling back the
-*persisted* value below the motor's last-seen code makes the virtual remote
-stop working until re-paired.
+| Setting         | CLI                               | Environment             | Default          |
+| --------------- | --------------------------------- | ----------------------- | ---------------- |
+| Active backend  | `somfy serve --backend rts`       | `SOMFY_BACKEND`         | `fake`           |
+| RTS SPI device  | `--rts-spi-device /dev/spidev0.0` | `SOMFY_RTS_SPI_DEVICE`  | `/dev/spidev0.0` |
+| RTS GDO0 GPIO   | `--rts-gdo0-gpio 18`              | `SOMFY_RTS_GDO0_GPIO`   | `18`             |
+| pigpiod address | `--pigpiod-addr 127.0.0.1:8888`   | `SOMFY_PIGPIOD_ADDR`    | `127.0.0.1:8888` |
+| RTS frame count | `--rts-frame-count 4`             | `SOMFY_RTS_FRAME_COUNT` | `4`              |
 
-Minimum viable command set: `Up`, `Down`, `My / Stop`, `Prog`. One virtual
-remote per channel (`L1`–`L4`, `ALL`), persisted as below. IDs are example
-values — generate randomly per install to avoid collision with other RTS
-networks in range.
+`somfy install --backend rts` should write the selected backend into the unit,
+preferably as `ExecStart=/usr/local/bin/somfy serve --backend rts`. Doctor
+should report the configured backend and run only the checks relevant to that
+backend.
+
+## Hardware Path
+
+Use a CC1101 module as the 433.42 MHz RF frontend. Configure it over SPI with
+`spidev`, then use CC1101 asynchronous serial mode so GDO0 is the OOK data
+input. The Pi drives GDO0 with a complete Somfy RTS pulse train.
+
+Default wiring assumptions:
+
+| CC1101 | Raspberry Pi                           |
+| ------ | -------------------------------------- |
+| VCC    | 3.3V only                              |
+| GND    | GND                                    |
+| SCLK   | SPI0 SCLK / BCM11                      |
+| MOSI   | SPI0 MOSI / BCM10                      |
+| MISO   | SPI0 MISO / BCM9                       |
+| CSN    | SPI0 CE0 / BCM8, `/dev/spidev0.0`      |
+| GDO0   | BCM18, configurable as `rts.gdo0_gpio` |
+
+Use BCM numbering everywhere in config, docs, and doctor output. The CC1101
+needs an antenna tuned for 433.42 MHz.
+
+Minimum CC1101 configuration target:
+
+- `PKTCTRL0.PKT_FORMAT = 0b11` for asynchronous serial mode.
+- ASK/OOK modulation. Do not enable CC1101 packet handling, whitening, CRC, or
+  radio-side Manchester handling; the application generates the full RTS pulse
+  train.
+- Frequency registers set for 433.42 MHz with the module's crystal frequency.
+- Initial raw data rate around 2.4 kBaud. This gives the CC1101 async input
+  sampler enough resolution for 640us half-symbols; validate the final register
+  values with a scope or SDR during hardware bring-up.
+- Strobe to TX only while a pigpio waveform is being transmitted, then return
+  the radio to idle.
+
+Use `pigpiod` waveforms for timing. `gpiocdev` is suitable for the Telis
+backend's millisecond button pulses, but RTS uses 640us Manchester half-symbols
+while the process also runs HTTP, SSE/WebSocket, and HomeKit. Timing should be
+owned by `pigpiod`, not by sleeps in the Rust async scheduler.
+
+Production installs should run `pigpiod` in localhost-only mode:
+
+```bash
+pigpiod -l
+```
+
+For the RTS backend, `somfy doctor` should check:
+
+- the selected backend was compiled into the binary;
+- the configured SPI device can be opened by the service user;
+- the configured GDO0 GPIO is a valid BCM GPIO number;
+- `pigpiod` is reachable at the configured localhost address;
+- the daemon appears to run in localhost-only mode.
+
+## pigpiod Client
+
+Implement a small local Rust client for the `pigpiod` socket interface. Do not
+link the direct `libpigpio` C interface into the service.
+
+The local client should expose only the commands needed by the RTS transmitter:
+
+- `MODES` / `WRITE`: prepare GDO0 as an output and set the idle level.
+- `WVCLR` / `WVNEW`: clear stale waveform state.
+- `WVAG`: upload a `gpioPulse_t[]` pulse train.
+- `WVCRE`: create a waveform and return its wave id.
+- `WVTX`: send the waveform once.
+- `WVBSY`: wait for waveform completion.
+- `WVDEL`: delete the created wave id after completion or failed start.
+- `WVHLT`: abort an in-flight waveform during shutdown.
+
+The socket protocol uses a fixed command struct. Encode the fields as
+little-endian `u32` values, matching the Raspberry Pi/pigpio command ABI:
+
+```text
+cmd: u32
+p1:  u32
+p2:  u32
+p3:  u32  # request extension length or response result
+```
+
+Commands with data, such as `WVAG`, append a binary extension after the command
+header. For this backend the only required extension is an array of pigpio
+pulses:
+
+```text
+gpioPulse_t {
+  gpioOn:  u32,
+  gpioOff: u32,
+  usDelay: u32,
+}
+```
+
+Keep all wave operations behind the RTS transmission mutex. `pigpiod` waveform
+construction and transmission state is global across clients, so concurrent
+wave construction can corrupt another command's waveform. Call `WVCLR` on
+backend startup to clean up stale waves from prior process exits.
+
+Per transmission, use:
+
+```text
+WVNEW -> WVAG -> WVCRE -> WVTX -> wait with WVBSY -> WVDEL
+```
+
+Always attempt `WVDEL` if `WVCRE` returned a wave id. Use `WVHLT` only for
+shutdown or explicit abort of an in-flight transmission.
+
+This keeps cross-compilation simple and preserves the one-binary deployment
+model; only the `pigpiod` daemon is required on the Pi.
+
+## RTS Protocol
+
+Confirm the motors are Somfy RTS, not io-homecontrol. The RTS backend only
+implements the 56-bit RTS frame format.
+
+Radio settings:
+
+- Frequency: 433.42 MHz.
+- Modulation: ASK/OOK.
+- Encoding: Manchester, rising edge is `1`, falling edge is `0`.
+- Payload length: 56 bits, transmitted MSB first.
+
+Minimum command set:
+
+| Command | RTS code | Notes                                        |
+| ------- | -------: | -------------------------------------------- |
+| `My`    |    `0x1` | Also used as Stop while the motor is moving. |
+| `Stop`  |    `0x1` | API alias for `My`.                          |
+| `Up`    |    `0x2` | Move up/open.                                |
+| `Down`  |    `0x4` | Move down/close.                             |
+| `Prog`  |    `0x8` | Pair or unpair a virtual remote.             |
+
+Unobfuscated frame layout:
+
+| Byte | Meaning                                  | Byte order                                                                                  |
+| ---: | ---------------------------------------- | ------------------------------------------------------------------------------------------- |
+|    0 | Key byte                                 | Use `0xA0` initially; lower nibble can be constant unless golden tests force another value. |
+|    1 | Command high nibble, checksum low nibble | Command is `rts_code << 4`.                                                                 |
+| 2..3 | Rolling code                             | Big-endian `u16`.                                                                           |
+| 4..6 | Remote address                           | Little-endian 24-bit ID.                                                                    |
+
+Checksum:
+
+1. Build the unobfuscated 7-byte frame with byte 1 low nibble set to `0`.
+2. XOR every byte and every byte shifted right by four.
+3. Keep the low nibble.
+4. OR the checksum into byte 1 low nibble.
+
+Obfuscation:
+
+```text
+for i in 1..7:
+  frame[i] = frame[i] ^ frame[i - 1]
+```
+
+The loop mutates in place, so `frame[i - 1]` is already obfuscated.
+
+## Rolling Codes
+
+Each channel has its own virtual remote identity:
 
 ```json
 {
-  "L1": { "id": 12345, "rolling_code": 1 },
-  "L2": { "id": 12346, "rolling_code": 1 },
-  "L3": { "id": 12347, "rolling_code": 1 },
-  "L4": { "id": 12348, "rolling_code": 1 },
-  "ALL": { "id": 12349, "rolling_code": 1 }
+  "schema_version": 1,
+  "channels": {
+    "L1": { "remote_id": 12345, "reserved_until": 1 },
+    "L2": { "remote_id": 12346, "reserved_until": 1 },
+    "L3": { "remote_id": 12347, "reserved_until": 1 },
+    "L4": { "remote_id": 12348, "reserved_until": 1 },
+    "ALL": { "remote_id": 12349, "reserved_until": 1 }
+  }
 }
 ```
 
-CC1101 is the 433.42 MHz RF frontend, configured over SPI (`spidev`). How the
-RTS waveform is fed to it is the open question.
+Generate random 24-bit remote IDs per install. Avoid `0` and avoid reusing an
+ID already present in the local RTS state file.
 
-**Two candidate data paths:**
+Rolling-code rules:
 
-1. **CC1101 packet/FIFO engine.** Configure CC1101 for OOK + Manchester at
-   ~1 kbps, write the encoded bytes to the TX FIFO, let the radio handle air
-   timing. Simplest if it works. Risk: CC1101's packet engine has fixed
-   preamble/sync formats and may not reproduce the Somfy wake-up burst,
-   hardware-sync, software-sync, and inter-frame-gap timings exactly.
-2. **CC1101 async mode + GPIO-driven waveform.** Configure CC1101 as a dumb
-   OOK transmitter; the Pi drives the data pin with precise microsecond
-   timing for the wake-up burst, sync pulses, Manchester payload, and gaps.
-   This is what real-world implementations (ESPSomfy-RTS and similar) do.
-   Requires a precise timing mechanism — `pigpiod` waveforms via `apigpio`,
-   or an equivalent — because `gpiocdev` alone is too coarse.
+- Allocate one rolling code per command press.
+- Repeat frames for the same press reuse the same rolling code.
+- Keep the next code to put on wire in memory as `next_on_wire`.
+- Increment `next_on_wire` only after a successful transmission.
+- Losing or rolling back the persisted value below the motor's last-seen code
+  can make the virtual remote stop working until re-paired.
 
-**Timing tolerance.** PushStack reports motors accept pulses 20% longer or
-15% shorter than nominal. With a 640us base pulse that is ±~100us of slack,
-which changes the calculus:
+Use a write-ahead buffer to reduce SD-card writes and survive crashes:
 
-- Path 1 (FIFO) is more plausible than worst-case analysis suggests — the
-  motor will likely accept CC1101 packet-engine output even if it doesn't
-  exactly reproduce the Somfy preamble shape.
-- Path 2 (GPIO async) does not strictly require `pigpiod`'s DMA precision.
-  User-space timing on a quiet Pi can hit ±100us; `pigpiod` remains the
-  safest choice under scheduler load (HTTP server, HomeKit, etc. all share
-  the process), but it is not the only viable mechanism.
+1. Keep `next_on_wire` in memory.
+2. Persist `reserved_until = next_on_wire + reserve_size` before using a new
+   reserve block.
+3. Serve codes from memory until the reserve block is exhausted.
+4. On restart, use persisted `reserved_until` as the new `next_on_wire`,
+   intentionally skipping any unused reserved codes.
 
-Plan path 2 as the default and use `pigpiod` if the simpler timing approach
-proves jittery under realistic load. Drop to path 1 only if a hardware spike
-confirms it works against real motors.
+Use `reserve_size = 16` as the initial default.
 
-**At backend startup, regardless of path:**
+Persist `$STATE_DIRECTORY/rts.json` with an atomic write: write a temporary file
+in the same directory, flush it, rename it over the old file, and flush the
+directory when the platform supports it. Create the file owned by the service
+user with mode `0600`.
 
-- Open `/dev/spidev0.0` and configure CC1101 registers for 433.42 MHz OOK.
-  Use ESPSomfy-RTS register values as the reference — they are validated
-  against real motors.
+## Pairing
 
-**Per transmission:**
+The RTS backend behaves like a new physical remote. A channel only works after
+that channel's virtual remote ID has been paired with the target motor or group.
 
-- Build the 7-byte RTS frame (encoder module).
-- Wrap with wake-up burst, hardware/software sync, Manchester encoding, and
-  repeat-with-gap.
-- Push to CC1101 via the chosen data path.
+Pairing flow:
 
-Serialize transmissions behind a mutex (one radio, one in-flight frame). The
-wired Telis backend keeps using `gpiocdev`.
+1. Put the motor or group into programming mode with an already-paired remote
+   or with the motor's physical programming control.
+2. Run `somfy rts prog L1` for the virtual channel that should control it.
+3. Test with `somfy rts send L1 up`, `down`, and `my`.
+4. Repeat for `L2`, `L3`, `L4`, and `ALL` as needed.
 
-## Test Strategy
+`ALL` is a separate virtual remote identity. Pair it with every motor or group
+that should react to the all-channel command. Deleting `rts.json` or changing a
+channel's `remote_id` means that channel must be paired again.
 
-Most of the backend can be tested before RF hardware arrives. Hardware testing
-should only need to validate RF range, wiring, and pairing.
+## Waveform
 
-**Golden tests** (frame encoding):
+Centralize RTS timing constants in one waveform module so hardware testing can
+tune them without touching the encoder or backend state logic.
 
-- Given a fixed command, remote ID, and rolling code, assert the generated
-  7-byte RTS frame matches known output from PushStack/homebridge-rpi-rts.
-  Checksum, obfuscation, and byte order are covered by the vectors.
+Initial default timings:
 
-If we end up on the GPIO-driven data path (likely — see Transmitter Notes),
-the wake-up burst, sync pulses, Manchester encoding, and repeat-with-gap are
-also our code and worth a structural test (right pulse counts, right gap
-durations) — but not byte-for-byte golden, since timing tolerances exist.
-SPI/FIFO mechanics and CC1101 register writes stay untested at the unit
-level; they only prove themselves on real hardware.
+| Segment                |  Duration |
+| ---------------------- | --------: |
+| Wake-up high           |  `9415us` |
+| Wake-up low            | `89565us` |
+| Hardware sync high     |  `2560us` |
+| Hardware sync low      |  `2560us` |
+| Software sync high     |  `4550us` |
+| Software sync low      |   `640us` |
+| Manchester half-symbol |   `640us` |
+| Inter-frame gap        | `30415us` |
 
-**Transmission abstraction** (integration tests):
+Frame sequence:
 
-```rust
-trait Transmission {
-    async fn send(&self, frame: &[u8]) -> Result<()>;
-}
-```
+1. First frame only: wake-up high, then wake-up low.
+2. Hardware sync: two high/low cycles for the first frame, seven high/low
+   cycles for repeats.
+3. Software sync: high, then low.
+4. 56 Manchester-encoded bits, MSB first.
+5. Inter-frame gap.
+
+For Manchester output:
+
+- Bit `1`: low for one half-symbol, then high for one half-symbol.
+- Bit `0`: high for one half-symbol, then low for one half-symbol.
+
+For pigpio pulses, use `1 << rts.gdo0_gpio` as the GPIO mask. `gpioOn` drives
+the CC1101 GDO0 data line high, `gpioOff` drives it low, and `usDelay` is the
+duration before the next pulse. Idle state is low.
+
+Default to four total frames per command press: one initial frame plus three
+repeat frames. Keep this as a configurable constant for hardware validation.
+
+## Backend Startup
+
+At RTS backend startup:
+
+1. Load or initialize RTS state from `$STATE_DIRECTORY/rts.json`.
+2. Open `/dev/spidev0.0`.
+3. Configure CC1101 for 433.42 MHz OOK asynchronous serial transmission.
+4. Connect to `pigpiod` on localhost.
+5. Clear stale pigpiod waves.
+6. Configure the Pi GPIO wired to CC1101 GDO0 as an output and drive it
+   idle-low.
+
+Serialize transmissions behind one mutex. The radio and pigpiod waveform state
+are single shared hardware resources.
+
+## Transmission Flow
 
 ```text
-RecordingTransmission -> stores frames in memory for tests
-LoggingTransmission   -> prints/debugs frames locally
-Cc1101Transmission    -> sends via CC1101 over SPI on real Raspberry Pi hardware
+RtsBackend::transmit(channel, command)
+  -> lock transmitter mutex
+  -> load channel state
+  -> reserve rolling-code block if needed
+  -> build 7-byte RTS frame
+  -> build pigpio pulse list
+  -> switch CC1101 to TX
+  -> WVNEW/WVAG/WVCRE through pigpiod socket
+  -> WVTX once
+  -> wait for WVBSY=false
+  -> WVDEL created wave id
+  -> switch CC1101 idle
+  -> advance in-memory rolling code
+  -> emit inferred position update for Up/Down
 ```
 
-**Persistence tests**:
+If waveform upload or transmission fails, do not advance the in-memory rolling
+code. Always attempt to delete a created wave id. The persisted reserve may
+still skip ahead on restart, which is safe.
 
-- Missing state initialization.
-- Independent rolling codes per logical channel.
-- Rolling code increments after a successful transmit.
-- Failed-transmit behavior is intentional and tested.
-- State writes are atomic.
+## Tests
+
+Most code is testable without RF hardware.
+
+Encoder tests:
+
+- Command code mapping.
+- Checksum generation.
+- Obfuscation.
+- Byte order for rolling code and remote ID.
+- Golden vectors from PushStack/homebridge-rpi-rts.
+
+Waveform tests:
+
+- First frame contains wake-up and two hardware sync cycles.
+- Repeat frames omit wake-up and contain seven hardware sync cycles.
+- Manchester pulse order for known bytes.
+- Total pulse count and total duration for a known frame.
+
+State tests:
+
+- Missing state initializes all channels.
+- Schema version is required and unknown versions fail clearly.
+- Remote IDs are independent per channel.
+- Rolling codes are independent per channel.
+- Reserve block persistence is atomic.
+- Failed transmit behavior does not advance in-memory `next_on_wire`.
+- Restart uses persisted `reserved_until` as the next on-wire code.
+
+API/domain tests:
+
+- `POST /command` accepts `channel` and rejects the old `led` field.
+- Public command parsing rejects `select`.
+- `stop` maps to the backend command used for the middle button.
+- RTS state reports `selection: null`.
+
+pigpiod client tests:
+
+- Encodes fixed command headers correctly.
+- Encodes `gpioPulse_t[]` extensions correctly.
+- Maps negative pigpio response codes into `anyhow` errors.
+- Serializes fake request/response streams for `WVNEW`, `WVAG`, `WVCRE`,
+  `WVTX`, `WVBSY`, and `WVDEL`.
+
+Hardware tests on a Pi still need to validate CC1101 wiring, RF range, pairing,
+and the exact timing constants.
 
 ## Implementation Path
 
-Hardware-on-Pi testing happens late — most of the work is offline-verifiable.
-Renames (`Input`→`Channel`, `Output`→`TelisButton`, `RemoteControl`→
-`Controller`) are housekeeping that can land alongside whichever phase is
-convenient.
-
-1. **Encoder + golden tests.** Rust RTS frame encoder. Golden tests for frame
-   bytes against PushStack/homebridge-rpi-rts known-good output. PushStack
-   notes the lower 4 bits of the key byte can be a constant zero instead of
-   being derived from the rolling code — pick the simpler form unless a
-   golden vector forces otherwise.
-2. **Persistence.** RTS state under `/var/lib/somfy`, separate from HomeKit
-   state. Atomic writes with the write-ahead-buffer scheme. Persistence tests
-   for rolling-code behavior.
-3. **Transmission abstraction + CLI.** `Transmission` trait with recording and
-   logging implementations. Tiny CLI:
+1. **Domain cleanup.** Rename `Input` to `Channel`, split Telis-specific GPIO
+   button names from backend commands, remove public `select`, and update
+   HTTP/WS/HomeKit internals to the new `channel` payload name. Backward
+   compatibility is not required for this deployment.
+2. **RTS encoder.** Implement the pure 7-byte encoder with golden tests.
+3. **RTS state.** Add versioned `$STATE_DIRECTORY/rts.json`, random remote IDs,
+   atomic writes, and rolling-code reservation.
+4. **Waveform builder.** Convert encoded frames into `gpioPulse_t`-style pulse
+   vectors with structural tests.
+5. **pigpiod socket client.** Implement the minimal command subset and fake
+   stream tests, including `WVDEL` cleanup.
+6. **CC1101 driver.** Configure SPI registers for 433.42 MHz async OOK and
+   expose TX/idle operations.
+7. **RTS CLI.** Add inspection and manual hardware commands:
 
    ```text
    somfy rts dump L1 up --format json
-   somfy rts prog L1
    somfy rts send L1 up | down | my
+   somfy rts prog L1
    ```
 
-4. **CC1101 driver.** SPI register setup (cribbed from ESPSomfy-RTS). Build
-   both data paths behind the `Transmission` trait if cheap; otherwise start
-   with the GPIO-driven path (path 2) as the safe default. Decide between
-   FIFO and GPIO-driven during the first hardware spike. The driver code
-   itself can be exercised against recording/logging fakes until a Pi with
-   CC1101 is available for end-to-end pairing.
-5. **Backend selection + cleanup.** Add startup-time `backend = "telis" | "rts"`
-   config. Wire RTS backend into `RemoteControl`. Replace the `hw` feature with
-   explicit `fake` / `telis` / `rts` features. Update hardware/install docs,
-   including CC1101 wiring and `spidev` enablement.
+8. **Backend selection.** Wire `RtsBackend` into `RemoteControl`, add runtime
+   config, and update install/doctor docs for CC1101, `spidev`, and `pigpiod`.
 
-## Best Resources
+## References
 
-1. PushStack Somfy RTS Protocol —
-   <https://pushstack.wordpress.com/somfy-rts-protocol/>
-
-   Best protocol explanation: frame format, checksum, obfuscation, timings,
-   rolling code, button codes.
-
-2. homebridge-rpi-rts —
-   <https://github.com/wibberryd/homebridge-rpi-rts/blob/master/RpiGpioRts.js>
-
-   Best minimal implementation. Shows the basic flow: load rolling code, build
-   frame, send waveform, increment and save.
-
-3. ESPSomfy-RTS — <https://github.com/rstrouse/ESPSomfy-RTS>
-
-   Best mature reference, and the source for CC1101 register values. Also
-   the reference for the GPIO-driven data path (CC1101 in async mode + timed
-   waveform on the data pin). Useful for robust RTS command handling,
-   pairing flows, and edge cases. Do not start by porting it — much larger
-   than needed.
-
-4. pigpio / `pigpiod_if2` — <https://github.com/joan2937/pigpio>
-
-   If the GPIO-driven CC1101 data path is the one we end up using, this is
-   the Raspberry Pi timing primitive. Drive it via `apigpio` (async Rust
-   client) or a small local FFI wrapper.
+- PushStack Somfy RTS Protocol:
+  <https://pushstack.wordpress.com/somfy-rts-protocol/>
+- homebridge-rpi-rts:
+  <https://github.com/wibberryd/homebridge-rpi-rts/blob/master/RpiGpioRts.js>
+- ESPSomfy-RTS:
+  <https://github.com/rstrouse/ESPSomfy-RTS>
+- pigpio:
+  <https://github.com/joan2937/pigpio>
+- pigs socket command reference:
+  <https://manpages.ubuntu.com/manpages/jammy/man1/pigs.1.html>
+- TI CC1101 datasheet:
+  <https://www.ti.com/lit/gpn/CC1101>
