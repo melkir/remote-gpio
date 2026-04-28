@@ -87,8 +87,9 @@ impl RemoteControl {
         Ok(self.complete_command(target, command))
     }
 
-    /// Run a command directly on `channel` without consulting or mutating the
-    /// public selected-channel state. Used by HomeKit and CLI-style callers.
+    /// Run a command directly on `channel`. RTS can do this without changing
+    /// public selection state; Telis may update selection because targeting a
+    /// channel requires moving the physical selector.
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
         self.backend.execute_on(channel, command).await?;
         Ok(self.complete_command(channel, command))

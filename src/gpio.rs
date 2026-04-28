@@ -5,7 +5,7 @@ use std::str::FromStr;
 use std::time::Duration;
 
 /// Logical remote target selected by the Telis LED row.
-#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Channel {
     L1 = 21,
     L2 = 20,
@@ -15,7 +15,7 @@ pub enum Channel {
 }
 
 /// Represents the Telis button GPIO pins driven by the wired backend.
-#[derive(Debug)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TelisButton {
     Select = 6,
     Down = 13,

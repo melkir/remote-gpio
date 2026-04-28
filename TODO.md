@@ -24,22 +24,22 @@ Track implementation progress for [docs/RTS_BACKEND.md](docs/RTS_BACKEND.md).
 - [x] Add `CommandOutcome` plumbing for inferred position updates.
 - [x] Implement stateful `execute(command)` for HTTP UI commands.
 - [x] Implement stateless `execute_on(channel, command)` for HomeKit and CLI commands.
-- [x] Ensure `execute_on` does not mutate or broadcast selected-channel state.
+- [x] Ensure `execute_on` has backend-specific selection semantics: RTS does not mutate selected-channel state; Telis may update/broadcast physical selection because targeting requires moving the real selector.
 
 ### Phase 3: RTS Pure Logic
 
-- [ ] Refine backend internals into controller + transport layers: backend controllers own command/selection semantics; transports perform concrete IO such as Telis GPIO presses, RTS waveform transmission, or logging/fake recording.
-- [ ] Add transport-level fakes/logging so tests can assert generated protocol operations without reimplementing backend behavior.
-- [ ] Add RTS command code mapping.
-- [ ] Implement 7-byte RTS frame encoding.
-- [ ] Implement checksum generation.
-- [ ] Implement frame obfuscation.
-- [ ] Add golden/unit tests for command codes, byte order, checksum, and obfuscation.
-- [ ] Add versioned `$STATE_DIRECTORY/rts.json` state.
-- [ ] Generate independent random 24-bit remote IDs per channel.
-- [ ] Persist and restore `selected_channel`.
-- [ ] Implement rolling-code reservation with atomic writes.
-- [ ] Add state tests for missing files, schema versions, independent codes, restart behavior, and failed transmit behavior.
+- [x] Refine backend internals into controller + transport layers: backend controllers own command/selection semantics; transports perform concrete IO such as Telis GPIO presses, RTS waveform transmission, or logging/fake recording.
+- [x] Add transport-level fakes/logging so tests can assert generated protocol operations without reimplementing backend behavior.
+- [x] Add RTS command code mapping.
+- [x] Implement 7-byte RTS frame encoding.
+- [x] Implement checksum generation.
+- [x] Implement frame obfuscation.
+- [x] Add golden/unit tests for command codes, byte order, checksum, and obfuscation.
+- [x] Add versioned `$STATE_DIRECTORY/rts.json` state.
+- [x] Generate independent random 24-bit remote IDs per channel.
+- [x] Persist and restore `selected_channel`.
+- [x] Implement rolling-code reservation with atomic writes.
+- [x] Add state tests for missing files, schema versions, independent codes, restart behavior, and failed transmit behavior.
 
 ### Phase 4: Waveform and Hardware Clients
 

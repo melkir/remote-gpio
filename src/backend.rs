@@ -1,8 +1,11 @@
 use anyhow::Result;
+use std::sync::Arc;
+use std::sync::Mutex as StdMutex;
+
 use tokio::sync::watch::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 
-use crate::gpio::Channel;
+use crate::gpio::{Channel, TelisButton};
 use crate::remote::Command;
 
 pub type SelectedChannelRx = Receiver<Channel>;
@@ -13,6 +16,13 @@ const MAX_SELECT_CYCLES: usize = 8;
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct CommandOutcome {
     pub inferred_position: Option<u8>,
+}
+
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum ProtocolOperation {
+    TelisButton(TelisButton),
+    TelisSelection(Channel),
+    FakeCommand { channel: Channel, command: Command },
 }
 
 #[derive(Debug)]
@@ -78,6 +88,7 @@ impl ActiveBackend {
 pub struct FakeBackend {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
+    transport: FakeTransport,
     execute_lock: Mutex<()>,
 }
 
@@ -88,24 +99,37 @@ impl FakeBackend {
         Self {
             sender,
             selected_rx,
+            transport: FakeTransport::new(),
             execute_lock: Mutex::new(()),
         }
     }
 
+    #[cfg(test)]
+    fn operations(&self) -> Vec<ProtocolOperation> {
+        self.transport.operations()
+    }
+
     async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
+        let target = channel.unwrap_or_else(|| self.selected_channel());
         match command {
             Command::Select => {
                 let channel = channel.unwrap_or_else(|| next_channel(self.selected_channel()));
                 self.sender.send(channel)?;
+                self.transport
+                    .record(ProtocolOperation::TelisSelection(channel))
+                    .await;
             }
-            Command::Up | Command::Down | Command::My | Command::Stop => {}
+            Command::Up | Command::Down | Command::My | Command::Stop => {
+                self.transport.send(target, command).await?;
+            }
         }
         Ok(())
     }
 
-    async fn execute_on(&self, _channel: Channel, _command: Command) -> Result<()> {
+    async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
+        self.transport.send(channel, command).await?;
         Ok(())
     }
 
@@ -118,11 +142,46 @@ impl FakeBackend {
     }
 }
 
+#[cfg(all(feature = "fake", not(feature = "hw")))]
+#[derive(Clone, Debug, Default)]
+struct FakeTransport {
+    operations: Arc<StdMutex<Vec<ProtocolOperation>>>,
+}
+
+#[cfg(all(feature = "fake", not(feature = "hw")))]
+impl FakeTransport {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    async fn send(&self, channel: Channel, command: Command) -> Result<()> {
+        self.record(ProtocolOperation::FakeCommand { channel, command })
+            .await;
+        Ok(())
+    }
+
+    async fn record(&self, operation: ProtocolOperation) {
+        self.operations
+            .lock()
+            .expect("fake transport mutex")
+            .push(operation);
+    }
+
+    #[cfg(test)]
+    fn operations(&self) -> Vec<ProtocolOperation> {
+        self.operations
+            .lock()
+            .expect("fake transport mutex")
+            .clone()
+    }
+}
+
 #[cfg(feature = "hw")]
 #[derive(Debug)]
 pub struct TelisBackend {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
+    transport: TelisGpioTransport,
     execute_lock: Mutex<()>,
 }
 
@@ -134,6 +193,7 @@ impl TelisBackend {
         Ok(Self {
             sender,
             selected_rx,
+            transport: TelisGpioTransport,
             execute_lock: Mutex::new(()),
         })
     }
@@ -145,9 +205,9 @@ impl TelisBackend {
         }
 
         match command {
-            Command::Up => trigger_button(crate::gpio::TelisButton::Up).await,
-            Command::Down => trigger_button(crate::gpio::TelisButton::Down).await,
-            Command::My | Command::Stop => trigger_button(crate::gpio::TelisButton::Stop).await,
+            Command::Up => self.transport.press(TelisButton::Up).await,
+            Command::Down => self.transport.press(TelisButton::Down).await,
+            Command::My | Command::Stop => self.transport.press(TelisButton::Stop).await,
             Command::Select => {
                 if channel.is_none() {
                     self.select_once(true).await.map(|_| ())
@@ -160,18 +220,14 @@ impl TelisBackend {
 
     async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
-        let previous = self.selected_channel();
-        self.select_from_to(previous, channel, false).await?;
+        self.select_to(channel, true).await?;
 
-        let result = match command {
-            Command::Up => trigger_button(crate::gpio::TelisButton::Up).await,
-            Command::Down => trigger_button(crate::gpio::TelisButton::Down).await,
-            Command::My | Command::Stop => trigger_button(crate::gpio::TelisButton::Stop).await,
+        match command {
+            Command::Up => self.transport.press(TelisButton::Up).await,
+            Command::Down => self.transport.press(TelisButton::Down).await,
+            Command::My | Command::Stop => self.transport.press(TelisButton::Stop).await,
             Command::Select => Ok(()),
-        };
-
-        let restore = self.select_from_to(channel, previous, false).await;
-        result.and(restore)
+        }
     }
 
     fn selected_channel(&self) -> Channel {
@@ -183,7 +239,7 @@ impl TelisBackend {
     }
 
     async fn select_once(&self, broadcast: bool) -> Result<Channel> {
-        let channel = trigger_select().await?;
+        let channel = self.transport.select().await?;
         if broadcast {
             self.sender.send(channel)?;
         }
@@ -216,19 +272,24 @@ impl TelisBackend {
 }
 
 #[cfg(feature = "hw")]
-async fn trigger_button(button: crate::gpio::TelisButton) -> Result<()> {
-    crate::gpio::trigger_output(button).await
-}
+#[derive(Clone, Debug)]
+struct TelisGpioTransport;
 
 #[cfg(feature = "hw")]
-async fn trigger_select() -> Result<Channel> {
-    tokio::spawn(async move {
-        if let Err(e) = crate::gpio::trigger_output(crate::gpio::TelisButton::Select).await {
-            tracing::error!("failed to trigger Telis select button: {e}");
-        }
-    });
+impl TelisGpioTransport {
+    async fn press(&self, button: TelisButton) -> Result<()> {
+        crate::gpio::trigger_output(button).await
+    }
 
-    crate::gpio::watch_inputs().await
+    async fn select(&self) -> Result<Channel> {
+        tokio::spawn(async move {
+            if let Err(e) = crate::gpio::trigger_output(TelisButton::Select).await {
+                tracing::error!("failed to trigger Telis select button: {e}");
+            }
+        });
+
+        crate::gpio::watch_inputs().await
+    }
 }
 
 #[cfg(all(feature = "fake", not(feature = "hw")))]
@@ -268,6 +329,10 @@ mod tests {
         rx.changed().await.unwrap();
         assert_eq!(*rx.borrow_and_update(), Channel::L3);
         assert_eq!(backend.selected_channel(), Channel::L3);
+        assert_eq!(
+            backend.operations(),
+            vec![ProtocolOperation::TelisSelection(Channel::L3)]
+        );
     }
 
     #[cfg(all(feature = "fake", not(feature = "hw")))]
@@ -280,6 +345,13 @@ mod tests {
 
         assert_eq!(backend.selected_channel(), Channel::L1);
         assert!(!rx.has_changed().unwrap());
+        assert_eq!(
+            backend.operations(),
+            vec![ProtocolOperation::FakeCommand {
+                channel: Channel::L3,
+                command: Command::Up
+            }]
+        );
     }
 
     #[test]

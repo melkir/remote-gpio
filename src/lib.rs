@@ -7,6 +7,7 @@ pub mod hap;
 pub mod homekit;
 pub mod logging;
 pub mod remote;
+pub mod rts;
 pub mod server;
 pub mod systemd;
 pub mod version;
