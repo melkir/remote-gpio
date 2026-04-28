@@ -63,7 +63,7 @@ binary; runtime config selects exactly one active backend from the compiled set.
 default = ["fake"]
 fake = []
 telis = ["dep:gpiocdev"]
-rts = ["dep:spidev", "dep:gpiocdev"]  # gpiocdev for the CC1101 data pin; timing crate TBD
+rts = ["dep:spidev", "dep:gpiocdev"]  # gpiocdev for CC1101 data pin; swap for pigpio if scheduler jitter requires it
 ```
 
 The current `hw` feature should not remain. Use explicit backend names so the
