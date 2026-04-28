@@ -38,6 +38,57 @@ sudo somfy upgrade
 
 The upgrade command pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
 
+### Backends
+
+`somfy` ships three backends, picked at install time:
+
+| Backend | Hardware                 | Use case                                                |
+| ------- | ------------------------ | ------------------------------------------------------- |
+| `fake`  | none                     | Local dev — logs commands, no hardware.                 |
+| `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote.  |
+| `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.     |
+
+Switch backends by reinstalling the unit (idempotent; only writes if it changed):
+
+```bash
+sudo somfy install --backend rts
+sudo systemctl restart somfy
+sudo somfy doctor
+```
+
+#### RTS backend
+
+The RTS backend transmits Somfy RTS frames directly through a CC1101 module. Each channel (`L1`–`L4` + `ALL`) is a separate virtual remote with its own 24-bit ID and rolling code, persisted to `/var/lib/somfy/rts.json`.
+
+Prereqs on the Pi:
+
+```bash
+sudo raspi-config            # enable SPI
+sudo apt install pigpio
+sudo systemctl enable pigpiod
+# Run pigpiod localhost-only:
+sudo systemctl edit pigpiod  # add ExecStart override: pigpiod -l
+sudo systemctl restart pigpiod
+```
+
+Pair each channel once (motor in programming mode, then):
+
+```bash
+sudo somfy rts prog L1
+sudo somfy rts send L1 up
+sudo somfy rts send L1 down
+sudo somfy rts send L1 my
+# repeat for L2, L3, L4, ALL as needed
+```
+
+Inspect a frame without transmitting:
+
+```bash
+sudo somfy rts dump L1 up --format json
+```
+
+Wiring and register details: [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-backend).
+
 ### API
 
 Server listens on `0.0.0.0:5002`.

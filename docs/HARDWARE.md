@@ -1,14 +1,16 @@
 # Hardware Notes
 
-A deeper look at how `somfy` is wired to the Somfy Telis 4 and how the backend turns GPIO edges into synchronized UI state. For a broader codebase tour, see [ARCHITECTURE.md](ARCHITECTURE.md).
+A deeper look at the two physical setups `somfy` supports — the wired Telis 4 backend and the CC1101 RTS radio backend — and how each turns hardware events into synchronized UI state. For a broader codebase tour, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Raspberry Pi ↔ Somfy Telis 4
+## Telis 4 backend (`--backend telis`)
+
+### Raspberry Pi ↔ Somfy Telis 4
 
 - **Outputs (Pi → Somfy):** simulate button presses (active-low pulses).
 - **Inputs (Somfy → Pi):** read the LED selection state.
 - **Power:** shared 3.3V and GND — no level shifting needed.
 
-### Connection Table
+#### Connection Table
 
 | Pi Pin | GPIO   | Direction | Somfy Point | Function              |
 | ------ | ------ | --------- | ----------- | --------------------- |
@@ -23,7 +25,7 @@ A deeper look at how `somfy` is wired to the Somfy Telis 4 and how the backend t
 | 36     | GPIO16 | Input     | LED3        | Selection indicator 3 |
 | 32     | GPIO12 | Input     | LED4        | Selection indicator 4 |
 
-### Wiring Diagram
+#### Wiring Diagram
 
 ```
   Raspberry Pi                          Somfy Telis 4
@@ -41,9 +43,9 @@ A deeper look at how `somfy` is wired to the Somfy Telis 4 and how the backend t
   └────────────────┘                   └─────────────┘
 ```
 
-## GPIO Implementation
+### GPIO Implementation
 
-### Output Pulses
+#### Output Pulses
 
 Outputs are driven as active-low pulses. The code asserts the line for ~60ms, then releases — mimicking a button tap.
 
@@ -62,7 +64,7 @@ pub async fn trigger_output(output: Output) -> Result<()> {
 }
 ```
 
-### Input Debouncing
+#### Input Debouncing
 
 The backend watches input lines with edge detection, collecting up to 16 events within a 300ms window:
 
@@ -79,6 +81,73 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 }
 // 16+ edges in 300ms = ALL, otherwise map last edge to L1-L4
 ```
+
+## CC1101 RTS backend (`--backend rts`)
+
+The RTS backend skips the wired remote and transmits Somfy RTS frames directly at 433.42 MHz. Each `Channel` (`L1`–`L4`, `ALL`) is a separate virtual remote with its own 24-bit ID and rolling-code counter persisted to `$STATE_DIRECTORY/rts.json`.
+
+### Wiring
+
+| CC1101 | Raspberry Pi                           | Notes                                    |
+| ------ | -------------------------------------- | ---------------------------------------- |
+| VCC    | 3.3V only                              | The CC1101 is **not** 5V tolerant.       |
+| GND    | GND                                    |                                          |
+| SCLK   | SPI0 SCLK / BCM11                      |                                          |
+| MOSI   | SPI0 MOSI / BCM10                      |                                          |
+| MISO   | SPI0 MISO / BCM9                       |                                          |
+| CSN    | SPI0 CE0 / BCM8 (`/dev/spidev0.0`)     |                                          |
+| GDO0   | BCM18 (configurable: `--rts-gdo0-gpio`) | Drives the OOK data line in async mode. |
+
+A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
+
+### Software path
+
+The Pi drives the CC1101 in async serial OOK mode and uses `pigpiod` waveforms to clock the Somfy pulse train onto GDO0. Each press emits four frames (one initial + three repeats), Manchester-encoded with 640 µs half-symbols.
+
+```
+RtsBackend::transmit(channel, command)
+  -> reserve rolling code (atomic write to rts.json on block boundaries)
+  -> encode 7-byte RTS frame (key, command/checksum, rolling code BE, remote ID LE)
+  -> obfuscate (XOR cascade)
+  -> build pigpio gpioPulse_t list
+  -> CC1101 SRES + STX
+  -> WVNEW / WVAG / WVCRE / WVTX, poll WVBSY, WVDEL
+  -> CC1101 SIDLE
+  -> commit rolling code in memory
+```
+
+CC1101, pigpiod TCP, and GDO0 are configured **once at backend startup** (`somfy serve --backend rts`); per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
+
+### Runtime configuration
+
+| Flag                  | Env                     | Default          |
+| --------------------- | ----------------------- | ---------------- |
+| `--rts-spi-device`    | `SOMFY_RTS_SPI_DEVICE`  | `/dev/spidev0.0` |
+| `--rts-gdo0-gpio`     | `SOMFY_RTS_GDO0_GPIO`   | `18`             |
+| `--pigpiod-addr`      | `SOMFY_PIGPIOD_ADDR`    | `127.0.0.1:8888` |
+| `--rts-frame-count`   | `SOMFY_RTS_FRAME_COUNT` | `4`              |
+
+`somfy doctor` validates SPI access, GDO0 BCM range, pigpiod reachability, pigpiod localhost-only mode, and `rts.json` schema.
+
+### Pairing
+
+Each channel is paired independently. With the motor in programming mode (already-paired remote, or motor's prog button):
+
+```bash
+sudo somfy rts prog L1
+sudo somfy rts send L1 up   # confirm direction
+```
+
+`ALL` is a separate virtual remote — pair it with every motor that should react to all-channel commands.
+
+### Bring-up checklist
+
+The CC1101 register set in `src/rts/cc1101.rs` is a starting point and has **not** been validated against a scope or SDR yet. Before relying on it:
+
+1. Confirm motors are Somfy RTS (not io-homecontrol).
+2. With `somfy serve --backend rts` running, scope GDO0 during a `rts send`. Wake-up should be ~9.4 ms high / ~89.6 ms low; Manchester half-symbols 640 µs.
+3. With an SDR (rtl-sdr, HackRF) tuned to 433.42 MHz, verify carrier presence and absence between frames.
+4. If pairing fails, capture frames with an existing real Somfy remote and compare obfuscated bytes — the encoder has golden tests, but key-byte values can vary by motor generation.
 
 ## Architecture
 
@@ -98,9 +167,9 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 │                  BACKEND (Axum/Tokio)                       │
 │                                                             │
 │  Routes:                                                    │
-│  ├─ GET /led      → Current LED selection                   │
+│  ├─ GET /channel  → Current channel selection               │
 │  ├─ POST /command → Execute button commands                 │
-│  ├─ GET /events   → Server-sent LED selection events        │
+│  ├─ GET /events   → Server-sent channel selection events    │
 │  ├─ GET /ws       → WebSocket upgrade                       │
 │  └─ /*            → Static files from dist/                 │
 │                                                             │

@@ -68,12 +68,12 @@ Track implementation progress for [docs/RTS_BACKEND.md](docs/RTS_BACKEND.md).
 
 ### Phase 6: Validation and Docs
 
-- [ ] Run `mise run check` after each major phase.
+- [x] Run `mise run check` after each major phase.
 - [ ] Validate SPI access on a Raspberry Pi.
 - [ ] Validate `pigpiod` connectivity and localhost-only mode.
 - [ ] Validate CC1101 register configuration with scope or SDR.
 - [ ] Validate RTS waveform timing constants with hardware.
 - [ ] Validate pairing and command behavior for `L1`, `L2`, `L3`, `L4`, and `ALL`.
-- [ ] Update `README.md` with RTS setup and pairing flow.
-- [ ] Update `docs/HARDWARE.md` with CC1101 wiring.
-- [ ] Update `docs/ARCHITECTURE.md` once the backend abstraction is stable.
+- [x] Update `README.md` with RTS setup and pairing flow.
+- [x] Update `docs/HARDWARE.md` with CC1101 wiring.
+- [x] Update `docs/ARCHITECTURE.md` once the backend abstraction is stable.
