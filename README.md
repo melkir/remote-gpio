@@ -42,19 +42,19 @@ The upgrade command pulls the latest stable release, swaps the binary, refreshes
 
 Server listens on `0.0.0.0:5002`.
 
-| Endpoint   | Method    | Description                            |
-| ---------- | --------- | -------------------------------------- |
-| `/ws`      | WebSocket | Real-time LED state + accepts commands |
-| `/events`  | GET       | SSE stream of LED selection changes    |
-| `/led`     | GET       | Current selection (`L1`-`L4` or `ALL`) |
-| `/command` | POST      | Execute command                        |
+| Endpoint   | Method    | Description                                  |
+| ---------- | --------- | -------------------------------------------- |
+| `/ws`      | WebSocket | Real-time selection state + accepts commands |
+| `/events`  | GET       | SSE stream of channel selection changes      |
+| `/channel` | GET       | Last channel selection                       |
+| `/command` | POST      | Execute command                              |
 
 ```json
 {"command": "up"}
 {"command": "down"}
 {"command": "stop"}
 {"command": "select"}
-{"command": "select", "led": "L3"}
+{"command": "select", "channel": "L3"}
 ```
 
 ### HomeKit

@@ -5,15 +5,15 @@ use tokio::sync::broadcast;
 use tokio::sync::watch::{self, Receiver, Sender};
 use tokio::sync::Mutex;
 
-use crate::gpio::{trigger_output, watch_inputs, Input, Output};
+use crate::gpio::{trigger_output, watch_inputs, Channel, TelisButton};
 
 const MAX_SELECT_CYCLES: usize = 8;
 
-pub type LedSelectionRx = Receiver<Input>;
+pub type SelectedChannelRx = Receiver<Channel>;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PositionUpdate {
-    pub led: Input,
+    pub channel: Channel,
     pub position: u8,
 }
 
@@ -21,6 +21,7 @@ pub struct PositionUpdate {
 pub enum Command {
     Up,
     Down,
+    My,
     Stop,
     Select,
 }
@@ -31,6 +32,7 @@ impl FromStr for Command {
         match s {
             "up" => Ok(Command::Up),
             "down" => Ok(Command::Down),
+            "my" => Ok(Command::My),
             "stop" => Ok(Command::Stop),
             "select" => Ok(Command::Select),
             _ => Err(anyhow::anyhow!("Invalid command: {}", s)),
@@ -39,14 +41,14 @@ impl FromStr for Command {
 }
 
 /// RemoteControl manages the state and operations of the remote control system.
-/// It handles LED selection and button commands while maintaining the current state.
+/// It handles channel selection and button commands while maintaining the current state.
 #[derive(Debug)]
 pub struct RemoteControl {
-    /// Sender for broadcasting LED state changes to all subscribers
-    sender: Sender<Input>,
-    /// Current LED selector state. This is a `watch` channel so new UI clients
+    /// Sender for broadcasting channel selection changes to all subscribers.
+    sender: Sender<Channel>,
+    /// Current channel selector state. This is a `watch` channel so new UI clients
     /// immediately receive the current selection.
-    selection_rx: LedSelectionRx,
+    selection_rx: SelectedChannelRx,
     /// Fan-out of completed Up/Down commands. This is a transient event stream
     /// used to mirror inferred blind position into HomeKit.
     position_tx: broadcast::Sender<PositionUpdate>,
@@ -54,16 +56,16 @@ pub struct RemoteControl {
     /// single critical section. Without this, concurrent callers (REST, WS,
     /// HAP) could interleave their `select()` cycles between another
     /// caller's target check and its Up/Down pulse, sending the command to
-    /// the wrong LED — and the post-completion broadcast could announce a
-    /// different LED again.
+    /// the wrong channel — and the post-completion broadcast could announce a
+    /// different channel again.
     execute_lock: Mutex<()>,
 }
 
 impl RemoteControl {
-    /// Creates a new RemoteControl instance and initializes the LED state
+    /// Creates a new RemoteControl instance and initializes the channel state
     pub async fn new() -> Result<Self> {
         let selection = Self::trigger_select().await?;
-        let (sender, receiver) = watch::channel::<Input>(selection);
+        let (sender, receiver) = watch::channel::<Channel>(selection);
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             sender,
@@ -73,14 +75,14 @@ impl RemoteControl {
         })
     }
 
-    /// Return the latest known LED selector state.
-    pub fn current_selection(&self) -> Input {
+    /// Return the latest known channel selector state.
+    pub fn current_selection(&self) -> Channel {
         *self.selection_rx.borrow()
     }
 
-    /// Subscribe to LED selector changes. New subscribers can immediately read
+    /// Subscribe to channel selector changes. New subscribers can immediately read
     /// the latest selection from the returned receiver.
-    pub fn subscribe_selection(&self) -> LedSelectionRx {
+    pub fn subscribe_selection(&self) -> SelectedChannelRx {
         self.selection_rx.clone()
     }
 
@@ -89,40 +91,41 @@ impl RemoteControl {
         self.position_tx.subscribe()
     }
 
-    /// Triggers the select button and returns the new LED selection
-    pub async fn select(&self) -> Result<Input> {
-        let led = Self::trigger_select().await?;
-        self.sender.send(led)?;
-        Ok(led)
+    /// Triggers the select button and returns the new channel selection.
+    pub async fn select(&self) -> Result<Channel> {
+        let channel = Self::trigger_select().await?;
+        self.sender.send(channel)?;
+        Ok(channel)
     }
 
     /// Triggers the up button command
     pub async fn up(&self) -> Result<()> {
-        trigger_output(Output::Up).await
+        trigger_output(TelisButton::Up).await
     }
 
     /// Triggers the down button command
     pub async fn down(&self) -> Result<()> {
-        trigger_output(Output::Down).await
+        trigger_output(TelisButton::Down).await
     }
 
-    /// Triggers the stop button command
-    pub async fn stop(&self) -> Result<()> {
-        trigger_output(Output::Stop).await
+    /// Triggers the Telis middle button. This is `My` for RTS and stop while
+    /// the blind is moving.
+    pub async fn my(&self) -> Result<()> {
+        trigger_output(TelisButton::Stop).await
     }
 
-    /// Cycle to `led` (if specified), then run `command`. Single entry point
+    /// Cycle to `channel` (if specified), then run `command`. Single entry point
     /// shared by REST, WebSocket, and HAP transports.
     ///
-    /// `Select` with `led=Some` is a no-op after the cycle; `Select` with
-    /// `led=None` triggers exactly one cycle tick.
+    /// `Select` with `channel=Some` is a no-op after the cycle; `Select` with
+    /// `channel=None` triggers exactly one cycle tick.
     ///
-    /// Holds `execute_lock` end-to-end so the LED selected at `up()`/`down()`
+    /// Holds `execute_lock` end-to-end so the channel selected at `up()`/`down()`
     /// time is the same one captured by the broadcast — concurrent callers
     /// queue rather than interleave.
-    pub async fn execute(&self, led: Option<Input>, command: Command) -> Result<()> {
+    pub async fn execute(&self, channel: Option<Channel>, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
-        if let Some(target) = led {
+        if let Some(target) = channel {
             let mut attempts = 0;
             while self.current_selection() != target {
                 if attempts >= MAX_SELECT_CYCLES {
@@ -135,9 +138,9 @@ impl RemoteControl {
         let outcome = match command {
             Command::Up => self.up().await,
             Command::Down => self.down().await,
-            Command::Stop => self.stop().await,
+            Command::My | Command::Stop => self.my().await,
             Command::Select => {
-                if led.is_none() {
+                if channel.is_none() {
                     self.select().await.map(|_| ())
                 } else {
                     Ok(())
@@ -152,7 +155,7 @@ impl RemoteControl {
             };
             if let Some(pos) = position {
                 let _ = self.position_tx.send(PositionUpdate {
-                    led: self.current_selection(),
+                    channel: self.current_selection(),
                     position: pos,
                 });
             }
@@ -160,11 +163,11 @@ impl RemoteControl {
         outcome
     }
 
-    /// Internal helper to trigger the select button and wait for LED selection
-    async fn trigger_select() -> Result<Input> {
+    /// Internal helper to trigger the select button and wait for channel selection.
+    async fn trigger_select() -> Result<Channel> {
         // Run button press and input watching concurrently
         tokio::spawn(async move {
-            trigger_output(Output::Select).await.unwrap();
+            trigger_output(TelisButton::Select).await.unwrap();
         });
 
         watch_inputs().await
@@ -179,6 +182,7 @@ mod tests {
     fn command_from_str_valid() {
         assert_eq!(Command::from_str("up").unwrap(), Command::Up);
         assert_eq!(Command::from_str("down").unwrap(), Command::Down);
+        assert_eq!(Command::from_str("my").unwrap(), Command::My);
         assert_eq!(Command::from_str("stop").unwrap(), Command::Stop);
         assert_eq!(Command::from_str("select").unwrap(), Command::Select);
     }

@@ -118,12 +118,13 @@ Use domain names in external JSON. Backward compatibility with the previous
   channel.
 - `stop` remains accepted as the UI spelling for the middle button. It maps to
   RTS `My` and to the Telis physical `Stop` button.
-- `GET /state`: returns `{ "backend": "telis", "selection": "L2" }` or
-  `{ "backend": "rts", "selection": "L2" }`. Both backends always report a
-  current selection.
+- `GET /channel`: returns the currently-selected channel as plain text, e.g.
+  `L2`. Both backends always report a current selection. The active backend is
+  intentionally not exposed over HTTP so the UI stays backend-agnostic;
+  `somfy doctor` reports the configured backend for diagnostics.
 - `GET /events`: emits `selection` events on both backends whenever the active
   channel changes, including from `select` commands and (Telis only) physical
-  remote presses. Use JSON payloads such as `{ "channel": "L2" }`.
+  remote presses. Event payloads are the plain channel name, e.g. `event.data === "L2"`.
 
 HomeKit should use `Channel` and `Command` internally. Its external HomeKit
 accessory shape does not need to change.
@@ -518,7 +519,7 @@ API/domain tests:
 - Directional commands (`up`, `down`, `my`, `stop`) target the currently-
   selected channel.
 - `stop` maps to the backend command used for the middle button.
-- Both backends report a non-null `selection` in `GET /state`.
+- `GET /channel` returns the current channel as plain text on both backends.
 - `execute_on(channel, command)` does not change `selected_channel` and does
   not emit a `selection` event.
 - Inferred position fans out to all paired channels when `ALL` is targeted.

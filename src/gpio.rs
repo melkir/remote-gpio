@@ -1,12 +1,12 @@
 use anyhow::Result;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::str::FromStr;
 use std::time::Duration;
 
-/// Represents the input GPIO pins for LED selection
-#[derive(Copy, Clone, Debug, Deserialize, PartialEq, Eq)]
-pub enum Input {
+/// Logical remote target selected by the Telis LED row.
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub enum Channel {
     L1 = 21,
     L2 = 20,
     L3 = 16,
@@ -14,50 +14,51 @@ pub enum Input {
     ALL,
 }
 
-/// Represents the output GPIO pins for button commands
+/// Represents the Telis button GPIO pins driven by the wired backend.
 #[derive(Debug)]
-pub enum Output {
+pub enum TelisButton {
     Select = 6,
     Down = 13,
     Stop = 19,
     Up = 26,
 }
 
-impl FromStr for Input {
+impl FromStr for Channel {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "L1" => Ok(Input::L1),
-            "L2" => Ok(Input::L2),
-            "L3" => Ok(Input::L3),
-            "L4" => Ok(Input::L4),
-            _ => Err(anyhow::anyhow!("Invalid input value: {}", s)),
+            "L1" => Ok(Channel::L1),
+            "L2" => Ok(Channel::L2),
+            "L3" => Ok(Channel::L3),
+            "L4" => Ok(Channel::L4),
+            "ALL" => Ok(Channel::ALL),
+            _ => Err(anyhow::anyhow!("Invalid channel value: {}", s)),
         }
     }
 }
 
-impl TryFrom<u32> for Input {
+impl TryFrom<u32> for Channel {
     type Error = anyhow::Error;
 
     fn try_from(value: u32) -> Result<Self, Self::Error> {
         match value {
-            21 => Ok(Input::L1),
-            20 => Ok(Input::L2),
-            16 => Ok(Input::L3),
-            12 => Ok(Input::L4),
-            _ => Err(anyhow::anyhow!("Invalid input value: {}", value)),
+            21 => Ok(Channel::L1),
+            20 => Ok(Channel::L2),
+            16 => Ok(Channel::L3),
+            12 => Ok(Channel::L4),
+            _ => Err(anyhow::anyhow!("Invalid channel value: {}", value)),
         }
     }
 }
 
-impl std::fmt::Display for Input {
+impl std::fmt::Display for Channel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Input::L1 => write!(f, "L1"),
-            Input::L2 => write!(f, "L2"),
-            Input::L3 => write!(f, "L3"),
-            Input::L4 => write!(f, "L4"),
-            Input::ALL => write!(f, "ALL"),
+            Channel::L1 => write!(f, "L1"),
+            Channel::L2 => write!(f, "L2"),
+            Channel::L3 => write!(f, "L3"),
+            Channel::L4 => write!(f, "L4"),
+            Channel::ALL => write!(f, "ALL"),
         }
     }
 }
@@ -74,12 +75,12 @@ mod hw {
 
     /// Monitors GPIO inputs for LED selection changes
     /// Returns the selected LED input or ALL if multiple inputs are detected
-    pub async fn watch_inputs() -> Result<Input> {
+    pub async fn watch_inputs() -> Result<Channel> {
         let offsets = [
-            Input::L1 as u32,
-            Input::L2 as u32,
-            Input::L3 as u32,
-            Input::L4 as u32,
+            Channel::L1 as u32,
+            Channel::L2 as u32,
+            Channel::L3 as u32,
+            Channel::L4 as u32,
         ];
 
         // Request multiple input lines with edge detection
@@ -100,7 +101,7 @@ mod hw {
         let mut event_count = 0;
 
         // Threshold: 4 inputs × 2 edges (rising + falling) × 2 transitions = 16 events.
-        // When all LEDs are lit (Input::ALL), every input toggles, producing many edges.
+        // When all LEDs are lit (Channel::ALL), every input toggles, producing many edges.
         const ALL_EVENTS_THRESHOLD: u32 = 16;
 
         // Collect events within the timeout period
@@ -115,15 +116,15 @@ mod hw {
 
         // Return ALL if multiple events detected, otherwise return the last event
         if event_count < ALL_EVENTS_THRESHOLD {
-            Input::try_from(last_event.unwrap())
+            Channel::try_from(last_event.unwrap())
         } else {
-            Ok(Input::ALL)
+            Ok(Channel::ALL)
         }
     }
 
-    /// Triggers an output GPIO pin for button commands
-    pub async fn trigger_output(output: Output) -> Result<()> {
-        tracing::debug!("Triggering output: {:?}", output);
+    /// Triggers a Telis button GPIO pin.
+    pub async fn trigger_output(output: TelisButton) -> Result<()> {
+        tracing::debug!("Triggering Telis button: {:?}", output);
         let offset = output as u32;
         let mut value = Value::Active;
 
@@ -154,16 +155,22 @@ mod hw {
     use std::sync::atomic::{AtomicU8, Ordering};
 
     static LED_INDEX: AtomicU8 = AtomicU8::new(0);
-    const LEDS: [Input; 5] = [Input::L1, Input::L2, Input::L3, Input::L4, Input::ALL];
+    const LEDS: [Channel; 5] = [
+        Channel::L1,
+        Channel::L2,
+        Channel::L3,
+        Channel::L4,
+        Channel::ALL,
+    ];
 
-    pub async fn watch_inputs() -> Result<Input> {
+    pub async fn watch_inputs() -> Result<Channel> {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let idx = LED_INDEX.fetch_add(1, Ordering::Relaxed) % LEDS.len() as u8;
         Ok(LEDS[idx as usize])
     }
 
-    pub async fn trigger_output(output: Output) -> Result<()> {
-        tracing::debug!("Fake triggering output: {:?}", output);
+    pub async fn trigger_output(output: TelisButton) -> Result<()> {
+        tracing::debug!("Fake triggering Telis button: {:?}", output);
         tokio::time::sleep(Duration::from_millis(60)).await;
         Ok(())
     }
@@ -176,40 +183,45 @@ mod tests {
     use super::*;
 
     #[test]
-    fn input_from_str_valid() {
-        assert_eq!(Input::from_str("L1").unwrap(), Input::L1);
-        assert_eq!(Input::from_str("L2").unwrap(), Input::L2);
-        assert_eq!(Input::from_str("L3").unwrap(), Input::L3);
-        assert_eq!(Input::from_str("L4").unwrap(), Input::L4);
+    fn channel_from_str_valid() {
+        assert_eq!(Channel::from_str("L1").unwrap(), Channel::L1);
+        assert_eq!(Channel::from_str("L2").unwrap(), Channel::L2);
+        assert_eq!(Channel::from_str("L3").unwrap(), Channel::L3);
+        assert_eq!(Channel::from_str("L4").unwrap(), Channel::L4);
+        assert_eq!(Channel::from_str("ALL").unwrap(), Channel::ALL);
     }
 
     #[test]
-    fn input_from_str_invalid() {
-        assert!(Input::from_str("L5").is_err());
-        assert!(Input::from_str("ALL").is_err());
-        assert!(Input::from_str("").is_err());
+    fn channel_from_str_invalid() {
+        assert!(Channel::from_str("L5").is_err());
+        assert!(Channel::from_str("").is_err());
     }
 
     #[test]
-    fn input_try_from_u32_valid() {
-        assert_eq!(Input::try_from(21u32).unwrap(), Input::L1);
-        assert_eq!(Input::try_from(20u32).unwrap(), Input::L2);
-        assert_eq!(Input::try_from(16u32).unwrap(), Input::L3);
-        assert_eq!(Input::try_from(12u32).unwrap(), Input::L4);
+    fn channel_try_from_u32_valid() {
+        assert_eq!(Channel::try_from(21u32).unwrap(), Channel::L1);
+        assert_eq!(Channel::try_from(20u32).unwrap(), Channel::L2);
+        assert_eq!(Channel::try_from(16u32).unwrap(), Channel::L3);
+        assert_eq!(Channel::try_from(12u32).unwrap(), Channel::L4);
     }
 
     #[test]
-    fn input_try_from_u32_invalid() {
-        assert!(Input::try_from(0u32).is_err());
-        assert!(Input::try_from(99u32).is_err());
+    fn channel_try_from_u32_invalid() {
+        assert!(Channel::try_from(0u32).is_err());
+        assert!(Channel::try_from(99u32).is_err());
     }
 
     #[test]
-    fn input_display_round_trip() {
-        for v in [Input::L1, Input::L2, Input::L3, Input::L4] {
+    fn channel_display_round_trip() {
+        for v in [
+            Channel::L1,
+            Channel::L2,
+            Channel::L3,
+            Channel::L4,
+            Channel::ALL,
+        ] {
             let s = v.to_string();
-            assert_eq!(Input::from_str(&s).unwrap(), v);
+            assert_eq!(Channel::from_str(&s).unwrap(), v);
         }
-        assert_eq!(Input::ALL.to_string(), "ALL");
     }
 }

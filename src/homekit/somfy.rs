@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::gpio::Input;
+use crate::gpio::Channel;
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWrite,
     CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture, HapStatus,
@@ -24,7 +24,7 @@ use crate::remote::{Command, PositionUpdate, RemoteControl};
 struct Blind {
     aid: u64,
     name: &'static str,
-    led: Input,
+    channel: Channel,
     serial: &'static str,
 }
 
@@ -34,31 +34,31 @@ const BLINDS: &[Blind] = &[
     Blind {
         aid: 2,
         name: "Blind 1",
-        led: Input::L1,
+        channel: Channel::L1,
         serial: "somfy-L1",
     },
     Blind {
         aid: 3,
         name: "Blind 2",
-        led: Input::L2,
+        channel: Channel::L2,
         serial: "somfy-L2",
     },
     Blind {
         aid: 4,
         name: "Blind 3",
-        led: Input::L3,
+        channel: Channel::L3,
         serial: "somfy-L3",
     },
     Blind {
         aid: 5,
         name: "Blind 4",
-        led: Input::L4,
+        channel: Channel::L4,
         serial: "somfy-L4",
     },
     Blind {
         aid: 6,
         name: "All Blinds",
-        led: Input::ALL,
+        channel: Channel::ALL,
         serial: "somfy-ALL",
     },
 ];
@@ -106,7 +106,7 @@ impl SomfyHapApp {
             match rx.recv().await {
                 Ok(update) => {
                     let changes = self
-                        .apply_position_for_input(update.led, update.position)
+                        .apply_position_for_channel(update.channel, update.position)
                         .await;
                     if !changes.is_empty() {
                         let _ = event_tx.send(changes);
@@ -128,8 +128,12 @@ impl SomfyHapApp {
             .collect()
     }
 
-    async fn apply_position_for_input(&self, led: Input, pos: u8) -> Vec<CharacteristicEvent> {
-        let Some(blind) = BLINDS.iter().find(|b| b.led == led) else {
+    async fn apply_position_for_channel(
+        &self,
+        channel: Channel,
+        pos: u8,
+    ) -> Vec<CharacteristicEvent> {
+        let Some(blind) = BLINDS.iter().find(|b| b.channel == channel) else {
             return Vec::new();
         };
         self.apply_position_change(blind, snap_position(pos)).await
@@ -141,10 +145,10 @@ impl SomfyHapApp {
     async fn apply_position_change(&self, blind: &Blind, snapped: u8) -> Vec<CharacteristicEvent> {
         let mut positions = self.positions.lock().await;
         if positions.get(&blind.aid).copied() == Some(snapped) {
-            let needs_propagate = matches!(blind.led, Input::ALL)
+            let needs_propagate = matches!(blind.channel, Channel::ALL)
                 && BLINDS
                     .iter()
-                    .filter(|b| !matches!(b.led, Input::ALL))
+                    .filter(|b| !matches!(b.channel, Channel::ALL))
                     .any(|b| positions.get(&b.aid).copied() != Some(snapped));
             if !needs_propagate {
                 return Vec::new();
@@ -250,7 +254,7 @@ impl HapAccessoryApp for SomfyHapApp {
                     Command::Down
                 };
                 self.remote_control
-                    .execute(Some(blind.led), command)
+                    .execute(Some(blind.channel), command)
                     .await
                     .map_err(|e| anyhow!(e))?;
 
@@ -390,10 +394,10 @@ fn snap_position(value: u8) -> u8 {
 }
 
 fn already_at_target(positions: &HashMap<u64, u8>, blind: &Blind, snapped: u8) -> bool {
-    if matches!(blind.led, Input::ALL) {
+    if matches!(blind.channel, Channel::ALL) {
         BLINDS
             .iter()
-            .filter(|b| !matches!(b.led, Input::ALL))
+            .filter(|b| !matches!(b.channel, Channel::ALL))
             .all(|b| positions.get(&b.aid).copied() == Some(snapped))
     } else {
         positions.get(&blind.aid).copied() == Some(snapped)
@@ -401,20 +405,20 @@ fn already_at_target(positions: &HashMap<u64, u8>, blind: &Blind, snapped: u8) -
 }
 
 fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snapped: u8) {
-    if matches!(changed.led, Input::ALL) {
-        for b in BLINDS.iter().filter(|b| !matches!(b.led, Input::ALL)) {
+    if matches!(changed.channel, Channel::ALL) {
+        for b in BLINDS.iter().filter(|b| !matches!(b.channel, Channel::ALL)) {
             positions.insert(b.aid, snapped);
         }
         return;
     }
     let individuals: Vec<&Blind> = BLINDS
         .iter()
-        .filter(|b| !matches!(b.led, Input::ALL))
+        .filter(|b| !matches!(b.channel, Channel::ALL))
         .collect();
     let all_match = individuals
         .iter()
         .all(|b| positions.get(&b.aid).copied() == Some(snapped));
-    let all_blind = BLINDS.iter().find(|b| matches!(b.led, Input::ALL));
+    let all_blind = BLINDS.iter().find(|b| matches!(b.channel, Channel::ALL));
     if let Some(all_blind) = all_blind {
         if all_match {
             positions.insert(all_blind.aid, snapped);
@@ -426,13 +430,13 @@ fn effective_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
     let Some(blind) = find_blind(aid) else {
         return 100;
     };
-    if !matches!(blind.led, Input::ALL) {
+    if !matches!(blind.channel, Channel::ALL) {
         return positions.get(&aid).copied().unwrap_or(100);
     }
 
     let mut individual_positions = BLINDS
         .iter()
-        .filter(|b| !matches!(b.led, Input::ALL))
+        .filter(|b| !matches!(b.channel, Channel::ALL))
         .map(|b| positions.get(&b.aid).copied());
     let Some(Some(first)) = individual_positions.next() else {
         return positions.get(&aid).copied().unwrap_or(100);
@@ -628,7 +632,7 @@ mod tests {
         assert_eq!(positions.get(&6), Some(&0));
 
         let all_blind = find_blind(6).unwrap();
-        assert!(matches!(all_blind.led, Input::ALL));
+        assert!(matches!(all_blind.channel, Channel::ALL));
         assert!(!already_at_target(&positions, all_blind, 0));
     }
 

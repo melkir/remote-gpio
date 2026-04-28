@@ -36,7 +36,10 @@ export function useSelectionEvents(url: string, options: Options = {}) {
     };
 
     es.addEventListener('selection', (event: MessageEvent<string>) => {
-      optsRef.current.onSelection?.(event.data);
+      const channel = event.data.trim();
+      if (channel) {
+        optsRef.current.onSelection?.(channel);
+      }
     });
 
     es.onerror = (event) => {
