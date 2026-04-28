@@ -2,7 +2,6 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::str::FromStr;
-use std::time::Duration;
 
 /// Logical remote target selected by the Telis LED row.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -63,14 +62,15 @@ impl std::fmt::Display for Channel {
     }
 }
 
-#[cfg(feature = "telis")]
-mod hw {
+#[cfg(all(feature = "telis", target_os = "linux"))]
+mod platform {
     use super::*;
     use anyhow::Context;
     use futures_util::StreamExt;
     use gpiocdev::line::EdgeDetection;
     use gpiocdev::tokio::AsyncRequest;
     use gpiocdev::{line::Value, Request};
+    use std::time::Duration;
     use std::time::Instant;
 
     /// Monitors GPIO inputs for LED selection changes
@@ -149,10 +149,24 @@ mod hw {
     }
 }
 
+#[cfg(all(feature = "telis", not(target_os = "linux")))]
+mod platform {
+    use super::*;
+
+    pub async fn watch_inputs() -> Result<Channel> {
+        anyhow::bail!("telis GPIO backend requires Linux")
+    }
+
+    pub async fn trigger_output(output: TelisButton) -> Result<()> {
+        anyhow::bail!("telis GPIO backend requires Linux; cannot trigger {output:?}")
+    }
+}
+
 #[cfg(not(feature = "telis"))]
-mod hw {
+mod platform {
     use super::*;
     use std::sync::atomic::{AtomicU8, Ordering};
+    use std::time::Duration;
 
     static LED_INDEX: AtomicU8 = AtomicU8::new(0);
     const LEDS: [Channel; 5] = [
@@ -176,7 +190,7 @@ mod hw {
     }
 }
 
-pub use hw::{trigger_output, watch_inputs};
+pub use platform::{trigger_output, watch_inputs};
 
 #[cfg(test)]
 mod tests {

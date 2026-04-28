@@ -39,12 +39,12 @@ run = [
 ]
 
 [tasks."check:rust"]
-description = "Rust validation (hw features, warnings denied)"
+description = "Rust validation (telis features, warnings denied)"
 depends = ["install:rust"]
 run = [
   "cargo fmt --all -- --check",
-  "cargo clippy --all-targets --no-default-features --features hw -- -D warnings",
-  "cargo test --all-targets --no-default-features --features hw",
+  "cargo clippy --all-targets --no-default-features --features telis -- -D warnings",
+  "cargo test --all-targets --no-default-features --features telis",
 ]
 
 [tasks."check:app"]
@@ -66,7 +66,7 @@ description = "Cross-compile for Raspberry Pi with cargo-zigbuild"
 depends = ["install"]
 run = [
   "bun --cwd=app run build",
-  "cargo zigbuild --release --no-default-features --features hw --target armv7-unknown-linux-gnueabihf.2.31",
+  "cargo zigbuild --release --no-default-features --features telis --target armv7-unknown-linux-gnueabihf.2.31",
 ]
 
 [tasks.release]
