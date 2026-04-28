@@ -28,7 +28,7 @@ RemoteControl
   -> ActiveBackend::Fake | ActiveBackend::Telis | ActiveBackend::Rts
 ```
 
-The active backend should expose one common execution shape:
+The active backend exposes two execution shapes plus selection state:
 
 ```rust
 pub struct CommandOutcome {
@@ -36,22 +36,53 @@ pub struct CommandOutcome {
 }
 
 impl ActiveBackend {
+    /// Stateful path: directs `command` at the current `selected_channel`.
+    /// Used by the HTTP `/command` handler. `Select` mutates selection.
     async fn execute(&self, command: Command) -> Result<CommandOutcome>;
-    fn current_selection(&self) -> Channel;
-    fn subscribe_selection(&self) -> SelectionRx;
+
+    /// Stateless path: directs `command` at `channel` without consulting or
+    /// mutating `selected_channel`. Used by HomeKit (one accessory per
+    /// channel) and the CLI. Does not emit a `selection` event.
+    async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome>;
+
+    fn selected_channel(&self) -> Channel;
+    fn subscribe_selected_channel(&self) -> SelectedChannelRx;
 }
 ```
 
-Both backends maintain a current selection and dispatch directional commands
-(`Up`, `Down`, `My`, `Prog`) to it. `Select` is a regular command that goes
-through `execute` like the others. On Telis it cycles the physical SELECT
-button until the requested LED is active; on RTS it is a zero-RF state update
-that mutates `selected_channel` and broadcasts a selection event.
+Both backends maintain a `selected_channel` and dispatch directional commands
+(`Up`, `Down`, `My`) through `execute` to that channel. `Select` is a regular
+command on the stateful path. On Telis it cycles the physical SELECT button
+until the requested LED is active; on RTS it is a zero-RF state update that
+mutates `selected_channel` and broadcasts a `selection` event.
+
+`Prog` is CLI-only and flows through `execute_on`. It is intentionally absent
+from the HTTP and HomeKit surfaces because pairing is a setup-time admin
+operation that should not be reachable from a generic UI tap.
+
+Call paths, outside in:
+
+| Caller      | Entry point           | Touches `selected_channel`? |
+| ----------- | --------------------- | --------------------------- |
+| HTTP UI     | `POST /command`       | yes (via `execute`)         |
+| HomeKit/CLI | `execute_on(ch, cmd)` | no                          |
+
+### Position Inference
+
+`CommandOutcome::inferred_position` is computed by `RemoteControl`, not by
+the backend. Backends only signal "I sent `Up`/`Down`/`My` to channel X"; the
+position estimator owns the time-based model and the per-channel state.
+
+`ALL` fans out at the position-tracking layer: a successful `Up`/`Down`/`My`
+to `ALL` updates the inferred position for every channel paired to react to
+all-channel commands (in practice, `L1` through `L4`), matching what the
+physical remote does over the air. The backend still emits exactly one frame
+on the wire.
 
 Telis behavior stays physical:
 
 ```text
-transmit(channel=L2, command=Up)
+execute_on(channel=L2, command=Up)
   -> cycle SELECT until LED L2 is active
   -> press UP GPIO
 ```
@@ -59,7 +90,7 @@ transmit(channel=L2, command=Up)
 RTS behavior is virtual:
 
 ```text
-transmit(channel=L2, command=Up)
+execute_on(channel=L2, command=Up)
   -> load L2 virtual remote identity
   -> allocate one rolling code
   -> encode one RTS frame
@@ -75,8 +106,9 @@ Use domain names in external JSON. Backward compatibility with the previous
 `led` payload name is not required.
 
 - `POST /command`: `{ "command": "up" }` for directional commands. Directional
-  commands (`up`, `down`, `my`, `stop`, `prog`) target the currently-selected
-  channel and do not take a `channel` field.
+  commands (`up`, `down`, `my`, `stop`) target the currently-selected channel
+  and do not take a `channel` field. `prog` is not exposed on the HTTP surface;
+  pairing happens through the CLI.
 - `POST /command`: `{ "command": "select", "channel": "L2" }` sets the active
   channel directly. `{ "command": "select" }` with no `channel` advances the
   selection one step through `L1 → L2 → L3 → L4 → ALL → L1`.
@@ -186,7 +218,9 @@ For the RTS backend, `somfy doctor` should check:
 - the configured SPI device can be opened by the service user;
 - the configured GDO0 GPIO is a valid BCM GPIO number;
 - `pigpiod` is reachable at the configured localhost address;
-- the daemon appears to run in localhost-only mode.
+- the daemon appears to run in localhost-only mode;
+- `$STATE_DIRECTORY/rts.json` is readable, owned by the service user, and
+  matches a supported `schema_version`.
 
 ## pigpiod Client
 
@@ -359,6 +393,26 @@ Pairing flow:
 that should react to the all-channel command. Deleting `rts.json` or changing a
 channel's `remote_id` means that channel must be paired again.
 
+## Backend Startup
+
+At RTS backend startup:
+
+1. Load or initialize RTS state from `$STATE_DIRECTORY/rts.json`, including
+   `selected_channel` (default `L1` if missing).
+2. Open `/dev/spidev0.0`.
+3. Configure CC1101 for 433.42 MHz OOK asynchronous serial transmission.
+4. Connect to `pigpiod` on localhost.
+5. Clear stale pigpiod waves.
+6. Configure the Pi GPIO wired to CC1101 GDO0 as an output and drive it
+   idle-low.
+
+Serialize RF transmissions behind one transmitter mutex. The radio and pigpiod
+waveform state are single shared hardware resources, so directional commands
+— and on Telis the `select` button cycle — must take this mutex. On RTS,
+`select` is a state-only operation that does not touch the radio; it acquires
+the state lock for `selected_channel` but skips the transmitter mutex so an
+in-flight Up/Down cannot delay a UI selection update.
+
 ## Waveform
 
 Centralize RTS timing constants in one waveform module so hardware testing can
@@ -398,23 +452,11 @@ duration before the next pulse. Idle state is low.
 Default to four total frames per command press: one initial frame plus three
 repeat frames. Keep this as a configurable constant for hardware validation.
 
-## Backend Startup
-
-At RTS backend startup:
-
-1. Load or initialize RTS state from `$STATE_DIRECTORY/rts.json`, including
-   `selected_channel` (default `L1` if missing).
-2. Open `/dev/spidev0.0`.
-3. Configure CC1101 for 433.42 MHz OOK asynchronous serial transmission.
-4. Connect to `pigpiod` on localhost.
-5. Clear stale pigpiod waves.
-6. Configure the Pi GPIO wired to CC1101 GDO0 as an output and drive it
-   idle-low.
-
-Serialize transmissions behind one mutex. The radio and pigpiod waveform state
-are single shared hardware resources.
-
 ## Transmission Flow
+
+`RtsBackend::transmit` is the internal RF function called by both `execute`
+(after resolving `selected_channel`) and `execute_on`. It does not consult or
+mutate selection state.
 
 ```text
 RtsBackend::transmit(channel, command)
@@ -430,7 +472,7 @@ RtsBackend::transmit(channel, command)
   -> WVDEL created wave id
   -> switch CC1101 idle
   -> advance in-memory rolling code
-  -> emit inferred position update for Up/Down
+  -> signal sent (channel, command) for position inference
 ```
 
 If waveform upload or transmission fails, do not advance the in-memory rolling
@@ -473,10 +515,13 @@ API/domain tests:
   field.
 - `select` with an explicit channel sets the selection.
 - `select` without a channel cycles `L1 → L2 → L3 → L4 → ALL → L1`.
-- Directional commands (`up`, `down`, `my`, `stop`, `prog`) target the
-  currently-selected channel.
+- Directional commands (`up`, `down`, `my`, `stop`) target the currently-
+  selected channel.
 - `stop` maps to the backend command used for the middle button.
 - Both backends report a non-null `selection` in `GET /state`.
+- `execute_on(channel, command)` does not change `selected_channel` and does
+  not emit a `selection` event.
+- Inferred position fans out to all paired channels when `ALL` is targeted.
 
 pigpiod client tests:
 
@@ -506,7 +551,9 @@ and the exact timing constants.
    stream tests, including `WVDEL` cleanup.
 6. **CC1101 driver.** Configure SPI registers for 433.42 MHz async OOK and
    expose TX/idle operations.
-7. **RTS CLI.** Add inspection and manual hardware commands:
+7. **RTS CLI.** Add inspection and manual hardware commands. CLI commands
+   take an explicit channel and route through `execute_on`, so they do not
+   change `selected_channel` or affect what the web UI has highlighted.
 
    ```text
    somfy rts dump L1 up --format json
