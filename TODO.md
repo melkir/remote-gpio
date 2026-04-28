@@ -43,14 +43,14 @@ Track implementation progress for [docs/RTS_BACKEND.md](docs/RTS_BACKEND.md).
 
 ### Phase 4: Waveform and Hardware Clients
 
-- [ ] Add RTS waveform builder that emits `gpioPulse_t`-style pulse vectors.
-- [ ] Add waveform tests for wake-up, sync cycles, Manchester ordering, pulse counts, and duration.
-- [ ] Implement minimal `pigpiod` socket client.
-- [ ] Support `MODES`, `WRITE`, `WVCLR`, `WVNEW`, `WVAG`, `WVCRE`, `WVTX`, `WVBSY`, `WVDEL`, and `WVHLT`.
-- [ ] Add fake stream tests for pigpio command encoding and error mapping.
-- [ ] Add CC1101 SPI driver behind the `rts` feature.
-- [ ] Configure CC1101 for 433.42 MHz ASK/OOK asynchronous serial transmission.
-- [ ] Expose CC1101 TX and idle operations.
+- [x] Add RTS waveform builder that emits `gpioPulse_t`-style pulse vectors.
+- [x] Add waveform tests for wake-up, sync cycles, Manchester ordering, pulse counts, and duration.
+- [x] Implement minimal `pigpiod` socket client.
+- [x] Support `MODES`, `WRITE`, `WVCLR`, `WVNEW`, `WVAG`, `WVCRE`, `WVTX`, `WVBSY`, `WVDEL`, and `WVHLT`.
+- [x] Add fake stream tests for pigpio command encoding and error mapping.
+- [x] Add CC1101 SPI driver behind the `rts` feature.
+- [x] Configure CC1101 for 433.42 MHz ASK/OOK asynchronous serial transmission.
+- [x] Expose CC1101 TX and idle operations.
 
 ### Phase 5: Runtime Wiring
 
