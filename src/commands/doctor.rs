@@ -3,6 +3,7 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::backend::BackendKind;
 use crate::systemd;
 use crate::version;
 
@@ -273,7 +274,27 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
     }
 
     // gpio_chip_accessible
-    checks.push(gpio_chip_check());
+    let configured_backend = on_disk
+        .as_deref()
+        .and_then(parse_backend)
+        .unwrap_or(BackendKind::Fake);
+    checks.push(Check {
+        id: "configured_backend",
+        label: "Backend",
+        status: Status::Ok,
+        detail: Some(configured_backend.to_string()),
+    });
+    checks.push(compiled_backend_check(configured_backend));
+    match configured_backend {
+        BackendKind::Telis => checks.push(gpio_chip_check()),
+        BackendKind::Rts => checks.extend(rts_checks()),
+        BackendKind::Fake => checks.push(Check {
+            id: "gpio_chip_accessible",
+            label: "GPIO",
+            status: Status::Skipped,
+            detail: Some("fake backend selected".into()),
+        }),
+    }
 
     // updates_available
     checks.push(updates_check(network_timeout_ms).await);
@@ -309,7 +330,10 @@ fn render_expected_unit() -> Option<String> {
             .flatten()
             .map(|u| u.name)
     })?;
-    Some(crate::commands::install::render_unit(&user, BIN_PATH))
+    Some(crate::commands::install::render_unit(
+        &user,
+        &format!("{BIN_PATH} serve --backend fake"),
+    ))
 }
 
 fn exec_start_matches(unit: &str) -> bool {
@@ -324,6 +348,24 @@ fn exec_start_matches(unit: &str) -> bool {
         // Allow flags after "serve" (e.g. "serve --verbose")
         args.split_whitespace().next() == Some("serve")
     })
+}
+
+fn parse_backend(unit: &str) -> Option<BackendKind> {
+    let exec = unit
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("ExecStart="))?;
+    let mut args = exec.split_whitespace();
+    while let Some(arg) = args.next() {
+        if arg == "--backend" {
+            return match args.next()? {
+                "fake" => Some(BackendKind::Fake),
+                "telis" => Some(BackendKind::Telis),
+                "rts" => Some(BackendKind::Rts),
+                _ => None,
+            };
+        }
+    }
+    Some(BackendKind::Fake)
 }
 
 fn parse_service_user(unit: &str) -> Option<String> {
@@ -343,7 +385,7 @@ fn user_in_group(user: &str, group: &str) -> Result<bool> {
     Ok(u.gid == g.gid)
 }
 
-#[cfg(feature = "hw")]
+#[cfg(feature = "telis")]
 fn gpio_chip_check() -> Check {
     match std::fs::OpenOptions::new()
         .read(true)
@@ -364,13 +406,54 @@ fn gpio_chip_check() -> Check {
     }
 }
 
-#[cfg(not(feature = "hw"))]
+fn compiled_backend_check(backend: BackendKind) -> Check {
+    let compiled = match backend {
+        BackendKind::Fake => cfg!(feature = "fake"),
+        BackendKind::Telis => cfg!(feature = "telis"),
+        BackendKind::Rts => cfg!(feature = "rts"),
+    };
+    Check {
+        id: "backend_compiled",
+        label: "Backend feature",
+        status: if compiled {
+            Status::Ok
+        } else {
+            Status::Blocking
+        },
+        detail: if compiled {
+            None
+        } else {
+            Some(format!(
+                "backend \"{backend}\" selected but this binary was built without the \"{backend}\" feature"
+            ))
+        },
+    }
+}
+
+fn rts_checks() -> Vec<Check> {
+    vec![
+        Check {
+            id: "rts_spi_device",
+            label: "RTS SPI",
+            status: Status::Unknown,
+            detail: Some("validated at RTS backend startup".into()),
+        },
+        Check {
+            id: "pigpiod",
+            label: "pigpiod",
+            status: Status::Unknown,
+            detail: Some("validated at RTS backend startup".into()),
+        },
+    ]
+}
+
+#[cfg(not(feature = "telis"))]
 fn gpio_chip_check() -> Check {
     Check {
         id: "gpio_chip_accessible",
         label: "GPIO",
         status: Status::Skipped,
-        detail: Some("fake hardware feature".into()),
+        detail: Some("telis backend feature not enabled".into()),
     }
 }
 

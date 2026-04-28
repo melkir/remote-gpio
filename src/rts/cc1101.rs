@@ -1,4 +1,6 @@
 use anyhow::Result;
+use std::fs::File;
+use std::io::Write;
 
 const WRITE_BURST: u8 = 0x40;
 
@@ -27,6 +29,13 @@ const FREQ_433_42_26MHZ: [u8; 3] = [0x10, 0xAB, 0x85];
 
 pub trait SpiDevice {
     fn write(&mut self, bytes: &[u8]) -> Result<()>;
+}
+
+impl SpiDevice for File {
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        Write::write_all(self, bytes)?;
+        Ok(())
+    }
 }
 
 #[derive(Debug)]

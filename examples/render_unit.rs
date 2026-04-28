@@ -4,6 +4,6 @@ fn main() {
     let exec = args
         .get(1)
         .map(String::as_str)
-        .unwrap_or("/usr/local/bin/somfy");
+        .unwrap_or("/usr/local/bin/somfy serve --backend fake");
     print!("{}", somfy::commands::install::render_unit(user, exec));
 }

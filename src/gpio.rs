@@ -63,7 +63,7 @@ impl std::fmt::Display for Channel {
     }
 }
 
-#[cfg(feature = "hw")]
+#[cfg(feature = "telis")]
 mod hw {
     use super::*;
     use anyhow::Context;
@@ -149,7 +149,7 @@ mod hw {
     }
 }
 
-#[cfg(all(feature = "fake", not(feature = "hw")))]
+#[cfg(not(feature = "telis"))]
 mod hw {
     use super::*;
     use std::sync::atomic::{AtomicU8, Ordering};

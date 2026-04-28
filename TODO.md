@@ -54,17 +54,17 @@ Track implementation progress for [docs/RTS_BACKEND.md](docs/RTS_BACKEND.md).
 
 ### Phase 5: Runtime Wiring
 
-- [ ] Replace Cargo feature `hw` with explicit `fake`, `telis`, and `rts` features.
-- [ ] Add `somfy serve --backend` with `SOMFY_BACKEND` fallback.
-- [ ] Add RTS runtime options for SPI device, GDO0 GPIO, pigpiod address, and frame count.
-- [ ] Fail startup clearly when a selected backend was not compiled into the binary.
-- [ ] Wire `RtsBackend` into `RemoteControl`.
-- [ ] Add `somfy rts dump CHANNEL COMMAND --format json`.
-- [ ] Add `somfy rts send CHANNEL up|down|my`.
-- [ ] Add `somfy rts prog CHANNEL`.
-- [ ] Route RTS CLI commands through `execute_on`.
-- [ ] Update `somfy install --backend rts` to write the selected backend into the unit.
-- [ ] Update `somfy doctor` with backend-specific checks.
+- [x] Replace Cargo feature `hw` with explicit `fake`, `telis`, and `rts` features.
+- [x] Add `somfy serve --backend` with `SOMFY_BACKEND` fallback.
+- [x] Add RTS runtime options for SPI device, GDO0 GPIO, pigpiod address, and frame count.
+- [x] Fail startup clearly when a selected backend was not compiled into the binary.
+- [x] Wire `RtsBackend` into `RemoteControl`.
+- [x] Add `somfy rts dump CHANNEL COMMAND --format json`.
+- [x] Add `somfy rts send CHANNEL up|down|my`.
+- [x] Add `somfy rts prog CHANNEL`.
+- [x] Route RTS CLI commands through `execute_on`.
+- [x] Update `somfy install --backend rts` to write the selected backend into the unit.
+- [x] Update `somfy doctor` with backend-specific checks.
 
 ### Phase 6: Validation and Docs
 

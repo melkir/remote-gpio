@@ -32,6 +32,7 @@ impl TryFrom<Command> for RtsCommand {
             Command::My | Command::Stop => Ok(Self::My),
             Command::Up => Ok(Self::Up),
             Command::Down => Ok(Self::Down),
+            Command::Prog => Ok(Self::Prog),
             Command::Select => bail!("select is not an RTS radio command"),
         }
     }

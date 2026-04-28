@@ -4,6 +4,7 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 
+use crate::backend::BackendKind;
 use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
 use crate::commands::upgrade::BIN_PREV;
 use crate::homekit::config;
@@ -17,7 +18,7 @@ pub fn render_unit(service_user: &str, exec_start: &str) -> String {
         .replace("{{EXEC_START}}", exec_start)
 }
 
-pub fn run(user_override: Option<String>) -> Result<()> {
+pub fn run(user_override: Option<String>, backend: BackendKind) -> Result<()> {
     require_root()?;
 
     let service_user = resolve_service_user(user_override)?;
@@ -40,7 +41,10 @@ pub fn run(user_override: Option<String>) -> Result<()> {
         );
     }
 
-    let rendered = render_unit(&service_user, BIN_PATH);
+    let rendered = render_unit(
+        &service_user,
+        &format!("{BIN_PATH} serve --backend {backend}"),
+    );
 
     let unit_path = Path::new(UNIT_PATH);
     let on_disk = fs::read_to_string(unit_path).ok();
@@ -62,6 +66,31 @@ pub fn run(user_override: Option<String>) -> Result<()> {
     systemd::systemctl(&["enable", "--now", "somfy"])?;
     println!("somfy installed as {service_user}, service enabled");
     Ok(())
+}
+
+pub fn installed_backend() -> BackendKind {
+    fs::read_to_string(UNIT_PATH)
+        .ok()
+        .and_then(|unit| parse_backend_from_unit(&unit))
+        .unwrap_or(BackendKind::Fake)
+}
+
+fn parse_backend_from_unit(unit: &str) -> Option<BackendKind> {
+    let exec = unit
+        .lines()
+        .find_map(|line| line.trim().strip_prefix("ExecStart="))?;
+    let mut args = exec.split_whitespace();
+    while let Some(arg) = args.next() {
+        if arg == "--backend" {
+            return match args.next()? {
+                "fake" => Some(BackendKind::Fake),
+                "telis" => Some(BackendKind::Telis),
+                "rts" => Some(BackendKind::Rts),
+                _ => None,
+            };
+        }
+    }
+    Some(BackendKind::Fake)
 }
 
 fn require_root() -> Result<()> {
@@ -132,10 +161,10 @@ mod tests {
 
     #[test]
     fn render_unit_substitutes_placeholders() {
-        let out = render_unit("pi", "/usr/local/bin/somfy");
+        let out = render_unit("pi", "/usr/local/bin/somfy serve --backend rts");
         assert!(out.contains("User=pi"));
         assert!(out.contains("Group=gpio"));
-        assert!(out.contains("ExecStart=/usr/local/bin/somfy serve"));
+        assert!(out.contains("ExecStart=/usr/local/bin/somfy serve --backend rts"));
         assert!(!out.contains("{{SERVICE_USER}}"));
         assert!(!out.contains("{{EXEC_START}}"));
     }

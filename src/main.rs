@@ -1,6 +1,6 @@
 use anyhow::Result;
 use clap::Parser;
-use somfy::cli::{Cli, Command};
+use somfy::cli::{Cli, Command, ServeArgs};
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
@@ -11,9 +11,9 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cli = Cli::parse();
-    match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => somfy::commands::serve::run().await,
-        Command::Install { user } => somfy::commands::install::run(user),
+    match cli.command.unwrap_or(Command::Serve(ServeArgs::default())) {
+        Command::Serve(args) => somfy::commands::serve::run(args).await,
+        Command::Install { user, backend } => somfy::commands::install::run(user, backend),
         Command::Upgrade {
             channel,
             version,
@@ -23,5 +23,6 @@ async fn main() -> Result<()> {
         Command::Uninstall => somfy::commands::uninstall::run().await,
         Command::Restart => somfy::commands::restart::run(),
         Command::Homekit { command } => somfy::commands::homekit::run(command),
+        Command::Rts { command, options } => somfy::commands::rts::run(command, options).await,
     }
 }

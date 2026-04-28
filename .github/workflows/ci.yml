@@ -28,7 +28,7 @@ jobs:
           tmp="$(mktemp -d)"
           cp /bin/true "$tmp/somfy"
           getent group gpio >/dev/null || sudo groupadd gpio
-          cargo run --quiet --no-default-features --features hw --example render_unit -- "$USER" "$tmp/somfy" > "$tmp/somfy.service"
+          cargo run --quiet --no-default-features --features telis --example render_unit -- "$USER" "$tmp/somfy serve --backend telis" > "$tmp/somfy.service"
           systemd-analyze verify --no-pager "$tmp/somfy.service"
 
   app:

@@ -39,6 +39,7 @@ impl TelisBackend {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::My | Command::Stop => self.transport.press(TelisButton::Stop).await,
+            Command::Prog => anyhow::bail!("prog is not supported by the telis backend"),
             Command::Select => {
                 if channel.is_none() {
                     self.select_once(true).await.map(|_| ())
@@ -57,6 +58,7 @@ impl TelisBackend {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::My | Command::Stop => self.transport.press(TelisButton::Stop).await,
+            Command::Prog => anyhow::bail!("prog is not supported by the telis backend"),
             Command::Select => Ok(()),
         }
     }

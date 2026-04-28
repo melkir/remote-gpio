@@ -19,6 +19,7 @@ pub enum Command {
     My,
     Stop,
     Select,
+    Prog,
 }
 
 impl FromStr for Command {
@@ -30,6 +31,7 @@ impl FromStr for Command {
             "my" => Ok(Command::My),
             "stop" => Ok(Command::Stop),
             "select" => Ok(Command::Select),
+            "prog" => Ok(Command::Prog),
             _ => Err(anyhow::anyhow!("Invalid command: {}", s)),
         }
     }
@@ -48,7 +50,16 @@ pub struct RemoteControl {
 impl RemoteControl {
     /// Creates a new RemoteControl instance and initializes the channel state
     pub async fn new() -> Result<Self> {
-        let backend = ActiveBackend::new().await?;
+        let backend = ActiveBackend::new(Default::default()).await?;
+        let (position_tx, _) = broadcast::channel(64);
+        Ok(Self {
+            backend,
+            position_tx,
+        })
+    }
+
+    pub async fn with_backend(config: crate::backend::BackendConfig) -> Result<Self> {
+        let backend = ActiveBackend::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             backend,
@@ -115,6 +126,7 @@ mod tests {
         assert_eq!(Command::from_str("my").unwrap(), Command::My);
         assert_eq!(Command::from_str("stop").unwrap(), Command::Stop);
         assert_eq!(Command::from_str("select").unwrap(), Command::Select);
+        assert_eq!(Command::from_str("prog").unwrap(), Command::Prog);
     }
 
     #[test]

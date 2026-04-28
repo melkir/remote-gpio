@@ -1,5 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 
+use crate::backend::BackendKind;
+use crate::backend::RtsOptions;
+use crate::gpio::Channel;
+
 #[derive(Parser, Debug)]
 #[command(
     name = "somfy",
@@ -18,12 +22,15 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Run the HTTP/SSE/WebSocket server (default)
-    Serve,
+    Serve(ServeArgs),
     /// Install or refresh the systemd unit
     Install {
         /// Override the service user (required when running as root without SUDO_USER)
         #[arg(long)]
         user: Option<String>,
+        /// Backend to write into the systemd unit
+        #[arg(long, value_enum, default_value_t = BackendKind::Fake)]
+        backend: BackendKind,
     },
     /// Upgrade to a newer release
     Upgrade {
@@ -52,6 +59,69 @@ pub enum Command {
         #[command(subcommand)]
         command: HomekitCommand,
     },
+    /// Inspect or transmit RTS frames
+    Rts {
+        #[command(subcommand)]
+        command: RtsCliCommand,
+        #[command(flatten)]
+        options: RtsArgs,
+    },
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct ServeArgs {
+    /// Active backend implementation
+    #[arg(long, env = "SOMFY_BACKEND", value_enum, default_value_t = BackendKind::Fake)]
+    pub backend: BackendKind,
+    #[command(flatten)]
+    pub rts: RtsArgs,
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct RtsArgs {
+    /// RTS SPI device for CC1101
+    #[arg(long, env = "SOMFY_RTS_SPI_DEVICE", default_value = "/dev/spidev0.0")]
+    pub rts_spi_device: String,
+    /// BCM GPIO connected to CC1101 GDO0
+    #[arg(long, env = "SOMFY_RTS_GDO0_GPIO", default_value_t = 18)]
+    pub rts_gdo0_gpio: u8,
+    /// pigpiod socket address
+    #[arg(long, env = "SOMFY_PIGPIOD_ADDR", default_value = "127.0.0.1:8888")]
+    pub pigpiod_addr: String,
+    /// RTS frame count per command press
+    #[arg(long, env = "SOMFY_RTS_FRAME_COUNT", default_value_t = 4)]
+    pub rts_frame_count: usize,
+}
+
+impl From<RtsArgs> for RtsOptions {
+    fn from(args: RtsArgs) -> Self {
+        Self {
+            spi_device: args.rts_spi_device,
+            gdo0_gpio: args.rts_gdo0_gpio,
+            pigpiod_addr: args.pigpiod_addr,
+            frame_count: args.rts_frame_count,
+        }
+    }
+}
+
+impl Default for ServeArgs {
+    fn default() -> Self {
+        Self {
+            backend: BackendKind::Fake,
+            rts: RtsArgs::default(),
+        }
+    }
+}
+
+impl Default for RtsArgs {
+    fn default() -> Self {
+        Self {
+            rts_spi_device: "/dev/spidev0.0".to_string(),
+            rts_gdo0_gpio: 18,
+            pigpiod_addr: "127.0.0.1:8888".to_string(),
+            rts_frame_count: 4,
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]
@@ -84,4 +154,34 @@ pub enum HomekitCommand {
         /// Controller identifier from `somfy homekit pairings`
         identifier: String,
     },
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RtsCliCommand {
+    /// Print an RTS frame and waveform summary without transmitting
+    Dump {
+        channel: Channel,
+        command: RtsCommandArg,
+        #[arg(long, value_enum, default_value_t = DumpFormat::Json)]
+        format: DumpFormat,
+    },
+    /// Transmit an RTS command
+    Send {
+        channel: Channel,
+        command: RtsCommandArg,
+    },
+    /// Transmit the RTS programming command for a channel
+    Prog { channel: Channel },
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum RtsCommandArg {
+    Up,
+    Down,
+    My,
+}
+
+#[derive(Copy, Clone, Debug, ValueEnum)]
+pub enum DumpFormat {
+    Json,
 }

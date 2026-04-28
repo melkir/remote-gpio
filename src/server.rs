@@ -123,6 +123,7 @@ fn validate_command_request(
 ) -> Result<(Command, Option<Channel>), String> {
     let cmd = Command::from_str(command).map_err(|e| e.to_string())?;
     match (cmd, channel) {
+        (Command::Prog, _) => Err("prog is only available through the CLI".to_string()),
         (Command::Select, channel) => Ok((cmd, channel)),
         (_, Some(_)) => Err("channel is only accepted for select commands".to_string()),
         (_, None) => Ok((cmd, None)),
@@ -238,6 +239,12 @@ mod tests {
     fn validate_rejects_directional_channel() {
         let err = validate_command_request("up", Some(Channel::L1)).unwrap_err();
         assert!(err.contains("channel is only accepted"));
+    }
+
+    #[test]
+    fn validate_rejects_prog_over_http() {
+        let err = validate_command_request("prog", None).unwrap_err();
+        assert!(err.contains("CLI"));
     }
 
     #[test]

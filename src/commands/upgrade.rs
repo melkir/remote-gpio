@@ -139,8 +139,9 @@ async fn apply_swap(new_bin: &Path) -> Result<()> {
 
     fs::rename(new_bin, bin_path).context("moving new binary into place")?;
 
-    // Reconcile unit with new binary's template; picks up SUDO_USER.
-    install::run(None).context("refreshing unit")?;
+    // Reconcile unit with new binary's template; preserve the selected backend
+    // and pick up SUDO_USER.
+    install::run(None, install::installed_backend()).context("refreshing unit")?;
 
     systemd::systemctl(&["start", "somfy"]).context("starting somfy")?;
 
