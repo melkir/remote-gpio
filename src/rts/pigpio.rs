@@ -17,6 +17,7 @@ const CMD_WVNEW: u32 = 53;
 
 const PI_OUTPUT: u32 = 1;
 
+#[derive(Debug)]
 pub struct PigpioClient<S> {
     stream: S,
 }

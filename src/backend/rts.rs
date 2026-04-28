@@ -1,5 +1,7 @@
-use anyhow::{Context, Result};
-use std::fs::OpenOptions;
+use anyhow::{bail, Context, Result};
+use std::fs::{File, OpenOptions};
+use std::net::TcpStream;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
@@ -12,6 +14,14 @@ use crate::rts::pigpio::PigpioClient;
 use crate::rts::state::RtsStateStore;
 use crate::rts::waveform;
 
+const MAX_BCM_GPIO: u8 = 31;
+
+#[derive(Debug)]
+struct Hardware {
+    radio: Cc1101<File>,
+    pigpio: PigpioClient<TcpStream>,
+}
+
 #[derive(Debug)]
 pub(crate) struct RtsBackend {
     sender: Sender<Channel>,
@@ -19,19 +29,28 @@ pub(crate) struct RtsBackend {
     options: RtsOptions,
     state: Mutex<RtsStateStore>,
     transmitter_lock: Mutex<()>,
+    hardware: Arc<StdMutex<Hardware>>,
 }
 
 impl RtsBackend {
     pub(crate) async fn new(options: RtsOptions) -> Result<Self> {
+        if options.gdo0_gpio > MAX_BCM_GPIO {
+            bail!(
+                "RTS GDO0 GPIO {} is out of BCM range (0..={MAX_BCM_GPIO})",
+                options.gdo0_gpio
+            );
+        }
         let state = RtsStateStore::load_or_init_default()?;
         let selected_channel = state.selected_channel();
         let (sender, selected_rx) = watch::channel(selected_channel);
+        let hardware = init_hardware(options.clone()).await?;
         Ok(Self {
             sender,
             selected_rx,
             options,
             state: Mutex::new(state),
             transmitter_lock: Mutex::new(()),
+            hardware: Arc::new(StdMutex::new(hardware)),
         })
     }
 
@@ -49,6 +68,9 @@ impl RtsBackend {
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
+        if command == Command::Prog {
+            tracing::warn!("rts execute_on received Prog from a non-CLI path; transmitting anyway");
+        }
         let rts_command = RtsCommand::try_from(command)?;
         self.transmit(channel, rts_command).await
     }
@@ -82,9 +104,9 @@ impl RtsBackend {
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
         let pulses = waveform::build(frame, self.options.gdo0_gpio, self.options.frame_count);
-        let options = self.options.clone();
+        let hardware = self.hardware.clone();
 
-        tokio::task::spawn_blocking(move || transmit_blocking(options, pulses))
+        tokio::task::spawn_blocking(move || transmit_blocking(hardware, pulses))
             .await
             .context("RTS transmitter task failed")??;
 
@@ -93,43 +115,55 @@ impl RtsBackend {
     }
 }
 
-fn transmit_blocking(options: RtsOptions, pulses: Vec<waveform::GpioPulse>) -> Result<()> {
-    let spi = OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(&options.spi_device)
-        .with_context(|| format!("opening RTS SPI device {}", options.spi_device))?;
-    let mut radio = Cc1101::new(spi);
-    radio.configure_ook_433_42()?;
+async fn init_hardware(options: RtsOptions) -> Result<Hardware> {
+    tokio::task::spawn_blocking(move || -> Result<Hardware> {
+        let spi = OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&options.spi_device)
+            .with_context(|| format!("opening RTS SPI device {}", options.spi_device))?;
+        let mut radio = Cc1101::new(spi);
+        radio
+            .configure_ook_433_42()
+            .context("configuring CC1101 for 433.42 MHz async OOK")?;
+        tracing::warn!(
+            "CC1101 register set is unvalidated; verify timing with a scope or SDR before pairing"
+        );
+        let mut pigpio = PigpioClient::connect(&options.pigpiod_addr)
+            .with_context(|| format!("connecting to pigpiod at {}", options.pigpiod_addr))?;
+        pigpio.set_output(options.gdo0_gpio)?;
+        pigpio.write_level(options.gdo0_gpio, false)?;
+        pigpio.wave_clear()?;
+        Ok(Hardware { radio, pigpio })
+    })
+    .await
+    .context("RTS hardware init task failed")?
+}
 
-    let mut pigpio = connect_pigpio(&options.pigpiod_addr)
-        .with_context(|| format!("connecting to pigpiod at {}", options.pigpiod_addr))?;
-    pigpio.set_output(options.gdo0_gpio)?;
-    pigpio.write_level(options.gdo0_gpio, false)?;
-    pigpio.wave_clear()?;
-    pigpio.wave_new()?;
-    pigpio.wave_add_generic(&pulses)?;
-    let wave_id = pigpio.wave_create()?;
+fn transmit_blocking(
+    hardware: Arc<StdMutex<Hardware>>,
+    pulses: Vec<waveform::GpioPulse>,
+) -> Result<()> {
+    let mut hw = hardware.lock().expect("RTS hardware mutex poisoned");
+    hw.pigpio.wave_new()?;
+    hw.pigpio.wave_add_generic(&pulses)?;
+    let wave_id = hw.pigpio.wave_create()?;
 
-    radio.tx()?;
+    hw.radio.tx()?;
     let tx_result = (|| -> Result<()> {
-        pigpio.wave_tx(wave_id)?;
-        while pigpio.wave_busy()? {
+        hw.pigpio.wave_tx(wave_id)?;
+        while hw.pigpio.wave_busy()? {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
         Ok(())
     })();
-    let delete_result = pigpio.wave_delete(wave_id);
-    let idle_result = radio.idle();
+    let delete_result = hw.pigpio.wave_delete(wave_id);
+    let idle_result = hw.radio.idle();
 
     tx_result?;
     delete_result?;
     idle_result?;
     Ok(())
-}
-
-fn connect_pigpio(addr: &str) -> Result<PigpioClient<std::net::TcpStream>> {
-    PigpioClient::connect(addr)
 }
 
 fn next_channel(channel: Channel) -> Channel {

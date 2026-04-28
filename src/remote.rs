@@ -109,9 +109,30 @@ impl RemoteControl {
     fn complete_command(&self, channel: Channel, command: Command) -> CommandOutcome {
         let inferred_position = infer_position(command);
         if let Some(position) = inferred_position {
-            let _ = self.position_tx.send(PositionUpdate { channel, position });
+            for &target in fan_out_channels(channel) {
+                let _ = self.position_tx.send(PositionUpdate {
+                    channel: target,
+                    position,
+                });
+            }
         }
         CommandOutcome { inferred_position }
+    }
+}
+
+fn fan_out_channels(channel: Channel) -> &'static [Channel] {
+    match channel {
+        Channel::ALL => &[
+            Channel::L1,
+            Channel::L2,
+            Channel::L3,
+            Channel::L4,
+            Channel::ALL,
+        ],
+        Channel::L1 => &[Channel::L1],
+        Channel::L2 => &[Channel::L2],
+        Channel::L3 => &[Channel::L3],
+        Channel::L4 => &[Channel::L4],
     }
 }
 
@@ -134,5 +155,25 @@ mod tests {
         assert!(Command::from_str("UP").is_err());
         assert!(Command::from_str("toggle").is_err());
         assert!(Command::from_str("").is_err());
+    }
+
+    #[test]
+    fn fan_out_targets_only_self_for_single_channels() {
+        assert_eq!(fan_out_channels(Channel::L1), &[Channel::L1]);
+        assert_eq!(fan_out_channels(Channel::L4), &[Channel::L4]);
+    }
+
+    #[test]
+    fn fan_out_targets_all_paired_channels_for_all() {
+        assert_eq!(
+            fan_out_channels(Channel::ALL),
+            &[
+                Channel::L1,
+                Channel::L2,
+                Channel::L3,
+                Channel::L4,
+                Channel::ALL,
+            ]
+        );
     }
 }

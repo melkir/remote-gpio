@@ -3,7 +3,8 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::backend::BackendKind;
+use crate::backend::{BackendKind, RtsOptions};
+use crate::homekit::config;
 use crate::systemd;
 use crate::version;
 
@@ -287,7 +288,13 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
     checks.push(compiled_backend_check(configured_backend));
     match configured_backend {
         BackendKind::Telis => checks.push(gpio_chip_check()),
-        BackendKind::Rts => checks.extend(rts_checks()),
+        BackendKind::Rts => {
+            let options = on_disk
+                .as_deref()
+                .map(parse_rts_options)
+                .unwrap_or_default();
+            checks.extend(rts_checks(&options));
+        }
         BackendKind::Fake => checks.push(Check {
             id: "gpio_chip_accessible",
             label: "GPIO",
@@ -430,21 +437,180 @@ fn compiled_backend_check(backend: BackendKind) -> Check {
     }
 }
 
-fn rts_checks() -> Vec<Check> {
-    vec![
-        Check {
+const MAX_BCM_GPIO: u8 = 31;
+
+fn rts_checks(options: &RtsOptions) -> Vec<Check> {
+    let spi_check = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&options.spi_device)
+    {
+        Ok(_) => Check {
             id: "rts_spi_device",
             label: "RTS SPI",
-            status: Status::Unknown,
-            detail: Some("validated at RTS backend startup".into()),
+            status: Status::Ok,
+            detail: Some(options.spi_device.clone()),
         },
+        Err(e) => Check {
+            id: "rts_spi_device",
+            label: "RTS SPI",
+            status: Status::Blocking,
+            detail: Some(format!("{}: {e}", options.spi_device)),
+        },
+    };
+
+    let gdo0_check = if options.gdo0_gpio <= MAX_BCM_GPIO {
         Check {
+            id: "rts_gdo0_gpio",
+            label: "RTS GDO0",
+            status: Status::Ok,
+            detail: Some(format!("BCM{}", options.gdo0_gpio)),
+        }
+    } else {
+        Check {
+            id: "rts_gdo0_gpio",
+            label: "RTS GDO0",
+            status: Status::Blocking,
+            detail: Some(format!(
+                "BCM{} out of range (0..={MAX_BCM_GPIO})",
+                options.gdo0_gpio
+            )),
+        }
+    };
+
+    let pigpiod_check = match std::net::TcpStream::connect_timeout(
+        &options
+            .pigpiod_addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:8888".parse().unwrap()),
+        Duration::from_millis(500),
+    ) {
+        Ok(_) => Check {
             id: "pigpiod",
             label: "pigpiod",
-            status: Status::Unknown,
-            detail: Some("validated at RTS backend startup".into()),
+            status: Status::Ok,
+            detail: Some(options.pigpiod_addr.clone()),
         },
+        Err(e) => Check {
+            id: "pigpiod",
+            label: "pigpiod",
+            status: Status::Blocking,
+            detail: Some(format!("{}: {e}", options.pigpiod_addr)),
+        },
+    };
+
+    let pigpiod_local_check = {
+        let host = options
+            .pigpiod_addr
+            .rsplit_once(':')
+            .map(|(host, _)| host)
+            .unwrap_or(&options.pigpiod_addr);
+        let local = matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
+        Check {
+            id: "pigpiod_localhost_only",
+            label: "pigpiod local",
+            status: if local { Status::Ok } else { Status::Advisory },
+            detail: if local {
+                None
+            } else {
+                Some(format!(
+                    "configured pigpiod address {host} is not localhost; run `pigpiod -l`"
+                ))
+            },
+        }
+    };
+
+    let state_check = rts_state_file_check();
+
+    vec![
+        spi_check,
+        gdo0_check,
+        pigpiod_check,
+        pigpiod_local_check,
+        state_check,
     ]
+}
+
+fn rts_state_file_check() -> Check {
+    let path = config::state_dir().join(crate::rts::state::STATE_FILE);
+    let display = path.display().to_string();
+    if !path.exists() {
+        return Check {
+            id: "rts_state_file",
+            label: "RTS state",
+            status: Status::Advisory,
+            detail: Some(format!("{display} not yet created")),
+        };
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<crate::rts::state::RtsState>(&text) {
+            Ok(state) if state.schema_version == crate::rts::state::SCHEMA_VERSION => Check {
+                id: "rts_state_file",
+                label: "RTS state",
+                status: Status::Ok,
+                detail: Some(display),
+            },
+            Ok(state) => Check {
+                id: "rts_state_file",
+                label: "RTS state",
+                status: Status::Blocking,
+                detail: Some(format!(
+                    "{display}: schema_version {} unsupported (expected {})",
+                    state.schema_version,
+                    crate::rts::state::SCHEMA_VERSION
+                )),
+            },
+            Err(e) => Check {
+                id: "rts_state_file",
+                label: "RTS state",
+                status: Status::Blocking,
+                detail: Some(format!("{display}: parse error: {e}")),
+            },
+        },
+        Err(e) => Check {
+            id: "rts_state_file",
+            label: "RTS state",
+            status: Status::Blocking,
+            detail: Some(format!("{display}: {e}")),
+        },
+    }
+}
+
+fn parse_rts_options(unit: &str) -> RtsOptions {
+    let mut options = RtsOptions::default();
+    let Some(exec) = unit
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("ExecStart="))
+    else {
+        return options;
+    };
+    let mut args = exec.split_whitespace();
+    while let Some(arg) = args.next() {
+        match arg {
+            "--rts-spi-device" => {
+                if let Some(v) = args.next() {
+                    options.spi_device = v.to_string();
+                }
+            }
+            "--rts-gdo0-gpio" => {
+                if let Some(Ok(v)) = args.next().map(str::parse) {
+                    options.gdo0_gpio = v;
+                }
+            }
+            "--pigpiod-addr" => {
+                if let Some(v) = args.next() {
+                    options.pigpiod_addr = v.to_string();
+                }
+            }
+            "--rts-frame-count" => {
+                if let Some(Ok(v)) = args.next().map(str::parse) {
+                    options.frame_count = v;
+                }
+            }
+            _ => {}
+        }
+    }
+    options
 }
 
 #[cfg(not(feature = "telis"))]

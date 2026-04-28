@@ -106,10 +106,8 @@ impl RtsStateStore {
     pub fn reserve_rolling_code(&mut self, channel: Channel) -> Result<u16> {
         let next = self.next_on_wire(channel);
         let reserved_until = self.channel(channel).reserved_until;
-        if next >= reserved_until {
-            let new_reserved_until = next.checked_add(self.reserve_size).ok_or_else(|| {
-                anyhow::anyhow!("rolling code reserve for {channel} would overflow")
-            })?;
+        if next == reserved_until {
+            let new_reserved_until = next.wrapping_add(self.reserve_size);
             self.state
                 .channels
                 .get_mut(&channel)
@@ -125,10 +123,7 @@ impl RtsStateStore {
         if code != next {
             bail!("cannot commit rolling code {code} for {channel}; next on wire is {next}");
         }
-        let next = next
-            .checked_add(1)
-            .ok_or_else(|| anyhow::anyhow!("rolling code for {channel} would overflow"))?;
-        self.next_on_wire.insert(channel, next);
+        self.next_on_wire.insert(channel, next.wrapping_add(1));
         Ok(())
     }
 }
@@ -304,6 +299,27 @@ mod tests {
         store.commit_rolling_code(Channel::L1, 1).unwrap();
         assert_eq!(store.next_on_wire(Channel::L1), 2);
         assert_eq!(store.next_on_wire(Channel::L2), 1);
+    }
+
+    #[test]
+    fn rolling_codes_wrap_at_u16_max() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = RtsStateStore::load_or_init(state_path(&dir), 16).unwrap();
+
+        store.next_on_wire.insert(Channel::L1, u16::MAX);
+        store
+            .state
+            .channels
+            .get_mut(&Channel::L1)
+            .unwrap()
+            .reserved_until = u16::MAX;
+
+        let code = store.reserve_rolling_code(Channel::L1).unwrap();
+        assert_eq!(code, u16::MAX);
+        assert_eq!(store.channel(Channel::L1).reserved_until, 15);
+
+        store.commit_rolling_code(Channel::L1, u16::MAX).unwrap();
+        assert_eq!(store.next_on_wire(Channel::L1), 0);
     }
 
     #[test]
