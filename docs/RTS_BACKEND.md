@@ -36,15 +36,17 @@ pub struct CommandOutcome {
 }
 
 impl ActiveBackend {
-    async fn execute(&self, channel: Channel, command: Command) -> Result<CommandOutcome>;
-    fn current_selection(&self) -> Option<Channel>;
-    fn subscribe_selection(&self) -> Option<SelectionRx>;
+    async fn execute(&self, command: Command) -> Result<CommandOutcome>;
+    fn current_selection(&self) -> Channel;
+    fn subscribe_selection(&self) -> SelectionRx;
 }
 ```
 
-`current_selection` and `subscribe_selection` only have a value for the Telis
-backend, where the selected LED is a physical state that can change. The RTS
-backend has no selected LED and should return `None`.
+Both backends maintain a current selection and dispatch directional commands
+(`Up`, `Down`, `My`, `Prog`) to it. `Select` is a regular command that goes
+through `execute` like the others. On Telis it cycles the physical SELECT
+button until the requested LED is active; on RTS it is a zero-RF state update
+that mutates `selected_channel` and broadcasts a selection event.
 
 Telis behavior stays physical:
 
@@ -72,16 +74,24 @@ coordination questions without a real deployment benefit.
 Use domain names in external JSON. Backward compatibility with the previous
 `led` payload name is not required.
 
-- `POST /command`: `{ "channel": "L2", "command": "up" }`.
-- `channel` is required for `up`, `down`, `my`, `stop`, and `prog`.
-- `select` is not a public command. It is an internal Telis implementation
-  detail used to reach the requested channel before pressing a physical button.
+- `POST /command`: `{ "command": "up" }` for directional commands. Directional
+  commands (`up`, `down`, `my`, `stop`, `prog`) target the currently-selected
+  channel and do not take a `channel` field.
+- `POST /command`: `{ "command": "select", "channel": "L2" }` sets the active
+  channel directly. `{ "command": "select" }` with no `channel` advances the
+  selection one step through `L1 → L2 → L3 → L4 → ALL → L1`.
+- `select` is a public command on both backends. On Telis it drives the
+  physical SELECT button until the requested LED is active. On RTS it is a
+  zero-RF state update; the next directional command transmits to the new
+  channel.
 - `stop` remains accepted as the UI spelling for the middle button. It maps to
   RTS `My` and to the Telis physical `Stop` button.
-- `GET /state`: returns `{ "backend": "telis", "selection": "L2" }` for Telis
-  and `{ "backend": "rts", "selection": null }` for RTS.
-- `GET /events`: emits `selection` events only when the active backend has a
-  physical selection. Use JSON payloads such as `{ "channel": "L2" }`.
+- `GET /state`: returns `{ "backend": "telis", "selection": "L2" }` or
+  `{ "backend": "rts", "selection": "L2" }`. Both backends always report a
+  current selection.
+- `GET /events`: emits `selection` events on both backends whenever the active
+  channel changes, including from `select` commands and (Telis only) physical
+  remote presses. Use JSON payloads such as `{ "channel": "L2" }`.
 
 HomeKit should use `Channel` and `Command` internally. Its external HomeKit
 accessory shape does not need to change.
@@ -287,6 +297,7 @@ Each channel has its own virtual remote identity:
 ```json
 {
   "schema_version": 1,
+  "selected_channel": "L1",
   "channels": {
     "L1": { "remote_id": 12345, "reserved_until": 1 },
     "L2": { "remote_id": 12346, "reserved_until": 1 },
@@ -296,6 +307,12 @@ Each channel has its own virtual remote identity:
   }
 }
 ```
+
+`selected_channel` persists across restarts so the UI's notion of the active
+channel survives process exits. Default to `L1` when the file is missing or
+the field is absent. Persist on every change with the same atomic-rename
+write used for rolling-code reserve blocks; selects are infrequent compared
+to directional commands, so the extra writes are cheap.
 
 Generate random 24-bit remote IDs per install. Avoid `0` and avoid reusing an
 ID already present in the local RTS state file.
@@ -385,7 +402,8 @@ repeat frames. Keep this as a configurable constant for hardware validation.
 
 At RTS backend startup:
 
-1. Load or initialize RTS state from `$STATE_DIRECTORY/rts.json`.
+1. Load or initialize RTS state from `$STATE_DIRECTORY/rts.json`, including
+   `selected_channel` (default `L1` if missing).
 2. Open `/dev/spidev0.0`.
 3. Configure CC1101 for 433.42 MHz OOK asynchronous serial transmission.
 4. Connect to `pigpiod` on localhost.
@@ -447,13 +465,18 @@ State tests:
 - Reserve block persistence is atomic.
 - Failed transmit behavior does not advance in-memory `next_on_wire`.
 - Restart uses persisted `reserved_until` as the next on-wire code.
+- `selected_channel` defaults to `L1` when missing and survives restart.
 
 API/domain tests:
 
-- `POST /command` accepts `channel` and rejects the old `led` field.
-- Public command parsing rejects `select`.
+- `POST /command` accepts `channel` only on `select` and rejects the old `led`
+  field.
+- `select` with an explicit channel sets the selection.
+- `select` without a channel cycles `L1 → L2 → L3 → L4 → ALL → L1`.
+- Directional commands (`up`, `down`, `my`, `stop`, `prog`) target the
+  currently-selected channel.
 - `stop` maps to the backend command used for the middle button.
-- RTS state reports `selection: null`.
+- Both backends report a non-null `selection` in `GET /state`.
 
 pigpiod client tests:
 
@@ -469,9 +492,11 @@ and the exact timing constants.
 ## Implementation Path
 
 1. **Domain cleanup.** Rename `Input` to `Channel`, split Telis-specific GPIO
-   button names from backend commands, remove public `select`, and update
-   HTTP/WS/HomeKit internals to the new `channel` payload name. Backward
-   compatibility is not required for this deployment.
+   button names from backend commands, and update HTTP/WS/HomeKit internals
+   to the new `channel` payload name. `select` remains a public command with
+   backend-specific cost (RF cycling on Telis, state-only on RTS); directional
+   commands stop carrying a `channel` field and target the current selection.
+   Backward compatibility is not required for this deployment.
 2. **RTS encoder.** Implement the pure 7-byte encoder with golden tests.
 3. **RTS state.** Add versioned `$STATE_DIRECTORY/rts.json`, random remote IDs,
    atomic writes, and rolling-code reservation.
