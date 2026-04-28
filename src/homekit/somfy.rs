@@ -254,7 +254,7 @@ impl HapAccessoryApp for SomfyHapApp {
                     Command::Down
                 };
                 self.remote_control
-                    .execute(Some(blind.channel), command)
+                    .execute_on(blind.channel, command)
                     .await
                     .map_err(|e| anyhow!(e))?;
 

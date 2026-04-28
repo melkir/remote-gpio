@@ -18,16 +18,18 @@ Track implementation progress for [docs/RTS_BACKEND.md](docs/RTS_BACKEND.md).
 
 ### Phase 2: Backend Abstraction
 
-- [ ] Introduce backend abstraction behind `RemoteControl`.
-- [ ] Move current physical Telis behavior into a `TelisBackend`.
-- [ ] Add or preserve a `FakeBackend` for local/default builds.
-- [ ] Add `CommandOutcome` plumbing for inferred position updates.
-- [ ] Implement stateful `execute(command)` for HTTP UI commands.
-- [ ] Implement stateless `execute_on(channel, command)` for HomeKit and CLI commands.
-- [ ] Ensure `execute_on` does not mutate or broadcast selected-channel state.
+- [x] Introduce backend abstraction behind `RemoteControl`.
+- [x] Move current physical Telis behavior into a `TelisBackend`.
+- [x] Add or preserve a `FakeBackend` for local/default builds.
+- [x] Add `CommandOutcome` plumbing for inferred position updates.
+- [x] Implement stateful `execute(command)` for HTTP UI commands.
+- [x] Implement stateless `execute_on(channel, command)` for HomeKit and CLI commands.
+- [x] Ensure `execute_on` does not mutate or broadcast selected-channel state.
 
 ### Phase 3: RTS Pure Logic
 
+- [ ] Refine backend internals into controller + transport layers: backend controllers own command/selection semantics; transports perform concrete IO such as Telis GPIO presses, RTS waveform transmission, or logging/fake recording.
+- [ ] Add transport-level fakes/logging so tests can assert generated protocol operations without reimplementing backend behavior.
 - [ ] Add RTS command code mapping.
 - [ ] Implement 7-byte RTS frame encoding.
 - [ ] Implement checksum generation.

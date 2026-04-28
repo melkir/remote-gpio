@@ -113,7 +113,8 @@ async fn dispatch(
     channel: Option<Channel>,
 ) -> Result<(), String> {
     let (cmd, channel) = validate_command_request(command, channel)?;
-    rc.execute(channel, cmd).await.map_err(|e| e.to_string())
+    rc.execute(cmd, channel).await.map_err(|e| e.to_string())?;
+    Ok(())
 }
 
 fn validate_command_request(
@@ -213,7 +214,6 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -246,5 +246,4 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("unknown field"));
     }
-
 }
