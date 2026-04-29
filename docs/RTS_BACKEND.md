@@ -102,8 +102,7 @@ coordination questions without a real deployment benefit.
 
 ## Public API
 
-Use domain names in external JSON. Backward compatibility with the previous
-`led` payload name is not required.
+Use domain names in external JSON.
 
 - `POST /command`: `{ "command": "up" }` for movement commands. Movement
   commands (`up`, `down`, `stop`) target the currently-selected channel
@@ -114,7 +113,7 @@ Use domain names in external JSON. Backward compatibility with the previous
   selection one step through `L1 → L2 → L3 → L4 → ALL → L1`.
 - `select` is a public command on both backends. On Telis it drives the
   physical SELECT button until the requested LED is active. On RTS it is a
-  zero-RF state update; the next directional command transmits to the new
+  zero-RF state update; the next movement command transmits to the new
   channel.
 - `stop` is the UI spelling for the middle button. It maps to the RTS
   middle-button frame and to the Telis physical stop button.
@@ -152,21 +151,36 @@ backend "rts" was selected, but this binary was built without the "rts" feature
 
 ## Runtime Configuration
 
-Keep the first implementation on clap arguments with environment fallbacks; do
-not add a config file until the setting surface grows.
+Use a small config file plus built-in defaults. Do not expose persistent
+hardware settings as repeated command flags or environment variables.
 
-| Setting         | CLI                               | Environment             | Default          |
-| --------------- | --------------------------------- | ----------------------- | ---------------- |
-| Active backend  | `somfy serve --backend rts`       | `SOMFY_BACKEND`         | `fake`           |
-| RTS SPI device  | `--rts-spi-device /dev/spidev0.0` | `SOMFY_RTS_SPI_DEVICE`  | `/dev/spidev0.0` |
-| RTS GDO0 GPIO   | `--rts-gdo0-gpio 18`              | `SOMFY_RTS_GDO0_GPIO`   | `18`             |
-| pigpiod address | `--pigpiod-addr 127.0.0.1:8888`   | `SOMFY_PIGPIOD_ADDR`    | `127.0.0.1:8888` |
-| RTS frame count | `--rts-frame-count 4`             | `SOMFY_RTS_FRAME_COUNT` | `4`              |
+```toml
+backend = "rts"
 
-`somfy install --backend rts` should write the selected backend into the unit,
-preferably as `ExecStart=/usr/local/bin/somfy serve --backend rts`. Doctor
-should report the configured backend and run only the checks relevant to that
-backend.
+[rts]
+spi_device = "/dev/spidev0.0"
+gdo0_gpio = 18
+pigpiod_addr = "127.0.0.1:8888"
+frame_count = 4
+
+[telis.gpio]
+up = 26
+stop = 19
+down = 13
+select = 6
+led1 = 21
+led2 = 20
+led3 = 16
+led4 = 12
+# prog = 5
+```
+
+If the config file is absent, defaults are enough for local development and the
+documented Raspberry Pi wiring. A system install should point the service at the
+config file; the unit should not carry backend or GPIO options in `ExecStart`.
+
+Doctor should report the configured backend and run only the checks relevant to
+that backend.
 
 ## Hardware Path
 
@@ -346,7 +360,7 @@ Each channel has its own virtual remote identity:
 channel survives process exits. Default to `L1` when the file is missing or
 the field is absent. Persist on every change with the same atomic-rename
 write used for rolling-code reserve blocks; selects are infrequent compared
-to directional commands, so the extra writes are cheap.
+to movement commands, so the extra writes are cheap.
 
 Generate random 24-bit remote IDs per install. Avoid `0` and avoid reusing an
 ID already present in the local RTS state file.
@@ -385,26 +399,26 @@ Pairing flow:
 
 1. Put the motor or group into programming mode with an already-paired remote
    or with the motor's physical programming control.
-2. Run `somfy rts prog L1` for the virtual channel that should control it.
-3. Test with `somfy rts send L1 up`, `down`, and `stop`.
+2. Run `somfy remote prog L1` for the virtual channel that should control it.
+3. Test with `somfy remote up L1`, `somfy remote down L1`, and
+   `somfy remote stop L1`.
 4. Repeat for `L2`, `L3`, `L4`, and `ALL` as needed.
 
 `ALL` is a separate virtual remote identity. Pair it with every motor or group
 that should react to the all-channel command. Deleting `rts.json` or changing a
 channel's `remote_id` means that channel must be paired again.
 
-If the original Telis Prog button is wired to the Pi, the sync or unsync step
-can be scripted through `rts prog`:
+If the original Telis Prog button is wired to the Pi, configure `telis.gpio.prog`.
+Then the sync or unsync step can use the same backend-neutral command:
 
 ```bash
-somfy rts prog L1 --with-telis
+somfy remote prog L1
 ```
 
 The command selects the requested Telis channel, holds the wired Prog button,
 waits briefly, and transmits the RTS Prog frame for the same virtual channel.
-Run it again to remove that virtual remote from the motor. `--with-telis`
-defaults to GPIO5; pass `--telis-gpio 18` when the Prog wire uses another BCM
-GPIO.
+Run it again to remove that virtual remote from the motor. If `telis.gpio.prog`
+is not configured, `prog` uses backend-native behavior.
 
 ## Backend Startup
 
@@ -420,7 +434,7 @@ At RTS backend startup:
    idle-low.
 
 Serialize RF transmissions behind one transmitter mutex. The radio and pigpiod
-waveform state are single shared hardware resources, so directional commands
+waveform state are single shared hardware resources, so movement commands
 — and on Telis the `select` button cycle — must take this mutex. On RTS,
 `select` is a state-only operation that does not touch the radio; it acquires
 the state lock for `selected_channel` but skips the transmitter mutex so an
@@ -463,7 +477,7 @@ the CC1101 GDO0 data line high, `gpioOff` drives it low, and `usDelay` is the
 duration before the next pulse. Idle state is low.
 
 Default to four total frames per command press: one initial frame plus three
-repeat frames. Keep this as a configurable constant for hardware validation.
+repeat frames.
 
 ## Transmission Flow
 
@@ -552,9 +566,8 @@ and the exact timing constants.
 1. **Domain cleanup.** Rename `Input` to `Channel`, split Telis-specific GPIO
    button names from backend commands, and update HTTP/WS/HomeKit internals
    to the new `channel` payload name. `select` remains a public command with
-   backend-specific cost (RF cycling on Telis, state-only on RTS); directional
+   backend-specific cost (RF cycling on Telis, state-only on RTS); movement
    commands stop carrying a `channel` field and target the current selection.
-   Backward compatibility is not required for this deployment.
 2. **RTS encoder.** Implement the pure 7-byte encoder with golden tests.
 3. **RTS state.** Add versioned `$STATE_DIRECTORY/rts.json`, random remote IDs,
    atomic writes, and rolling-code reservation.
@@ -564,18 +577,21 @@ and the exact timing constants.
    stream tests, including `WVDEL` cleanup.
 6. **CC1101 driver.** Configure SPI registers for 433.42 MHz async OOK and
    expose TX/idle operations.
-7. **RTS CLI.** Add inspection and manual hardware commands. CLI commands
-   take an explicit channel and route through `execute_on`, so they do not
-   change `selected_channel` or affect what the web UI has highlighted.
+7. **Remote CLI and logs.** Add backend-neutral remote commands and structured
+   debug logs. Remote commands use the same command vocabulary as the web API
+   and HomeKit. Frame and waveform details belong in service logs rather than a
+   public RTS command group.
 
    ```text
-   somfy rts dump L1 up --format json
-   somfy rts send L1 up | down | stop
-   somfy rts prog L1
+   somfy remote up L1
+   somfy remote down L1
+   somfy remote stop L1
+   somfy remote prog L1
    ```
 
 8. **Backend selection.** Wire `RtsBackend` into `RemoteControl`, add runtime
-   config, and update install/doctor docs for CC1101, `spidev`, and `pigpiod`.
+   config loading, and update install/doctor docs for CC1101, `spidev`, and
+   `pigpiod`.
 
 ## References
 
