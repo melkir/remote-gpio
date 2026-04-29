@@ -394,6 +394,19 @@ Pairing flow:
 that should react to the all-channel command. Deleting `rts.json` or changing a
 channel's `remote_id` means that channel must be paired again.
 
+If the original Telis Prog button is wired to the Pi, the sync or unsync step
+can be scripted through `rts prog`:
+
+```bash
+somfy rts prog L1 --with-telis
+```
+
+The command selects the requested Telis channel, holds the wired Prog button,
+waits briefly, and transmits the RTS Prog frame for the same virtual channel.
+Run it again to remove that virtual remote from the motor. `--with-telis`
+defaults to GPIO5; pass `--telis-gpio 18` when the Prog wire uses another BCM
+GPIO.
+
 ## Backend Startup
 
 At RTS backend startup:

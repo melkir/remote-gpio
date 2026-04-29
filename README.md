@@ -81,6 +81,22 @@ sudo somfy rts send L1 my
 # repeat for L2, L3, L4, ALL as needed
 ```
 
+If the original Telis remote's Prog button is wired to the Pi, `rts prog` can
+press the wired Telis Prog button first, then send the matching RTS virtual
+remote's Prog command.
+Run the same command again to remove that virtual remote from the motor.
+`--with-telis` defaults to GPIO5, matching the documented wiring:
+
+```bash
+sudo somfy rts prog L1 --with-telis
+```
+
+If the Prog wire uses another BCM GPIO, pass it explicitly:
+
+```bash
+sudo somfy rts prog L1 --with-telis --telis-gpio 18
+```
+
 Inspect a frame without transmitting:
 
 ```bash

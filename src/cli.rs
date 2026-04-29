@@ -171,7 +171,21 @@ pub enum RtsCliCommand {
         command: RtsCommandArg,
     },
     /// Transmit the RTS programming command for a channel
-    Prog { channel: Channel },
+    Prog {
+        channel: Channel,
+        /// Also press the wired Telis Prog button first
+        #[arg(long)]
+        with_telis: bool,
+        /// BCM GPIO wired to the Telis Prog button
+        #[arg(long, default_value_t = 5, requires = "with_telis")]
+        telis_gpio: u8,
+        /// How long to hold the wired Telis Prog button
+        #[arg(long, default_value_t = 2500, requires = "with_telis")]
+        telis_press_ms: u64,
+        /// Delay between releasing Telis Prog and transmitting RTS Prog
+        #[arg(long, default_value_t = 700, requires = "with_telis")]
+        telis_delay_ms: u64,
+    },
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]

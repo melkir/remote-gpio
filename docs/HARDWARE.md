@@ -20,6 +20,7 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
 | 35     | GPIO19 | Output    | STOP        | Stop movement         |
 | 33     | GPIO13 | Output    | DOWN        | Lower blinds          |
 | 31     | GPIO6  | Output    | SELECT      | Select next blind     |
+| 29     | GPIO5  | Output    | PROG        | Optional RTS sync     |
 | 40     | GPIO21 | Input     | LED1        | Selection indicator 1 |
 | 38     | GPIO20 | Input     | LED2        | Selection indicator 2 |
 | 36     | GPIO16 | Input     | LED3        | Selection indicator 3 |
@@ -36,6 +37,7 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
   │ Pin 33 (GPIO13)│ ────────────────▶ │ DOWN        │
   │ Pin 35 (GPIO19)│ ────────────────▶ │ STOP        │
   │ Pin 31 (GPIO6) │ ────────────────▶ │ SELECT      │
+  │ Pin 29 (GPIO5) │ ────────────────▶ │ PROG        │
   │ Pin 40 (GPIO21)│ ◀──────────────── │ LED1        │
   │ Pin 38 (GPIO20)│ ◀──────────────── │ LED2        │
   │ Pin 36 (GPIO16)│ ◀──────────────── │ LED3        │
@@ -136,6 +138,17 @@ Each channel is paired independently. With the motor in programming mode (alread
 ```bash
 sudo somfy rts prog L1
 sudo somfy rts send L1 up   # confirm direction
+```
+
+If the Telis remote's Prog button is also wired to the Pi, `rts prog --with-telis`
+selects the requested Telis channel, holds Prog, waits briefly, and transmits
+the RTS Prog frame for the same virtual channel. Run it again to remove that
+virtual remote from the motor. `--with-telis` defaults to GPIO5; use
+`--telis-gpio` for other wiring:
+
+```bash
+sudo somfy rts prog L1 --with-telis
+sudo somfy rts prog L1 --with-telis --telis-gpio 18
 ```
 
 `ALL` is a separate virtual remote — pair it with every motor that should react to all-channel commands.

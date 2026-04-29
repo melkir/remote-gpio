@@ -125,7 +125,13 @@ mod platform {
     /// Triggers a Telis button GPIO pin.
     pub async fn trigger_output(output: TelisButton) -> Result<()> {
         tracing::debug!("Triggering Telis button: {:?}", output);
-        let offset = output as u32;
+        trigger_output_gpio(output as u8, Duration::from_millis(60)).await
+    }
+
+    /// Triggers one active-low GPIO output for `duration`.
+    pub async fn trigger_output_gpio(gpio: u8, duration: Duration) -> Result<()> {
+        tracing::debug!("Triggering GPIO{gpio} for {:?}", duration);
+        let offset = gpio as u32;
         let mut value = Value::Active;
 
         // Request the output line
@@ -138,7 +144,7 @@ mod platform {
             .context("Failed to request output line")?;
 
         // Hold the button for minimum detection time
-        tokio::time::sleep(Duration::from_millis(60)).await;
+        tokio::time::sleep(duration).await;
 
         // Release the button
         value = value.not();
@@ -151,6 +157,8 @@ mod platform {
 
 #[cfg(all(feature = "telis", not(target_os = "linux")))]
 mod platform {
+    use std::time::Duration;
+
     use super::*;
 
     pub async fn watch_inputs() -> Result<Channel> {
@@ -159,6 +167,10 @@ mod platform {
 
     pub async fn trigger_output(output: TelisButton) -> Result<()> {
         anyhow::bail!("telis GPIO backend requires Linux; cannot trigger {output:?}")
+    }
+
+    pub async fn trigger_output_gpio(gpio: u8, _duration: Duration) -> Result<()> {
+        anyhow::bail!("telis GPIO backend requires Linux; cannot trigger GPIO{gpio}")
     }
 }
 
@@ -188,9 +200,15 @@ mod platform {
         tokio::time::sleep(Duration::from_millis(60)).await;
         Ok(())
     }
+
+    pub async fn trigger_output_gpio(gpio: u8, duration: Duration) -> Result<()> {
+        tracing::debug!("Fake triggering GPIO{gpio} for {:?}", duration);
+        tokio::time::sleep(duration).await;
+        Ok(())
+    }
 }
 
-pub use platform::{trigger_output, watch_inputs};
+pub use platform::{trigger_output, trigger_output_gpio, watch_inputs};
 
 #[cfg(test)]
 mod tests {
