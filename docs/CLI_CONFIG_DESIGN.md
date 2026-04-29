@@ -156,6 +156,10 @@ Do not expose persistent hardware settings as command flags. Backend selection,
 RTS wiring, Telis GPIO mapping, and Telis-assisted programming should come from
 the config file or built-in defaults.
 
+The current backend and RTS hardware flags should be removed as part of this
+cleanup. That includes `--backend`, `--rts-spi-device`, `--rts-gdo0-gpio`,
+`--pigpiod-addr`, `--rts-frame-count`, and Telis Prog wiring flags.
+
 Use the same value names everywhere:
 
 ```text
@@ -258,6 +262,53 @@ Config resolution should produce one resolved config object used by:
 and config path, while the config file carries persistent hardware choices.
 `install` should install the service from the resolved config; config chooses
 the backend and hardware options.
+
+## Flag and Env Cleanup
+
+Remove persistent hardware configuration from the command line and environment.
+These settings should come from config or built-in defaults:
+
+- `somfy serve --backend`
+- `SOMFY_BACKEND`
+- `--rts-spi-device`
+- `--rts-gdo0-gpio`
+- `--pigpiod-addr`
+- `--rts-frame-count`
+- `SOMFY_RTS_SPI_DEVICE`
+- `SOMFY_RTS_GDO0_GPIO`
+- `SOMFY_PIGPIOD_ADDR`
+- `SOMFY_RTS_FRAME_COUNT`
+- `somfy install --backend`
+- `install.sh --backend`
+- `somfy rts prog --with-telis`
+- `--telis-gpio`
+- `--telis-press-ms`
+- `--telis-delay-ms`
+
+Keep flags that control one command's behavior or output rather than persistent
+hardware state:
+
+- `--config <path>` to choose the config file
+- `--json`
+- `--verbose`
+- `--version`
+- `--help`
+- `homekit status --uri-only`
+- `upgrade --channel`
+- `upgrade --version`
+- `upgrade --check`
+- `logs --follow`
+- `logs --debug`
+
+Keep install-time service-user discovery:
+
+- `somfy install --user`
+- `SUDO_USER`
+
+Keep `STATE_DIRECTORY` because it is the systemd-owned state directory contract.
+Avoid adding a second Somfy-specific environment override for production config.
+If a developer-only state override remains useful, keep it out of operator docs
+and tests should prefer temporary config/state directories where practical.
 
 ## Telis-Assisted RTS Prog
 
