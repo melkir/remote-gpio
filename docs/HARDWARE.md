@@ -2,7 +2,7 @@
 
 A deeper look at the two physical setups `somfy` supports — the wired Telis 4 backend and the CC1101 RTS radio backend — and how each turns hardware events into synchronized UI state. For a broader codebase tour, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Telis 4 backend (`--backend telis`)
+## Telis 4 backend
 
 ### Raspberry Pi ↔ Somfy Telis 4
 
@@ -84,7 +84,7 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 // 16+ edges in 300ms = ALL, otherwise map last edge to L1-L4
 ```
 
-## CC1101 RTS backend (`--backend rts`)
+## CC1101 RTS backend
 
 The RTS backend skips the wired remote and transmits Somfy RTS frames directly at 433.42 MHz. Each `Channel` (`L1`–`L4`, `ALL`) is a separate virtual remote with its own 24-bit ID and rolling-code counter persisted to `$STATE_DIRECTORY/rts.json`.
 
@@ -98,7 +98,7 @@ The RTS backend skips the wired remote and transmits Somfy RTS frames directly a
 | MOSI   | SPI0 MOSI / BCM10                      |                                          |
 | MISO   | SPI0 MISO / BCM9                       |                                          |
 | CSN    | SPI0 CE0 / BCM8 (`/dev/spidev0.0`)     |                                          |
-| GDO0   | BCM18 (configurable: `--rts-gdo0-gpio`) | Drives the OOK data line in async mode. |
+| GDO0   | BCM18                                  | Drives the OOK data line in async mode. |
 
 A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
 
@@ -118,41 +118,58 @@ RtsBackend::transmit(channel, command)
   -> commit rolling code in memory
 ```
 
-CC1101, pigpiod TCP, and GDO0 are configured **once at backend startup** (`somfy serve --backend rts`); per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
+CC1101, pigpiod TCP, and GDO0 are configured once at backend startup; per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
 
-`sudo somfy install --backend rts` provisions the runtime dependency by installing
-the `pigpio` package, writing a systemd drop-in that starts `pigpiod -l`, and
-enabling `pigpiod`.
+When the resolved config selects the RTS backend, `sudo somfy install`
+provisions the runtime dependency by installing the `pigpio` package, writing a
+systemd drop-in that starts `pigpiod -l`, and enabling `pigpiod`.
 
-### Runtime configuration
+### Configuration
 
-| Flag                  | Env                     | Default          |
-| --------------------- | ----------------------- | ---------------- |
-| `--rts-spi-device`    | `SOMFY_RTS_SPI_DEVICE`  | `/dev/spidev0.0` |
-| `--rts-gdo0-gpio`     | `SOMFY_RTS_GDO0_GPIO`   | `18`             |
-| `--pigpiod-addr`      | `SOMFY_PIGPIOD_ADDR`    | `127.0.0.1:8888` |
-| `--rts-frame-count`   | `SOMFY_RTS_FRAME_COUNT` | `4`              |
+Hardware settings should come from built-in defaults or `/etc/somfy/config.toml`,
+not repeated CLI flags or environment variables.
 
-`somfy doctor` validates SPI access, GDO0 BCM range, pigpiod reachability, pigpiod localhost-only mode, and `rts.json` schema.
+```toml
+backend = "rts"
+
+[rts]
+spi_device = "/dev/spidev0.0"
+gdo0_gpio = 18
+pigpiod_addr = "127.0.0.1:8888"
+frame_count = 4
+
+[telis.gpio]
+up = 26
+stop = 19
+down = 13
+select = 6
+led1 = 21
+led2 = 20
+led3 = 16
+led4 = 12
+# prog = 5
+```
+
+`somfy doctor` validates SPI access, GDO0 BCM range, pigpiod reachability,
+pigpiod localhost-only mode, and `rts.json` schema.
 
 ### Pairing
 
 Each channel is paired independently. With the motor in programming mode (already-paired remote, or motor's prog button):
 
 ```bash
-sudo somfy rts prog L1
-sudo somfy rts send L1 up   # confirm direction
+sudo somfy remote prog L1
+sudo somfy remote up L1   # confirm direction
 ```
 
-If the Telis remote's Prog button is also wired to the Pi, `rts prog --with-telis`
-selects the requested Telis channel, holds Prog, waits briefly, and transmits
-the RTS Prog frame for the same virtual channel. Run it again to remove that
-virtual remote from the motor. `--with-telis` defaults to GPIO5; use
-`--telis-gpio` for other wiring:
+If the Telis remote's Prog button is also wired to the Pi, configure
+`telis.gpio.prog`. `somfy remote prog <channel>` then selects the requested
+Telis channel, holds Prog, waits briefly, and transmits the RTS Prog frame for
+the same virtual channel. Run it again to remove that virtual remote from the
+motor.
 
 ```bash
-sudo somfy rts prog L1 --with-telis
-sudo somfy rts prog L1 --with-telis --telis-gpio 18
+sudo somfy remote prog L1
 ```
 
 `ALL` is a separate virtual remote — pair it with every motor that should react to all-channel commands.
@@ -162,7 +179,7 @@ sudo somfy rts prog L1 --with-telis --telis-gpio 18
 The CC1101 register set in `src/rts/cc1101.rs` is a starting point and has **not** been validated against a scope or SDR yet. Before relying on it:
 
 1. Confirm motors are Somfy RTS (not io-homecontrol).
-2. With `somfy serve --backend rts` running, scope GDO0 during a `rts send`. Wake-up should be ~9.4 ms high / ~89.6 ms low; Manchester half-symbols 640 µs.
+2. With `somfy serve` running and the RTS backend selected by config, scope GDO0 during a `somfy remote up L1`. Wake-up should be ~9.4 ms high / ~89.6 ms low; Manchester half-symbols 640 µs.
 3. With an SDR (rtl-sdr, HackRF) tuned to 433.42 MHz, verify carrier presence and absence between frames.
 4. If pairing fails, capture frames with an existing real Somfy remote and compare obfuscated bytes — the encoder has golden tests, but key-byte values can vary by motor generation.
 
