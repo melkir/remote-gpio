@@ -220,7 +220,6 @@ struct DumpResponse {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::backend::{BackendConfig, BackendKind, ProtocolOperation, RtsOptions};
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Debug, PartialEq, Eq)]
@@ -289,18 +288,20 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "fake")]
     struct RemoteControlFakeTelisProgRemote {
         remote_control: Arc<RemoteControl>,
         operations: Arc<Mutex<Vec<ProgOperation>>>,
     }
 
+    #[cfg(feature = "fake")]
     impl RemoteControlFakeTelisProgRemote {
         async fn new(operations: Arc<Mutex<Vec<ProgOperation>>>) -> Self {
             Self {
                 remote_control: Arc::new(
-                    RemoteControl::with_backend(BackendConfig {
-                        kind: BackendKind::Fake,
-                        rts: RtsOptions::default(),
+                    RemoteControl::with_backend(crate::backend::BackendConfig {
+                        kind: crate::backend::BackendKind::Fake,
+                        rts: crate::backend::RtsOptions::default(),
                     })
                     .await
                     .unwrap(),
@@ -310,6 +311,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "fake")]
     impl TelisProgRemote for RemoteControlFakeTelisProgRemote {
         fn selected_channel(&self) -> Channel {
             self.remote_control.current_selection()
@@ -378,6 +380,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "fake")]
     #[tokio::test]
     async fn prog_with_telis_uses_remote_control_selection_before_rts_prog() {
         let operations = Arc::new(Mutex::new(Vec::new()));
@@ -393,7 +396,9 @@ mod tests {
         assert_eq!(telis.remote_control.current_selection(), Channel::L3);
         assert_eq!(
             telis.remote_control.operations(),
-            vec![ProtocolOperation::TelisSelection(Channel::L3)]
+            vec![crate::backend::ProtocolOperation::TelisSelection(
+                Channel::L3
+            )]
         );
         assert_eq!(
             *operations.lock().expect("operations mutex"),
