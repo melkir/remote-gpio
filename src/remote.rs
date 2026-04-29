@@ -106,6 +106,11 @@ impl RemoteControl {
         Ok(self.complete_command(channel, command))
     }
 
+    #[cfg(all(test, feature = "fake"))]
+    pub(crate) fn operations(&self) -> Vec<crate::backend::ProtocolOperation> {
+        self.backend.operations()
+    }
+
     fn complete_command(&self, channel: Channel, command: Command) -> CommandOutcome {
         let inferred_position = infer_position(command);
         if let Some(position) = inferred_position {

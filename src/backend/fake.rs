@@ -30,7 +30,7 @@ impl FakeBackend {
     }
 
     #[cfg(test)]
-    fn operations(&self) -> Vec<ProtocolOperation> {
+    pub(super) fn operations(&self) -> Vec<ProtocolOperation> {
         self.transport.operations()
     }
 

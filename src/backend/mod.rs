@@ -190,6 +190,15 @@ impl ActiveBackend {
             _ => unreachable!("no backend variants were compiled"),
         }
     }
+
+    #[cfg(all(test, feature = "fake"))]
+    pub(crate) fn operations(&self) -> Vec<ProtocolOperation> {
+        match self {
+            Self::Fake(backend) => backend.operations(),
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("fake backend variant was not compiled"),
+        }
+    }
 }
 
 pub fn infer_position(command: Command) -> Option<u8> {
