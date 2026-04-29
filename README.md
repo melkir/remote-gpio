@@ -42,11 +42,11 @@ The upgrade command pulls the latest stable release, swaps the binary, refreshes
 
 `somfy` ships three backends, picked at install time:
 
-| Backend | Hardware                 | Use case                                                |
-| ------- | ------------------------ | ------------------------------------------------------- |
-| `fake`  | none                     | Local dev — logs commands, no hardware.                 |
-| `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote.  |
-| `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.     |
+| Backend | Hardware                  | Use case                                               |
+| ------- | ------------------------- | ------------------------------------------------------ |
+| `fake`  | none                      | Local dev — logs commands, no hardware.                |
+| `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote. |
+| `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.    |
 
 Switch backends by reinstalling the unit (idempotent; only writes if it changed):
 

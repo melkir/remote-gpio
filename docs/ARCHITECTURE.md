@@ -23,11 +23,11 @@ HTTP/SSE/HomeKit surface is identical.
 and the hardware. Three implementations live behind compile-time features and a
 runtime `--backend` flag:
 
-| Backend | Module                | What it does                                                                                  |
-| ------- | --------------------- | --------------------------------------------------------------------------------------------- |
-| `fake`  | `src/backend/fake.rs` | Records commands in-memory; default for dev and tests.                                        |
-| `telis` | `src/backend/telis.rs`| Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.      |
-| `rts`   | `src/backend/rts.rs`  | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod.|
+| Backend | Module                 | What it does                                                                                   |
+| ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `fake`  | `src/backend/fake.rs`  | Records commands in-memory; default for dev and tests.                                         |
+| `telis` | `src/backend/telis.rs` | Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.       |
+| `rts`   | `src/backend/rts.rs`   | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod. |
 
 All three implement the same shape:
 
@@ -40,19 +40,19 @@ via `somfy install --backend …`; the unit's `ExecStart` carries the choice.
 
 ## Module Map
 
-| Area           | Files                | Responsibility                                                                                  |
-| -------------- | -------------------- | ----------------------------------------------------------------------------------------------- |
-| Web API        | `src/server.rs`      | Axum HTTP, SSE, WebSocket routes and static app serving.                                        |
-| Remote control | `src/remote.rs`      | Backend-agnostic command surface, position fan-out, and event broadcasting.                     |
-| Backends       | `src/backend/*`      | `fake`, `telis`, `rts` implementations of the active-backend trait.                             |
-| Telis GPIO     | `src/gpio.rs`        | Linux GPIO input/output mapping and LED debounce logic for the Telis backend.                   |
-| RTS protocol   | `src/rts/*`          | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver.  |
-| HAP core       | `src/hap/*`          | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.     |
-| HomeKit app    | `src/homekit/*`      | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.    |
-| CLI commands   | `src/commands/*`     | Install, upgrade, doctor, serve, homekit, and `rts dump|send|prog`.                             |
+| Area           | Files            | Responsibility                                                                                 |
+| -------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                       |
+| Remote control | `src/remote.rs`  | Backend-agnostic command surface, position fan-out, and event broadcasting.                    |
+| Backends       | `src/backend/*`  | `fake`, `telis`, `rts` implementations of the active-backend trait.                            |
+| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis backend.                  |
+| RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
+| HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
+| HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.   |
+| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, homekit, and `rts dump                                        |
 
 The important boundaries are `hap` versus `homekit` (protocol vs project), and
-`backend/*` versus everything above (hardware vs UX).
+`backend/`\* versus everything above (hardware vs UX).
 
 ## RemoteControl
 
