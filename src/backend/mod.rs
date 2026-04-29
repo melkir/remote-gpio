@@ -205,7 +205,7 @@ pub fn infer_position(command: Command) -> Option<u8> {
     match command {
         Command::Up => Some(100),
         Command::Down => Some(0),
-        Command::My | Command::Stop | Command::Select | Command::Prog => None,
+        Command::Stop | Command::Select | Command::Prog => None,
     }
 }
 
@@ -217,7 +217,6 @@ mod tests {
     fn position_inference_only_tracks_directional_extremes() {
         assert_eq!(infer_position(Command::Up), Some(100));
         assert_eq!(infer_position(Command::Down), Some(0));
-        assert_eq!(infer_position(Command::My), None);
         assert_eq!(infer_position(Command::Stop), None);
         assert_eq!(infer_position(Command::Select), None);
         assert_eq!(infer_position(Command::Prog), None);

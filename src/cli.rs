@@ -192,7 +192,7 @@ pub enum RtsCliCommand {
 pub enum RtsCommandArg {
     Up,
     Down,
-    My,
+    Stop,
 }
 
 #[derive(Copy, Clone, Debug, ValueEnum)]

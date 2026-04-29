@@ -60,7 +60,7 @@ impl RtsBackend {
                 let channel = channel.unwrap_or_else(|| next_channel(self.selected_channel()));
                 self.set_selected_channel(channel).await
             }
-            Command::Up | Command::Down | Command::My | Command::Stop | Command::Prog => {
+            Command::Up | Command::Down | Command::Stop | Command::Prog => {
                 let channel = self.selected_channel();
                 self.execute_on(channel, command).await
             }

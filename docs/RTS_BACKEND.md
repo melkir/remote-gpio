@@ -15,7 +15,7 @@ features.
 Use the same command surface for the web API, HomeKit, and CLI:
 
 - **Channel**: logical target, `L1`, `L2`, `L3`, `L4`, or `ALL`.
-- **Command**: user intent, `Up`, `Down`, `My`, `Stop`, or `Prog`.
+- **Command**: user intent, `Up`, `Down`, `Stop`, or `Prog`.
 - **Backend**: hardware implementation that transmits a command to a channel.
 
 The current code calls the target type `Input` because it represents GPIO LED
@@ -50,8 +50,8 @@ impl ActiveBackend {
 }
 ```
 
-Both backends maintain a `selected_channel` and dispatch directional commands
-(`Up`, `Down`, `My`) through `execute` to that channel. `Select` is a regular
+Both backends maintain a `selected_channel` and dispatch movement commands
+(`Up`, `Down`, `Stop`) through `execute` to that channel. `Select` is a regular
 command on the stateful path. On Telis it cycles the physical SELECT button
 until the requested LED is active; on RTS it is a zero-RF state update that
 mutates `selected_channel` and broadcasts a `selection` event.
@@ -70,10 +70,10 @@ Call paths, outside in:
 ### Position Inference
 
 `CommandOutcome::inferred_position` is computed by `RemoteControl`, not by
-the backend. Backends only signal "I sent `Up`/`Down`/`My` to channel X"; the
+the backend. Backends only signal "I sent `Up`/`Down`/`Stop` to channel X"; the
 position estimator owns the time-based model and the per-channel state.
 
-`ALL` fans out at the position-tracking layer: a successful `Up`/`Down`/`My`
+`ALL` fans out at the position-tracking layer: a successful `Up`/`Down`
 to `ALL` updates the inferred position for every channel paired to react to
 all-channel commands (in practice, `L1` through `L4`), matching what the
 physical remote does over the air. The backend still emits exactly one frame
@@ -105,8 +105,8 @@ coordination questions without a real deployment benefit.
 Use domain names in external JSON. Backward compatibility with the previous
 `led` payload name is not required.
 
-- `POST /command`: `{ "command": "up" }` for directional commands. Directional
-  commands (`up`, `down`, `my`, `stop`) target the currently-selected channel
+- `POST /command`: `{ "command": "up" }` for movement commands. Movement
+  commands (`up`, `down`, `stop`) target the currently-selected channel
   and do not take a `channel` field. `prog` is not exposed on the HTTP surface;
   pairing happens through the CLI.
 - `POST /command`: `{ "command": "select", "channel": "L2" }` sets the active
@@ -116,8 +116,8 @@ Use domain names in external JSON. Backward compatibility with the previous
   physical SELECT button until the requested LED is active. On RTS it is a
   zero-RF state update; the next directional command transmits to the new
   channel.
-- `stop` remains accepted as the UI spelling for the middle button. It maps to
-  RTS `My` and to the Telis physical `Stop` button.
+- `stop` is the UI spelling for the middle button. It maps to the RTS
+  middle-button frame and to the Telis physical stop button.
 - `GET /channel`: returns the currently-selected channel as plain text, e.g.
   `L2`. Both backends always report a current selection. The active backend is
   intentionally not exposed over HTTP so the UI stays backend-agnostic;
@@ -294,8 +294,7 @@ Minimum command set:
 
 | Command | RTS code | Notes                                        |
 | ------- | -------: | -------------------------------------------- |
-| `My`    |    `0x1` | Also used as Stop while the motor is moving. |
-| `Stop`  |    `0x1` | API alias for `My`.                          |
+| `Stop`  |    `0x1` | Somfy middle-button frame.                   |
 | `Up`    |    `0x2` | Move up/open.                                |
 | `Down`  |    `0x4` | Move down/close.                             |
 | `Prog`  |    `0x8` | Pair or unpair a virtual remote.             |
@@ -387,7 +386,7 @@ Pairing flow:
 1. Put the motor or group into programming mode with an already-paired remote
    or with the motor's physical programming control.
 2. Run `somfy rts prog L1` for the virtual channel that should control it.
-3. Test with `somfy rts send L1 up`, `down`, and `my`.
+3. Test with `somfy rts send L1 up`, `down`, and `stop`.
 4. Repeat for `L2`, `L3`, `L4`, and `ALL` as needed.
 
 `ALL` is a separate virtual remote identity. Pair it with every motor or group
@@ -529,7 +528,7 @@ API/domain tests:
   field.
 - `select` with an explicit channel sets the selection.
 - `select` without a channel cycles `L1 → L2 → L3 → L4 → ALL → L1`.
-- Directional commands (`up`, `down`, `my`, `stop`) target the currently-
+- Movement commands (`up`, `down`, `stop`) target the currently-
   selected channel.
 - `stop` maps to the backend command used for the middle button.
 - `GET /channel` returns the current channel as plain text on both backends.
@@ -571,7 +570,7 @@ and the exact timing constants.
 
    ```text
    somfy rts dump L1 up --format json
-   somfy rts send L1 up | down | my
+   somfy rts send L1 up | down | stop
    somfy rts prog L1
    ```
 

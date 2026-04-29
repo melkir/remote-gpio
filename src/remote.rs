@@ -16,7 +16,6 @@ pub struct PositionUpdate {
 pub enum Command {
     Up,
     Down,
-    My,
     Stop,
     Select,
     Prog,
@@ -28,7 +27,6 @@ impl FromStr for Command {
         match s {
             "up" => Ok(Command::Up),
             "down" => Ok(Command::Down),
-            "my" => Ok(Command::My),
             "stop" => Ok(Command::Stop),
             "select" => Ok(Command::Select),
             "prog" => Ok(Command::Prog),
@@ -149,7 +147,6 @@ mod tests {
     fn command_from_str_valid() {
         assert_eq!(Command::from_str("up").unwrap(), Command::Up);
         assert_eq!(Command::from_str("down").unwrap(), Command::Down);
-        assert_eq!(Command::from_str("my").unwrap(), Command::My);
         assert_eq!(Command::from_str("stop").unwrap(), Command::Stop);
         assert_eq!(Command::from_str("select").unwrap(), Command::Select);
         assert_eq!(Command::from_str("prog").unwrap(), Command::Prog);

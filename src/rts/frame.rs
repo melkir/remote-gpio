@@ -7,7 +7,7 @@ pub const DEFAULT_KEY: u8 = 0xA0;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RtsCommand {
-    My,
+    Stop,
     Up,
     Down,
     Prog,
@@ -16,7 +16,7 @@ pub enum RtsCommand {
 impl RtsCommand {
     pub fn code(self) -> u8 {
         match self {
-            Self::My => 0x1,
+            Self::Stop => 0x1,
             Self::Up => 0x2,
             Self::Down => 0x4,
             Self::Prog => 0x8,
@@ -29,7 +29,7 @@ impl TryFrom<Command> for RtsCommand {
 
     fn try_from(command: Command) -> Result<Self> {
         match command {
-            Command::My | Command::Stop => Ok(Self::My),
+            Command::Stop => Ok(Self::Stop),
             Command::Up => Ok(Self::Up),
             Command::Down => Ok(Self::Down),
             Command::Prog => Ok(Self::Prog),
@@ -84,11 +84,14 @@ mod tests {
 
     #[test]
     fn maps_command_codes() {
-        assert_eq!(RtsCommand::My.code(), 0x1);
+        assert_eq!(RtsCommand::Stop.code(), 0x1);
         assert_eq!(RtsCommand::Up.code(), 0x2);
         assert_eq!(RtsCommand::Down.code(), 0x4);
         assert_eq!(RtsCommand::Prog.code(), 0x8);
-        assert_eq!(RtsCommand::try_from(Command::Stop).unwrap(), RtsCommand::My);
+        assert_eq!(
+            RtsCommand::try_from(Command::Stop).unwrap(),
+            RtsCommand::Stop
+        );
         assert!(RtsCommand::try_from(Command::Select).is_err());
     }
 

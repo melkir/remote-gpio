@@ -80,7 +80,7 @@ Pair each channel once (motor in programming mode, then):
 sudo somfy rts prog L1
 sudo somfy rts send L1 up
 sudo somfy rts send L1 down
-sudo somfy rts send L1 my
+sudo somfy rts send L1 stop
 # repeat for L2, L3, L4, ALL as needed
 ```
 

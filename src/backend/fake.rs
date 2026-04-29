@@ -43,7 +43,7 @@ impl FakeBackend {
                 self.sender.send(channel)?;
                 self.transport.record_selection(channel).await;
             }
-            Command::Up | Command::Down | Command::My | Command::Stop | Command::Prog => {
+            Command::Up | Command::Down | Command::Stop | Command::Prog => {
                 self.transport.send(target, command).await?;
             }
         }

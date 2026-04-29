@@ -199,7 +199,7 @@ impl From<RtsCommandArg> for Command {
         match command {
             RtsCommandArg::Up => Self::Up,
             RtsCommandArg::Down => Self::Down,
-            RtsCommandArg::My => Self::My,
+            RtsCommandArg::Stop => Self::Stop,
         }
     }
 }
