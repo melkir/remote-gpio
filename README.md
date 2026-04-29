@@ -28,7 +28,13 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Pass install flags through the script when bootstrapping a hardware backend:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash -s -- --backend rts
+```
+
+HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
 ### Upgrade
 
@@ -60,15 +66,12 @@ sudo somfy doctor
 
 The RTS backend transmits Somfy RTS frames directly through a CC1101 module. Each channel (`L1`–`L4` + `ALL`) is a separate virtual remote with its own 24-bit ID and rolling code, persisted to `/var/lib/somfy/rts.json`.
 
-Prereqs on the Pi:
+Enable SPI on the Pi, then install the RTS backend. `somfy install --backend rts` installs `pigpio`, configures `pigpiod` to listen on localhost only, enables `pigpiod`, and refreshes the `somfy` unit.
 
 ```bash
 sudo raspi-config            # enable SPI
-sudo apt install pigpio
-sudo systemctl enable pigpiod
-# Run pigpiod localhost-only:
-sudo systemctl edit pigpiod  # add ExecStart override: pigpiod -l
-sudo systemctl restart pigpiod
+sudo somfy install --backend rts
+sudo somfy doctor
 ```
 
 Pair each channel once (motor in programming mode, then):

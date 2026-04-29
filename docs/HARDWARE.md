@@ -120,6 +120,10 @@ RtsBackend::transmit(channel, command)
 
 CC1101, pigpiod TCP, and GDO0 are configured **once at backend startup** (`somfy serve --backend rts`); per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
 
+`sudo somfy install --backend rts` provisions the runtime dependency by installing
+the `pigpio` package, writing a systemd drop-in that starts `pigpiod -l`, and
+enabling `pigpiod`.
+
 ### Runtime configuration
 
 | Flag                  | Env                     | Default          |

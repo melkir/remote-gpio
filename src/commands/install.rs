@@ -3,6 +3,7 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::process::Command;
 
 use crate::backend::BackendKind;
 use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
@@ -11,6 +12,8 @@ use crate::homekit::config;
 use crate::systemd;
 
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
+const PIGPIOD_OVERRIDE_PATH: &str = "/etc/systemd/system/pigpiod.service.d/somfy-localhost.conf";
+const PIGPIOD_OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/pigpiod -l\n";
 
 pub fn render_unit(service_user: &str, exec_start: &str) -> String {
     UNIT_TEMPLATE
@@ -41,6 +44,10 @@ pub fn run(user_override: Option<String>, backend: BackendKind) -> Result<()> {
         );
     }
 
+    if backend == BackendKind::Rts {
+        prepare_rts_prereqs()?;
+    }
+
     let rendered = render_unit(
         &service_user,
         &format!("{BIN_PATH} serve --backend {backend}"),
@@ -65,6 +72,73 @@ pub fn run(user_override: Option<String>, backend: BackendKind) -> Result<()> {
     prepare_state_dir(&service_user_info)?;
     systemd::systemctl(&["enable", "--now", "somfy"])?;
     println!("somfy installed as {service_user}, service enabled");
+    Ok(())
+}
+
+fn prepare_rts_prereqs() -> Result<()> {
+    ensure_pigpio_installed()?;
+    configure_pigpiod_localhost()?;
+    Ok(())
+}
+
+fn ensure_pigpio_installed() -> Result<()> {
+    if command_exists("pigpiod") {
+        tracing::info!("pigpiod already installed");
+        return Ok(());
+    }
+
+    if !command_exists("apt-get") {
+        bail!("pigpiod is not installed and apt-get is unavailable; install the `pigpio` package before using the RTS backend");
+    }
+
+    run_command("apt-get", &["update"]).context("updating apt package metadata")?;
+    run_command("apt-get", &["install", "-y", "pigpio"]).context("installing pigpio")?;
+    Ok(())
+}
+
+fn configure_pigpiod_localhost() -> Result<()> {
+    let override_path = Path::new(PIGPIOD_OVERRIDE_PATH);
+    if !override_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid pigpiod override path"))?
+        .exists()
+    {
+        fs::create_dir_all(override_path.parent().unwrap())
+            .with_context(|| format!("creating {}", override_path.parent().unwrap().display()))?;
+    }
+
+    let on_disk = fs::read_to_string(override_path).ok();
+    let needs_write = match &on_disk {
+        Some(existing) => existing.trim() != PIGPIOD_OVERRIDE.trim(),
+        None => true,
+    };
+
+    if needs_write {
+        atomic_write(override_path, PIGPIOD_OVERRIDE)?;
+        systemd::systemctl(&["daemon-reload"])?;
+        tracing::info!("wrote {}", PIGPIOD_OVERRIDE_PATH);
+    } else {
+        tracing::info!("{} already in sync", PIGPIOD_OVERRIDE_PATH);
+    }
+
+    systemd::systemctl(&["enable", "--now", "pigpiod"])?;
+    systemd::systemctl(&["restart", "pigpiod"])?;
+    Ok(())
+}
+
+fn command_exists(command: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+}
+
+fn run_command(command: &str, args: &[&str]) -> Result<()> {
+    let output = Command::new(command).args(args).output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("{} {} failed: {}", command, args.join(" "), stderr.trim());
+    }
     Ok(())
 }
 

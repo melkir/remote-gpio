@@ -3,12 +3,33 @@ set -euo pipefail
 
 REPO="melkir/remote-gpio"
 TARGET_ARCH="armv7l"
+INSTALL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
-            echo "Usage: install.sh"
+            echo "Usage: install.sh [--backend fake|telis|rts] [--user USER]"
             exit 0
+            ;;
+        --backend)
+            if [[ $# -lt 2 ]]; then
+                echo "error: --backend requires a value" >&2
+                exit 1
+            fi
+            case "$2" in
+                fake|telis|rts) ;;
+                *) echo "error: unsupported backend: $2" >&2; exit 1 ;;
+            esac
+            INSTALL_ARGS+=("--backend" "$2")
+            shift 2
+            ;;
+        --user)
+            if [[ $# -lt 2 ]]; then
+                echo "error: --user requires a value" >&2
+                exit 1
+            fi
+            INSTALL_ARGS+=("--user" "$2")
+            shift 2
             ;;
         *) echo "error: unknown flag: $1" >&2; exit 1 ;;
     esac
@@ -71,7 +92,7 @@ install -m 0755 "$tmp/somfy" /usr/local/bin/somfy
 
 echo "Running somfy install..."
 # Preserve SUDO_USER so the unit runs as the invoking user
-/usr/local/bin/somfy install
+/usr/local/bin/somfy install "${INSTALL_ARGS[@]}"
 
 cat <<EOF
 
