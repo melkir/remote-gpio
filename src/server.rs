@@ -109,6 +109,7 @@ async fn handle_command(
 
 async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> Result<(), String> {
     let (cmd, channel) = validate_command_request(command, channel)?;
+    tracing::info!(command = ?cmd, channel = ?channel, "remote command received");
     if cmd == Command::Select {
         state
             .remote_control
@@ -119,6 +120,7 @@ async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> 
     }
 
     if let Some(channel) = channel {
+        tracing::debug!(%channel, "selecting channel");
         state
             .remote_control
             .execute(Command::Select, Some(channel))
@@ -130,6 +132,7 @@ async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> 
         .execute(cmd, None)
         .await
         .map_err(|e| e.to_string())?;
+    tracing::info!(command = ?cmd, "remote command completed");
     Ok(())
 }
 

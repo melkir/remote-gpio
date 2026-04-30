@@ -104,6 +104,20 @@ impl RtsBackend {
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
         let pulses = waveform::build(frame, self.options.gdo0_gpio, self.options.frame_count);
+        let pulse_count = pulses.len();
+        let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
+        tracing::debug!(
+            %channel,
+            command = ?command,
+            rolling_code,
+            remote_id,
+            frame = %hex::encode(frame.bytes()),
+            gpio = self.options.gdo0_gpio,
+            frame_count = self.options.frame_count,
+            pulse_count,
+            total_duration_us,
+            "rts waveform prepared"
+        );
         let hardware = self.hardware.clone();
 
         tokio::task::spawn_blocking(move || transmit_blocking(hardware, pulses))
@@ -111,7 +125,15 @@ impl RtsBackend {
             .context("RTS transmitter task failed")??;
 
         let mut state = self.state.lock().await;
-        state.commit_rolling_code(channel, rolling_code)
+        state.commit_rolling_code(channel, rolling_code)?;
+        tracing::info!(
+            %channel,
+            command = ?command,
+            rolling_code,
+            remote_id,
+            "rts command transmitted"
+        );
+        Ok(())
     }
 }
 
@@ -148,13 +170,16 @@ fn transmit_blocking(
     hw.pigpio.wave_new()?;
     hw.pigpio.wave_add_generic(&pulses)?;
     let wave_id = hw.pigpio.wave_create()?;
+    tracing::debug!(wave_id, "pigpio wave created");
 
     hw.radio.tx()?;
     let tx_result = (|| -> Result<()> {
         hw.pigpio.wave_tx(wave_id)?;
+        tracing::debug!(wave_id, "pigpio wave transmit started");
         while hw.pigpio.wave_busy()? {
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
+        tracing::debug!(wave_id, "pigpio wave transmit completed");
         Ok(())
     })();
     let delete_result = hw.pigpio.wave_delete(wave_id);
