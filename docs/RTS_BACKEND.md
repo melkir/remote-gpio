@@ -40,9 +40,9 @@ impl ActiveBackend {
     /// Used by the HTTP `/command` handler. `Select` mutates selection.
     async fn execute(&self, command: Command) -> Result<CommandOutcome>;
 
-    /// Stateless path: directs `command` at `channel` without consulting or
-    /// mutating `selected_channel`. Used by HomeKit (one accessory per
-    /// channel) and the CLI. Does not emit a `selection` event.
+    /// Direct path: directs `command` at `channel` without consulting or
+    /// mutating `selected_channel`. Used by HomeKit. Does not emit a
+    /// `selection` event.
     async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome>;
 
     fn selected_channel(&self) -> Channel;
@@ -56,16 +56,17 @@ command on the stateful path. On Telis it cycles the physical SELECT button
 until the requested LED is active; on RTS it is a zero-RF state update that
 mutates `selected_channel` and broadcasts a `selection` event.
 
-`Prog` is CLI-only and flows through `execute_on`. It is intentionally absent
-from the HTTP and HomeKit surfaces because pairing is a setup-time admin
-operation that should not be reachable from a generic UI tap.
+`Prog` requires an explicit channel at the API boundary. The service selects
+that channel first, then runs backend-native `Prog` through the stateful path.
+Backends decide whether they support it.
 
 Call paths, outside in:
 
 | Caller      | Entry point           | Touches `selected_channel`? |
 | ----------- | --------------------- | --------------------------- |
-| HTTP UI     | `POST /command`       | yes (via `execute`)         |
-| HomeKit/CLI | `execute_on(ch, cmd)` | no                          |
+| HTTP selected command | `POST /command` without `channel` | yes (via `execute`) |
+| HTTP channel command  | `POST /command` with `channel`    | yes (selects first) |
+| HomeKit               | `execute_on(ch, cmd)`             | no                  |
 
 ### Position Inference
 
@@ -104,10 +105,12 @@ coordination questions without a real deployment benefit.
 
 Use domain names in external JSON.
 
-- `POST /command`: `{ "command": "up" }` for movement commands. Movement
-  commands (`up`, `down`, `stop`) target the currently-selected channel
-  and do not take a `channel` field. `prog` is not exposed on the HTTP surface;
-  pairing happens through the CLI.
+- `POST /command`: `{ "command": "up" }` for movement commands targeting the
+  currently-selected channel.
+- `POST /command`: `{ "command": "up", "channel": "L2" }` selects `L2` and
+  then sends the movement command, so live clients see the selected channel.
+- `POST /command`: `{ "command": "prog", "channel": "L2" }` selects `L2` and
+  then runs backend-native programming; `prog` requires a channel.
 - `POST /command`: `{ "command": "select", "channel": "L2" }` sets the active
   channel directly. `{ "command": "select" }` with no `channel` advances the
   selection one step through `L1 → L2 → L3 → L4 → ALL → L1`.
@@ -538,16 +541,16 @@ State tests:
 
 API/domain tests:
 
-- `POST /command` accepts `channel` only on `select` and rejects the old `led`
-  field.
+- `POST /command` accepts channels for movement and `prog`, selects that
+  channel first, and rejects the old `led` field.
 - `select` with an explicit channel sets the selection.
 - `select` without a channel cycles `L1 → L2 → L3 → L4 → ALL → L1`.
-- Movement commands (`up`, `down`, `stop`) target the currently-
-  selected channel.
+- Movement commands (`up`, `down`, `stop`) target the currently selected
+  channel, after applying any explicit request channel.
 - `stop` maps to the backend command used for the middle button.
 - `GET /channel` returns the current channel as plain text on both backends.
-- `execute_on(channel, command)` does not change `selected_channel` and does
-  not emit a `selection` event.
+- `execute_on(channel, command)` remains the HomeKit direct path: it does not
+  change `selected_channel` and does not emit a `selection` event.
 - Inferred position fans out to all paired channels when `ALL` is targeted.
 
 pigpiod client tests:

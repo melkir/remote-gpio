@@ -101,19 +101,35 @@ async fn handle_command(
     Json(payload): Json<CommandRequest>,
 ) -> Response {
     let CommandRequest { command, channel } = payload;
-    match dispatch(&state.remote_control, &command, channel).await {
+    match dispatch(&state, &command, channel).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
-async fn dispatch(
-    rc: &RemoteControl,
-    command: &str,
-    channel: Option<Channel>,
-) -> Result<(), String> {
+async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> Result<(), String> {
     let (cmd, channel) = validate_command_request(command, channel)?;
-    rc.execute(cmd, channel).await.map_err(|e| e.to_string())?;
+    if cmd == Command::Select {
+        state
+            .remote_control
+            .execute(cmd, channel)
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if let Some(channel) = channel {
+        state
+            .remote_control
+            .execute(Command::Select, Some(channel))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    state
+        .remote_control
+        .execute(cmd, None)
+        .await
+        .map_err(|e| e.to_string())?;
     Ok(())
 }
 
@@ -123,10 +139,10 @@ fn validate_command_request(
 ) -> Result<(Command, Option<Channel>), String> {
     let cmd = Command::from_str(command).map_err(|e| e.to_string())?;
     match (cmd, channel) {
-        (Command::Prog, _) => Err("prog is only available through the CLI".to_string()),
+        (Command::Prog, Some(channel)) => Ok((cmd, Some(channel))),
+        (Command::Prog, None) => Err("prog requires a channel".to_string()),
         (Command::Select, channel) => Ok((cmd, channel)),
-        (_, Some(_)) => Err("channel is only accepted for select commands".to_string()),
-        (_, None) => Ok((cmd, None)),
+        (Command::Up | Command::Down | Command::Stop, channel) => Ok((cmd, channel)),
     }
 }
 
@@ -183,7 +199,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
-                                    match dispatch(&state.remote_control, &command, channel).await {
+                                    match dispatch(&state, &command, channel).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)
                                         }
@@ -236,15 +252,52 @@ mod tests {
     }
 
     #[test]
-    fn validate_rejects_directional_channel() {
-        let err = validate_command_request("up", Some(Channel::L1)).unwrap_err();
-        assert!(err.contains("channel is only accepted"));
+    fn validate_accepts_directional_channel() {
+        assert_eq!(
+            validate_command_request("up", Some(Channel::L1)).unwrap(),
+            (Command::Up, Some(Channel::L1))
+        );
     }
 
     #[test]
-    fn validate_rejects_prog_over_http() {
+    fn validate_rejects_prog_without_channel() {
         let err = validate_command_request("prog", None).unwrap_err();
-        assert!(err.contains("CLI"));
+        assert!(err.contains("requires a channel"));
+    }
+
+    #[test]
+    fn validate_accepts_prog_with_channel() {
+        assert_eq!(
+            validate_command_request("prog", Some(Channel::L1)).unwrap(),
+            (Command::Prog, Some(Channel::L1))
+        );
+    }
+
+    #[cfg(feature = "fake")]
+    #[tokio::test]
+    async fn dispatch_with_channel_selects_then_executes() {
+        let remote_control = Arc::new(
+            RemoteControl::with_backend(crate::backend::BackendConfig::default())
+                .await
+                .unwrap(),
+        );
+        let state = AppState {
+            remote_control: remote_control.clone(),
+        };
+
+        dispatch(&state, "up", Some(Channel::L3)).await.unwrap();
+
+        assert_eq!(remote_control.current_selection(), Channel::L3);
+        assert_eq!(
+            remote_control.operations(),
+            vec![
+                crate::backend::ProtocolOperation::TelisSelection(Channel::L3),
+                crate::backend::ProtocolOperation::FakeCommand {
+                    channel: Channel::L3,
+                    command: Command::Up,
+                },
+            ]
+        );
     }
 
     #[test]

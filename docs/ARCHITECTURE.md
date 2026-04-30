@@ -32,7 +32,7 @@ runtime config value:
 All three implement the same shape:
 
 - `execute(command, channel?)` for stateful UI commands (Select mutates selection; directional commands target the current selection).
-- `execute_on(channel, command)` for stateless CLI/HomeKit commands; never mutates selection on RTS, may move the physical selector on Telis.
+- `execute_on(channel, command)` for HomeKit's per-accessory commands; never mutates selection on RTS, may move the physical selector on Telis.
 - `selected_channel()` / `subscribe_selected_channel()` for the live selection watch channel.
 
 Live backend switching is intentionally unsupported. Pick one in
@@ -92,7 +92,7 @@ than rejecting concurrent commands with a "busy" error.
 The web server exposes one command endpoint and two live-state transports:
 
 - `GET /channel` for the current selection (plain text, e.g. `L2`).
-- `POST /command` for one command (`{"command":"up"}`, or `{"command":"select","channel":"L3"}`).
+- `POST /command` for one command (`{"command":"up"}`, `{"command":"up","channel":"L3"}`, or `{"command":"select","channel":"L3"}`).
 - `GET /events` for the Preact PWA's SSE stream of selection updates (`event.data === "L2"`).
 - `GET /ws` for bidirectional clients that want live updates and command messages.
 

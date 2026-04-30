@@ -113,8 +113,10 @@ Server listens on `0.0.0.0:5002`.
 {"command": "up"}
 {"command": "down"}
 {"command": "stop"}
+{"command": "up", "channel": "L3"}
 {"command": "select"}
 {"command": "select", "channel": "L3"}
+{"command": "prog", "channel": "L3"}
 ```
 
 ### HomeKit
