@@ -17,7 +17,7 @@ pub(crate) struct TelisBackend {
 }
 
 impl TelisBackend {
-    pub(super) async fn new(options: TelisOptions) -> Result<Self> {
+    pub(crate) async fn new(options: TelisOptions) -> Result<Self> {
         let transport = TelisGpioTransport { options };
         let selection = transport.select().await?;
         let (sender, selected_rx) = watch::channel(selection);
@@ -29,7 +29,7 @@ impl TelisBackend {
         })
     }
 
-    pub(super) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
+    pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
         if let Some(target) = channel {
             self.select_to(target, true).await?;
@@ -50,7 +50,7 @@ impl TelisBackend {
         }
     }
 
-    pub(super) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
+    pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
         self.select_to(channel, true).await?;
 

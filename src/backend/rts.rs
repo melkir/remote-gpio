@@ -1,10 +1,12 @@
 use anyhow::{bail, Context, Result};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex as StdMutex};
+#[cfg(feature = "telis")]
+use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
-use crate::backend::{RtsOptions, SelectedChannelRx};
+use crate::backend::{RtsOptions, SelectedChannelRx, TelisOptions};
 use crate::gpio::Channel;
 use crate::remote::Command;
 use crate::rts::cc1101::Cc1101;
@@ -14,6 +16,10 @@ use crate::rts::state::RtsStateStore;
 use crate::rts::waveform;
 
 const MAX_BCM_GPIO: u8 = 31;
+#[cfg(feature = "telis")]
+const TELIS_PROG_PRESS: Duration = Duration::from_millis(2500);
+#[cfg(feature = "telis")]
+const TELIS_RTS_PROG_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Debug)]
 struct Hardware {
@@ -32,13 +38,14 @@ pub(crate) struct RtsBackend {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
     options: RtsOptions,
+    telis: TelisOptions,
     state: Mutex<RtsStateStore>,
     transmitter_lock: Mutex<()>,
     hardware: Arc<StdMutex<Hardware>>,
 }
 
 impl RtsBackend {
-    pub(crate) async fn new(options: RtsOptions) -> Result<Self> {
+    pub(crate) async fn new(options: RtsOptions, telis: TelisOptions) -> Result<Self> {
         if options.gdo0_gpio > MAX_BCM_GPIO {
             bail!(
                 "RTS GDO0 GPIO {} is out of BCM range (0..={MAX_BCM_GPIO})",
@@ -53,6 +60,7 @@ impl RtsBackend {
             sender,
             selected_rx,
             options,
+            telis,
             state: Mutex::new(state),
             transmitter_lock: Mutex::new(()),
             hardware: Arc::new(StdMutex::new(hardware)),
@@ -73,6 +81,9 @@ impl RtsBackend {
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
+        if command == Command::Prog {
+            return self.program(channel).await;
+        }
         let rts_command = RtsCommand::try_from(command)?;
         self.transmit(channel, rts_command).await
     }
@@ -92,6 +103,29 @@ impl RtsBackend {
         }
         self.sender.send(channel)?;
         Ok(())
+    }
+
+    async fn program(&self, channel: Channel) -> Result<()> {
+        if let Some(prog_gpio) = self.telis.gpio.prog {
+            self.assisted_prog(channel, prog_gpio).await?;
+        }
+        self.transmit(channel, RtsCommand::Prog).await
+    }
+
+    #[cfg(feature = "telis")]
+    async fn assisted_prog(&self, channel: Channel, prog_gpio: u8) -> Result<()> {
+        tracing::info!(%channel, prog_gpio, "starting Telis-assisted RTS programming");
+        let telis = super::telis::TelisBackend::new(self.telis.clone()).await?;
+        telis.execute(Command::Select, Some(channel)).await?;
+        crate::gpio::trigger_output_gpio(prog_gpio, TELIS_PROG_PRESS).await?;
+        tokio::time::sleep(TELIS_RTS_PROG_DELAY).await;
+        tracing::info!(%channel, prog_gpio, "Telis-assisted RTS programming handoff complete");
+        Ok(())
+    }
+
+    #[cfg(not(feature = "telis"))]
+    async fn assisted_prog(&self, _channel: Channel, _prog_gpio: u8) -> Result<()> {
+        bail!("telis.gpio.prog is configured, but this binary was built without the telis feature")
     }
 
     async fn transmit(&self, channel: Channel, command: RtsCommand) -> Result<()> {

@@ -134,7 +134,7 @@ pub(crate) enum ActiveBackend {
     #[cfg(feature = "telis")]
     Telis(TelisBackend),
     #[cfg(feature = "rts")]
-    Rts(RtsBackend),
+    Rts(Box<RtsBackend>),
 }
 
 impl ActiveBackend {
@@ -167,7 +167,9 @@ impl ActiveBackend {
             BackendKind::Rts => {
                 #[cfg(feature = "rts")]
                 {
-                    Ok(Self::Rts(RtsBackend::new(config.rts).await?))
+                    Ok(Self::Rts(Box::new(
+                        RtsBackend::new(config.rts, config.telis).await?,
+                    )))
                 }
                 #[cfg(not(feature = "rts"))]
                 {
