@@ -1,7 +1,11 @@
 use anyhow::Result;
 use clap::ValueEnum;
+#[cfg(all(feature = "rts", feature = "telis"))]
+use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use std::fmt;
+#[cfg(all(feature = "rts", feature = "telis"))]
+use std::sync::Arc;
 use tokio::sync::watch::Receiver;
 
 use crate::gpio::Channel;
@@ -133,7 +137,7 @@ pub(crate) enum ProtocolOperation {
 pub(crate) struct CommandRouter {
     executor: DriverExecutor,
     #[cfg(all(feature = "rts", feature = "telis"))]
-    telis_programmer: Option<TelisProgrammer>,
+    telis_programmer: Option<Arc<dyn Programmer>>,
 }
 
 #[derive(Debug)]
@@ -203,7 +207,7 @@ impl CommandRouter {
             executor,
             #[cfg(all(feature = "rts", feature = "telis"))]
             telis_programmer: use_telis_programmer
-                .then(|| TelisProgrammer::new(telis_programmer_options)),
+                .then(|| Arc::new(TelisProgrammer::new(telis_programmer_options)) as Arc<_>),
         })
     }
 
@@ -299,6 +303,18 @@ impl CommandRouter {
     }
 }
 
+#[cfg(all(feature = "rts", feature = "telis"))]
+trait Programmer: fmt::Debug + Send + Sync + 'static {
+    fn program(&self, channel: Channel) -> BoxFuture<'_, Result<()>>;
+}
+
+#[cfg(all(feature = "rts", feature = "telis"))]
+impl Programmer for TelisProgrammer {
+    fn program(&self, channel: Channel) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move { TelisProgrammer::program(self, channel).await })
+    }
+}
+
 pub fn infer_position(command: Command) -> Option<u8> {
     match command {
         Command::Up => Some(100),
@@ -318,5 +334,94 @@ mod tests {
         assert_eq!(infer_position(Command::Stop), None);
         assert_eq!(infer_position(Command::Select), None);
         assert_eq!(infer_position(Command::Prog), None);
+    }
+
+    #[cfg(all(feature = "rts", feature = "telis"))]
+    #[tokio::test]
+    async fn rts_prog_runs_telis_programmer_before_pairing_waveform() {
+        use crate::rts::frame::RtsCommand;
+        use std::sync::{Arc, Mutex as StdMutex};
+
+        #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+        enum Event {
+            TelisProg(Channel),
+            RtsTransmit(Channel, RtsCommand),
+        }
+
+        #[derive(Debug)]
+        struct RecordingProgrammer {
+            events: Arc<StdMutex<Vec<Event>>>,
+        }
+
+        impl Programmer for RecordingProgrammer {
+            fn program(&self, channel: Channel) -> BoxFuture<'_, Result<()>> {
+                Box::pin(async move {
+                    self.events
+                        .lock()
+                        .expect("recording programmer mutex")
+                        .push(Event::TelisProg(channel));
+                    Ok(())
+                })
+            }
+        }
+
+        #[derive(Debug)]
+        struct RecordingTransmitter {
+            events: Arc<StdMutex<Vec<Event>>>,
+        }
+
+        impl rts::RtsTransmitter for RecordingTransmitter {
+            fn transmit(&self, transmission: rts::PreparedTransmission) -> Result<()> {
+                self.events
+                    .lock()
+                    .expect("recording transmitter mutex")
+                    .push(Event::RtsTransmit(
+                        transmission.channel,
+                        transmission.command,
+                    ));
+                Ok(())
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let events = Arc::new(StdMutex::new(Vec::new()));
+        let state_path = dir.path().join(crate::rts::state::STATE_FILE);
+        let rts_driver = rts::RtsDriver::new_for_test(
+            RtsOptions {
+                gdo0_gpio: 18,
+                frame_count: crate::rts::waveform::DEFAULT_FRAME_COUNT,
+                ..RtsOptions::default()
+            },
+            &state_path,
+            Arc::new(RecordingTransmitter {
+                events: events.clone(),
+            }),
+        )
+        .await
+        .unwrap();
+        let router = CommandRouter {
+            executor: DriverExecutor::Rts(Box::new(rts_driver)),
+            telis_programmer: Some(Arc::new(RecordingProgrammer {
+                events: events.clone(),
+            })),
+        };
+
+        router.execute_on(Channel::L3, Command::Prog).await.unwrap();
+
+        assert_eq!(
+            *events.lock().expect("recording events mutex"),
+            vec![
+                Event::TelisProg(Channel::L3),
+                Event::RtsTransmit(Channel::L3, RtsCommand::Prog),
+            ]
+        );
+        let state: crate::rts::state::RtsState =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(state.selected_channel, Channel::L1);
+        assert_eq!(
+            state.channels.get(&Channel::L3).unwrap().reserved_until,
+            1 + crate::rts::state::DEFAULT_RESERVE_SIZE
+        );
+        assert_eq!(state.channels.get(&Channel::L1).unwrap().reserved_until, 1);
     }
 }

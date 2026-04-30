@@ -34,7 +34,7 @@ pub(crate) struct RtsDriver {
     options: RtsOptions,
     state: Mutex<RtsStateStore>,
     transmitter_lock: Mutex<()>,
-    hardware: Arc<StdMutex<Hardware>>,
+    transmitter: Arc<dyn RtsTransmitter>,
 }
 
 impl RtsDriver {
@@ -48,15 +48,50 @@ impl RtsDriver {
         let state = RtsStateStore::load_or_init_default()?;
         let selected_channel = state.selected_channel();
         let (sender, selected_rx) = watch::channel(selected_channel);
-        let hardware = init_hardware(options.clone()).await?;
-        Ok(Self {
+        let transmitter = init_transmitter(options.clone()).await?;
+        Ok(Self::from_parts(
+            sender,
+            selected_rx,
+            options,
+            state,
+            transmitter,
+        ))
+    }
+
+    fn from_parts(
+        sender: Sender<Channel>,
+        selected_rx: SelectedChannelRx,
+        options: RtsOptions,
+        state: RtsStateStore,
+        transmitter: Arc<dyn RtsTransmitter>,
+    ) -> Self {
+        Self {
             sender,
             selected_rx,
             options,
             state: Mutex::new(state),
             transmitter_lock: Mutex::new(()),
-            hardware: Arc::new(StdMutex::new(hardware)),
-        })
+            transmitter,
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) async fn new_for_test(
+        options: RtsOptions,
+        state_path: impl Into<std::path::PathBuf>,
+        transmitter: Arc<dyn RtsTransmitter>,
+    ) -> Result<Self> {
+        let state =
+            RtsStateStore::load_or_init(state_path, crate::rts::state::DEFAULT_RESERVE_SIZE)?;
+        let selected_channel = state.selected_channel();
+        let (sender, selected_rx) = watch::channel(selected_channel);
+        Ok(Self::from_parts(
+            sender,
+            selected_rx,
+            options,
+            state,
+            transmitter,
+        ))
     }
 
     pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
@@ -120,9 +155,20 @@ impl RtsDriver {
             total_duration_us,
             "rts waveform prepared"
         );
-        let hardware = self.hardware.clone();
+        let transmission = PreparedTransmission {
+            #[cfg(test)]
+            channel,
+            #[cfg(test)]
+            command,
+            #[cfg(test)]
+            rolling_code,
+            #[cfg(test)]
+            remote_id,
+            pulses,
+        };
+        let transmitter = self.transmitter.clone();
 
-        tokio::task::spawn_blocking(move || transmit_blocking(hardware, pulses))
+        tokio::task::spawn_blocking(move || transmitter.transmit(transmission))
             .await
             .context("RTS transmitter task failed")??;
 
@@ -139,8 +185,36 @@ impl RtsDriver {
     }
 }
 
-async fn init_hardware(options: RtsOptions) -> Result<Hardware> {
-    tokio::task::spawn_blocking(move || -> Result<Hardware> {
+#[derive(Clone, Debug)]
+pub(super) struct PreparedTransmission {
+    #[cfg(test)]
+    pub(super) channel: Channel,
+    #[cfg(test)]
+    pub(super) command: RtsCommand,
+    #[cfg(test)]
+    pub(super) rolling_code: u16,
+    #[cfg(test)]
+    pub(super) remote_id: u32,
+    pub(super) pulses: Vec<waveform::GpioPulse>,
+}
+
+pub(super) trait RtsTransmitter: std::fmt::Debug + Send + Sync + 'static {
+    fn transmit(&self, transmission: PreparedTransmission) -> Result<()>;
+}
+
+#[derive(Debug)]
+struct PigpioTransmitter {
+    hardware: Arc<StdMutex<Hardware>>,
+}
+
+impl RtsTransmitter for PigpioTransmitter {
+    fn transmit(&self, transmission: PreparedTransmission) -> Result<()> {
+        transmit_blocking(self.hardware.clone(), transmission.pulses)
+    }
+}
+
+async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>> {
+    tokio::task::spawn_blocking(move || -> Result<Arc<dyn RtsTransmitter>> {
         let spi = open_spi(&options.spi_device)?;
         let mut radio = Cc1101::new(spi);
         radio
@@ -154,10 +228,12 @@ async fn init_hardware(options: RtsOptions) -> Result<Hardware> {
         pigpio.set_output(options.gdo0_gpio)?;
         pigpio.write_level(options.gdo0_gpio, false)?;
         pigpio.wave_clear()?;
-        Ok(Hardware { radio, pigpio })
+        Ok(Arc::new(PigpioTransmitter {
+            hardware: Arc::new(StdMutex::new(Hardware { radio, pigpio })),
+        }))
     })
     .await
-    .context("RTS hardware init task failed")?
+    .context("RTS transmitter init task failed")?
 }
 
 #[cfg(target_os = "linux")]
@@ -221,5 +297,93 @@ fn next_channel(channel: Channel) -> Channel {
         Channel::L3 => Channel::L4,
         Channel::L4 => Channel::ALL,
         Channel::ALL => Channel::L1,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Debug, Default)]
+    struct RecordingTransmitter {
+        transmissions: StdMutex<Vec<PreparedTransmission>>,
+    }
+
+    impl RecordingTransmitter {
+        fn transmissions(&self) -> Vec<PreparedTransmission> {
+            self.transmissions
+                .lock()
+                .expect("recording transmitter mutex")
+                .clone()
+        }
+    }
+
+    impl RtsTransmitter for RecordingTransmitter {
+        fn transmit(&self, transmission: PreparedTransmission) -> Result<()> {
+            self.transmissions
+                .lock()
+                .expect("recording transmitter mutex")
+                .push(transmission);
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn execute_on_transmits_waveform_and_reserves_rolling_code() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join(crate::rts::state::STATE_FILE);
+        let transmitter = Arc::new(RecordingTransmitter::default());
+        let driver = RtsDriver::new_for_test(
+            RtsOptions {
+                gdo0_gpio: 18,
+                frame_count: waveform::DEFAULT_FRAME_COUNT,
+                ..RtsOptions::default()
+            },
+            &state_path,
+            transmitter.clone(),
+        )
+        .await
+        .unwrap();
+
+        driver.execute_on(Channel::L3, Command::Up).await.unwrap();
+
+        let transmissions = transmitter.transmissions();
+        assert_eq!(transmissions.len(), 1);
+        assert_eq!(transmissions[0].channel, Channel::L3);
+        assert_eq!(transmissions[0].command, RtsCommand::Up);
+        assert_eq!(transmissions[0].rolling_code, 1);
+        assert!(transmissions[0].remote_id > 0);
+        assert_eq!(transmissions[0].pulses.len(), 508);
+
+        let state: crate::rts::state::RtsState =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(state.selected_channel, Channel::L1);
+        assert_eq!(
+            state.channels.get(&Channel::L3).unwrap().reserved_until,
+            1 + crate::rts::state::DEFAULT_RESERVE_SIZE
+        );
+    }
+
+    #[tokio::test]
+    async fn select_updates_persisted_rts_selection_without_transmitting() {
+        let dir = tempfile::tempdir().unwrap();
+        let state_path = dir.path().join(crate::rts::state::STATE_FILE);
+        let transmitter = Arc::new(RecordingTransmitter::default());
+        let driver =
+            RtsDriver::new_for_test(RtsOptions::default(), &state_path, transmitter.clone())
+                .await
+                .unwrap();
+
+        driver
+            .execute(Command::Select, Some(Channel::L4))
+            .await
+            .unwrap();
+
+        assert_eq!(driver.selected_channel(), Channel::L4);
+        assert!(transmitter.transmissions().is_empty());
+        let state: crate::rts::state::RtsState =
+            serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
+        assert_eq!(state.selected_channel, Channel::L4);
     }
 }
