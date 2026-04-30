@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
@@ -7,6 +8,8 @@ use crate::gpio::{Channel, TelisButton};
 use crate::remote::Command;
 
 const MAX_SELECT_CYCLES: usize = 8;
+const PROG_PRESS: Duration = Duration::from_millis(2500);
+const RTS_PROG_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Debug)]
 pub(crate) struct TelisBackend {
@@ -39,7 +42,7 @@ impl TelisBackend {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::Stop => self.transport.press(TelisButton::Stop).await,
-            Command::Prog => anyhow::bail!("prog is not supported by the telis backend"),
+            Command::Prog => self.press_prog(self.selected_channel()).await,
             Command::Select => {
                 if channel.is_none() {
                     self.select_once(true).await.map(|_| ())
@@ -58,9 +61,16 @@ impl TelisBackend {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::Stop => self.transport.press(TelisButton::Stop).await,
-            Command::Prog => anyhow::bail!("prog is not supported by the telis backend"),
+            Command::Prog => self.press_prog(channel).await,
             Command::Select => Ok(()),
         }
+    }
+
+    #[cfg(feature = "rts")]
+    pub(crate) async fn program(&self, channel: Channel) -> Result<()> {
+        let _guard = self.execute_lock.lock().await;
+        self.select_to(channel, true).await?;
+        self.press_prog(channel).await
     }
 
     pub(super) fn selected_channel(&self) -> Channel {
@@ -101,6 +111,38 @@ impl TelisBackend {
             attempts += 1;
         }
         Ok(())
+    }
+
+    async fn press_prog(&self, channel: Channel) -> Result<()> {
+        let prog_gpio = self
+            .transport
+            .options
+            .gpio
+            .prog
+            .ok_or_else(|| anyhow::anyhow!("telis.gpio.prog is required for prog"))?;
+        tracing::info!(%channel, prog_gpio, "pressing Telis Prog");
+        crate::gpio::trigger_output_gpio(prog_gpio, PROG_PRESS).await?;
+        tokio::time::sleep(RTS_PROG_DELAY).await;
+        tracing::info!(%channel, prog_gpio, "Telis Prog press complete");
+        Ok(())
+    }
+}
+
+#[cfg(feature = "rts")]
+#[derive(Clone, Debug)]
+pub(crate) struct TelisProgrammer {
+    options: TelisOptions,
+}
+
+#[cfg(feature = "rts")]
+impl TelisProgrammer {
+    pub(crate) fn new(options: TelisOptions) -> Self {
+        Self { options }
+    }
+
+    pub(crate) async fn program(&self, channel: Channel) -> Result<()> {
+        let telis = TelisBackend::new(self.options.clone()).await?;
+        telis.program(channel).await
     }
 }
 

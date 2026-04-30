@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use tokio::sync::broadcast;
 
-use crate::backend::{infer_position, ActiveBackend, CommandOutcome, SelectedChannelRx};
+use crate::backend::{infer_position, CommandOutcome, CommandRouter, SelectedChannelRx};
 use crate::gpio::Channel;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -39,7 +39,7 @@ impl FromStr for Command {
 /// It handles channel selection and button commands while maintaining the current state.
 #[derive(Debug)]
 pub struct RemoteControl {
-    backend: ActiveBackend,
+    backend: CommandRouter,
     /// Fan-out of completed Up/Down commands. This is a transient event stream
     /// used to mirror inferred blind position into HomeKit.
     position_tx: broadcast::Sender<PositionUpdate>,
@@ -48,7 +48,7 @@ pub struct RemoteControl {
 impl RemoteControl {
     /// Creates a new RemoteControl instance and initializes the channel state
     pub async fn new() -> Result<Self> {
-        let backend = ActiveBackend::new(Default::default()).await?;
+        let backend = CommandRouter::new(Default::default()).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             backend,
@@ -57,7 +57,7 @@ impl RemoteControl {
     }
 
     pub async fn with_backend(config: crate::backend::BackendConfig) -> Result<Self> {
-        let backend = ActiveBackend::new(config).await?;
+        let backend = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             backend,

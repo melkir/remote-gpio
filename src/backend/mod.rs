@@ -20,6 +20,8 @@ use fake::FakeBackend;
 use rts::RtsBackend;
 #[cfg(feature = "telis")]
 use telis::TelisBackend;
+#[cfg(all(feature = "rts", feature = "telis"))]
+use telis::TelisProgrammer;
 
 pub type SelectedChannelRx = Receiver<Channel>;
 
@@ -128,7 +130,14 @@ pub(crate) enum ProtocolOperation {
 }
 
 #[derive(Debug)]
-pub(crate) enum ActiveBackend {
+pub(crate) struct CommandRouter {
+    executor: ModeExecutor,
+    #[cfg(all(feature = "rts", feature = "telis"))]
+    telis_programmer: Option<TelisProgrammer>,
+}
+
+#[derive(Debug)]
+enum ModeExecutor {
     #[cfg(feature = "fake")]
     Fake(FakeBackend),
     #[cfg(feature = "telis")]
@@ -137,13 +146,19 @@ pub(crate) enum ActiveBackend {
     Rts(Box<RtsBackend>),
 }
 
-impl ActiveBackend {
+impl CommandRouter {
     pub async fn new(config: BackendConfig) -> Result<Self> {
-        match config.kind {
+        #[cfg(feature = "rts")]
+        let has_telis_prog = config.telis.gpio.prog.is_some();
+        #[cfg(all(feature = "rts", feature = "telis"))]
+        let use_telis_programmer = config.kind == BackendKind::Rts && has_telis_prog;
+        #[cfg(all(feature = "rts", feature = "telis"))]
+        let telis_programmer_options = config.telis.clone();
+        let executor = match config.kind {
             BackendKind::Fake => {
                 #[cfg(feature = "fake")]
                 {
-                    Ok(Self::Fake(FakeBackend::new(Channel::L1)))
+                    ModeExecutor::Fake(FakeBackend::new(Channel::L1))
                 }
                 #[cfg(not(feature = "fake"))]
                 {
@@ -155,7 +170,7 @@ impl ActiveBackend {
             BackendKind::Telis => {
                 #[cfg(feature = "telis")]
                 {
-                    Ok(Self::Telis(TelisBackend::new(config.telis).await?))
+                    ModeExecutor::Telis(TelisBackend::new(config.telis).await?)
                 }
                 #[cfg(not(feature = "telis"))]
                 {
@@ -167,9 +182,13 @@ impl ActiveBackend {
             BackendKind::Rts => {
                 #[cfg(feature = "rts")]
                 {
-                    Ok(Self::Rts(Box::new(
-                        RtsBackend::new(config.rts, config.telis).await?,
-                    )))
+                    if has_telis_prog {
+                        #[cfg(not(feature = "telis"))]
+                        anyhow::bail!(
+                            "telis.gpio.prog is configured, but this binary was built without the \"telis\" feature"
+                        );
+                    }
+                    ModeExecutor::Rts(Box::new(RtsBackend::new(config.rts).await?))
                 }
                 #[cfg(not(feature = "rts"))]
                 {
@@ -178,18 +197,31 @@ impl ActiveBackend {
                     )
                 }
             }
-        }
+        };
+
+        Ok(Self {
+            executor,
+            #[cfg(all(feature = "rts", feature = "telis"))]
+            telis_programmer: use_telis_programmer
+                .then(|| TelisProgrammer::new(telis_programmer_options)),
+        })
     }
 
     pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         let _ = (command, channel);
-        match self {
+        match &self.executor {
             #[cfg(feature = "fake")]
-            Self::Fake(backend) => backend.execute(command, channel).await,
+            ModeExecutor::Fake(backend) => backend.execute(command, channel).await,
             #[cfg(feature = "telis")]
-            Self::Telis(backend) => backend.execute(command, channel).await,
+            ModeExecutor::Telis(backend) => backend.execute(command, channel).await,
             #[cfg(feature = "rts")]
-            Self::Rts(backend) => backend.execute(command, channel).await,
+            ModeExecutor::Rts(backend) => {
+                if command == Command::Prog {
+                    self.program_rts(backend.selected_channel()).await
+                } else {
+                    backend.execute(command, channel).await
+                }
+            }
             #[allow(unreachable_patterns)]
             _ => unreachable!("no backend variants were compiled"),
         }
@@ -197,39 +229,45 @@ impl ActiveBackend {
 
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _ = (channel, command);
-        match self {
+        match &self.executor {
             #[cfg(feature = "fake")]
-            Self::Fake(backend) => backend.execute_on(channel, command).await,
+            ModeExecutor::Fake(backend) => backend.execute_on(channel, command).await,
             #[cfg(feature = "telis")]
-            Self::Telis(backend) => backend.execute_on(channel, command).await,
+            ModeExecutor::Telis(backend) => backend.execute_on(channel, command).await,
             #[cfg(feature = "rts")]
-            Self::Rts(backend) => backend.execute_on(channel, command).await,
+            ModeExecutor::Rts(backend) => {
+                if command == Command::Prog {
+                    self.program_rts(channel).await
+                } else {
+                    backend.execute_on(channel, command).await
+                }
+            }
             #[allow(unreachable_patterns)]
             _ => unreachable!("no backend variants were compiled"),
         }
     }
 
     pub fn selected_channel(&self) -> Channel {
-        match self {
+        match &self.executor {
             #[cfg(feature = "fake")]
-            Self::Fake(backend) => backend.selected_channel(),
+            ModeExecutor::Fake(backend) => backend.selected_channel(),
             #[cfg(feature = "telis")]
-            Self::Telis(backend) => backend.selected_channel(),
+            ModeExecutor::Telis(backend) => backend.selected_channel(),
             #[cfg(feature = "rts")]
-            Self::Rts(backend) => backend.selected_channel(),
+            ModeExecutor::Rts(backend) => backend.selected_channel(),
             #[allow(unreachable_patterns)]
             _ => unreachable!("no backend variants were compiled"),
         }
     }
 
     pub fn subscribe_selected_channel(&self) -> SelectedChannelRx {
-        match self {
+        match &self.executor {
             #[cfg(feature = "fake")]
-            Self::Fake(backend) => backend.subscribe_selected_channel(),
+            ModeExecutor::Fake(backend) => backend.subscribe_selected_channel(),
             #[cfg(feature = "telis")]
-            Self::Telis(backend) => backend.subscribe_selected_channel(),
+            ModeExecutor::Telis(backend) => backend.subscribe_selected_channel(),
             #[cfg(feature = "rts")]
-            Self::Rts(backend) => backend.subscribe_selected_channel(),
+            ModeExecutor::Rts(backend) => backend.subscribe_selected_channel(),
             #[allow(unreachable_patterns)]
             _ => unreachable!("no backend variants were compiled"),
         }
@@ -237,10 +275,26 @@ impl ActiveBackend {
 
     #[cfg(all(test, feature = "fake"))]
     pub(crate) fn operations(&self) -> Vec<ProtocolOperation> {
-        match self {
-            Self::Fake(backend) => backend.operations(),
+        match &self.executor {
+            ModeExecutor::Fake(backend) => backend.operations(),
             #[allow(unreachable_patterns)]
             _ => unreachable!("fake backend variant was not compiled"),
+        }
+    }
+
+    #[cfg(feature = "rts")]
+    async fn program_rts(&self, channel: Channel) -> Result<()> {
+        #[cfg(feature = "telis")]
+        if let Some(programmer) = &self.telis_programmer {
+            tracing::info!(%channel, "starting Telis-assisted RTS programming");
+            programmer.program(channel).await?;
+            tracing::info!(%channel, "Telis-assisted RTS programming handoff complete");
+        }
+
+        match &self.executor {
+            ModeExecutor::Rts(backend) => backend.execute_on(channel, Command::Prog).await,
+            #[allow(unreachable_patterns)]
+            _ => unreachable!("RTS programming requires the RTS executor"),
         }
     }
 }
