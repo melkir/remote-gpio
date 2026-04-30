@@ -138,7 +138,7 @@ selects the active backend from the compiled set.
 
 ```toml
 [features]
-default = ["fake"]
+default = ["fake", "telis", "rts"]
 fake = []
 telis = ["dep:gpiocdev"]
 rts = ["dep:spidev"]

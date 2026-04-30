@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(not(target_os = "linux"))]
 use std::fs::File;
 use std::io::Write;
 
@@ -31,7 +32,16 @@ pub trait SpiDevice {
     fn write(&mut self, bytes: &[u8]) -> Result<()>;
 }
 
+#[cfg(not(target_os = "linux"))]
 impl SpiDevice for File {
+    fn write(&mut self, bytes: &[u8]) -> Result<()> {
+        Write::write_all(self, bytes)?;
+        Ok(())
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl SpiDevice for spidev::Spidev {
     fn write(&mut self, bytes: &[u8]) -> Result<()> {
         Write::write_all(self, bytes)?;
         Ok(())

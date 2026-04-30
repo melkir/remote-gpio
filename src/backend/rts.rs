@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use std::fs::{File, OpenOptions};
 use std::net::TcpStream;
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::watch::{self, Sender};
@@ -18,9 +17,15 @@ const MAX_BCM_GPIO: u8 = 31;
 
 #[derive(Debug)]
 struct Hardware {
-    radio: Cc1101<File>,
+    radio: Cc1101<Spi>,
     pigpio: PigpioClient<TcpStream>,
 }
+
+#[cfg(target_os = "linux")]
+type Spi = spidev::Spidev;
+
+#[cfg(not(target_os = "linux"))]
+type Spi = std::fs::File;
 
 #[derive(Debug)]
 pub(crate) struct RtsBackend {
@@ -136,11 +141,7 @@ impl RtsBackend {
 
 async fn init_hardware(options: RtsOptions) -> Result<Hardware> {
     tokio::task::spawn_blocking(move || -> Result<Hardware> {
-        let spi = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .open(&options.spi_device)
-            .with_context(|| format!("opening RTS SPI device {}", options.spi_device))?;
+        let spi = open_spi(&options.spi_device)?;
         let mut radio = Cc1101::new(spi);
         radio
             .configure_ook_433_42()
@@ -157,6 +158,31 @@ async fn init_hardware(options: RtsOptions) -> Result<Hardware> {
     })
     .await
     .context("RTS hardware init task failed")?
+}
+
+#[cfg(target_os = "linux")]
+fn open_spi(path: &str) -> Result<Spi> {
+    use spidev::{SpiModeFlags, SpidevOptions};
+
+    let mut spi =
+        spidev::Spidev::open(path).with_context(|| format!("opening RTS SPI device {path}"))?;
+    let options = SpidevOptions::new()
+        .bits_per_word(8)
+        .max_speed_hz(4_000_000)
+        .mode(SpiModeFlags::SPI_MODE_0)
+        .build();
+    spi.configure(&options)
+        .with_context(|| format!("configuring RTS SPI device {path}"))?;
+    Ok(spi)
+}
+
+#[cfg(not(target_os = "linux"))]
+fn open_spi(path: &str) -> Result<Spi> {
+    std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .with_context(|| format!("opening local RTS SPI test sink {path}"))
 }
 
 fn transmit_blocking(
