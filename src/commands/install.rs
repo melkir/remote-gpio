@@ -44,7 +44,7 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
         );
     }
 
-    if resolved_config.config.backend == crate::backend::BackendKind::Rts {
+    if resolved_config.config.mode == crate::backend::BackendKind::Rts {
         prepare_rts_prereqs()?;
     }
 

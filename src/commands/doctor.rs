@@ -295,15 +295,15 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
     }
 
     // gpio_chip_accessible
-    let configured_backend = resolved_config.config.backend;
+    let configured_mode = resolved_config.config.mode;
     checks.push(Check {
-        id: "configured_backend",
-        label: "Backend",
+        id: "configured_mode",
+        label: "Mode",
         status: Status::Ok,
-        detail: Some(configured_backend.to_string()),
+        detail: Some(configured_mode.to_string()),
     });
-    checks.push(compiled_backend_check(configured_backend));
-    match configured_backend {
+    checks.push(compiled_backend_check(configured_mode));
+    match configured_mode {
         BackendKind::Telis => checks.push(gpio_chip_check()),
         BackendKind::Rts => {
             checks.extend(rts_checks(&resolved_config.config.rts));

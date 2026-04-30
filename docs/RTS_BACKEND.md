@@ -155,28 +155,8 @@ backend "rts" was selected, but this binary was built without the "rts" feature
 ## Runtime Configuration
 
 Use a small config file plus built-in defaults. Do not expose persistent
-hardware settings as repeated command flags or environment variables.
-
-```toml
-backend = "rts"
-
-[rts]
-spi_device = "/dev/spidev0.0"
-gdo0_gpio = 18
-pigpiod_addr = "127.0.0.1:8888"
-frame_count = 4
-
-[telis.gpio]
-up = 26
-stop = 19
-down = 13
-select = 6
-led1 = 21
-led2 = 20
-led3 = 16
-led4 = 12
-# prog = 5
-```
+hardware settings as repeated command flags or environment variables. The
+canonical TOML example lives in [HARDWARE.md](HARDWARE.md#configuration).
 
 If the config file is absent, defaults are enough for local development and the
 documented Raspberry Pi wiring. A system install should point the service at the

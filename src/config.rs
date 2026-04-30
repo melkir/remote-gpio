@@ -9,7 +9,7 @@ pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
-    pub backend: BackendKind,
+    pub mode: BackendKind,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
 }
@@ -17,7 +17,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            backend: BackendKind::Fake,
+            mode: BackendKind::Fake,
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }
@@ -27,7 +27,7 @@ impl Default for AppConfig {
 impl AppConfig {
     pub fn backend_config(&self) -> BackendConfig {
         BackendConfig {
-            kind: self.backend,
+            kind: self.mode,
             rts: self.rts.clone(),
             telis: self.telis.clone(),
         }

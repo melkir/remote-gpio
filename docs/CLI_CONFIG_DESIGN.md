@@ -197,28 +197,8 @@ to undo. It should not default to the current selected channel.
 ## Configuration File
 
 Introduce a small TOML configuration file for persistent hardware and service
-choices:
-
-```toml
-backend = "rts"
-
-[rts]
-spi_device = "/dev/spidev0.0"
-gdo0_gpio = 18
-pigpiod_addr = "127.0.0.1:8888"
-frame_count = 4
-
-[telis.gpio]
-up = 26
-stop = 19
-down = 13
-select = 6
-led1 = 21
-led2 = 20
-led3 = 16
-led4 = 12
-# prog = 5
-```
+choices. Keep the canonical example in [HARDWARE.md](HARDWARE.md#configuration)
+so operator docs do not drift.
 
 The Telis GPIO defaults should match the wiring in
 [HARDWARE.md](HARDWARE.md#connection-table). `prog` is optional: when it is

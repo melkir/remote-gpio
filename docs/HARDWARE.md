@@ -130,7 +130,7 @@ Hardware settings should come from built-in defaults or `/etc/somfy/config.toml`
 not repeated CLI flags or environment variables.
 
 ```toml
-backend = "rts"
+mode = "rts"
 
 [rts]
 spi_device = "/dev/spidev0.0"
