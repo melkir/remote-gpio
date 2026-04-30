@@ -1,5 +1,6 @@
 use anyhow::Result;
 use clap::ValueEnum;
+use serde::{Deserialize, Serialize};
 use std::fmt;
 use tokio::sync::watch::Receiver;
 
@@ -27,7 +28,8 @@ pub struct CommandOutcome {
     pub inferred_position: Option<u8>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq, ValueEnum)]
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "lowercase")]
 pub enum BackendKind {
     Fake,
     Telis,
@@ -44,7 +46,8 @@ impl fmt::Display for BackendKind {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
 pub struct RtsOptions {
     pub spi_device: String,
     pub gdo0_gpio: u8,
@@ -63,10 +66,48 @@ impl Default for RtsOptions {
     }
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TelisOptions {
+    pub gpio: TelisGpioOptions,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TelisGpioOptions {
+    pub up: u8,
+    pub stop: u8,
+    pub down: u8,
+    pub select: u8,
+    pub led1: u8,
+    pub led2: u8,
+    pub led3: u8,
+    pub led4: u8,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prog: Option<u8>,
+}
+
+impl Default for TelisGpioOptions {
+    fn default() -> Self {
+        Self {
+            up: 26,
+            stop: 19,
+            down: 13,
+            select: 6,
+            led1: 21,
+            led2: 20,
+            led3: 16,
+            led4: 12,
+            prog: None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BackendConfig {
     pub kind: BackendKind,
     pub rts: RtsOptions,
+    pub telis: TelisOptions,
 }
 
 impl Default for BackendConfig {
@@ -74,6 +115,7 @@ impl Default for BackendConfig {
         Self {
             kind: BackendKind::Fake,
             rts: RtsOptions::default(),
+            telis: TelisOptions::default(),
         }
     }
 }
@@ -113,7 +155,7 @@ impl ActiveBackend {
             BackendKind::Telis => {
                 #[cfg(feature = "telis")]
                 {
-                    Ok(Self::Telis(TelisBackend::new().await?))
+                    Ok(Self::Telis(TelisBackend::new(config.telis).await?))
                 }
                 #[cfg(not(feature = "telis"))]
                 {

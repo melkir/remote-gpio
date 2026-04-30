@@ -5,9 +5,9 @@ use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
-use crate::backend::BackendKind;
 use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
 use crate::commands::upgrade::BIN_PREV;
+use crate::config::{self as app_config, ResolvedConfig};
 use crate::homekit::config;
 use crate::systemd;
 
@@ -21,7 +21,7 @@ pub fn render_unit(service_user: &str, exec_start: &str) -> String {
         .replace("{{EXEC_START}}", exec_start)
 }
 
-pub fn run(user_override: Option<String>, backend: BackendKind) -> Result<()> {
+pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> Result<()> {
     require_root()?;
 
     let service_user = resolve_service_user(user_override)?;
@@ -44,13 +44,19 @@ pub fn run(user_override: Option<String>, backend: BackendKind) -> Result<()> {
         );
     }
 
-    if backend == BackendKind::Rts {
+    if resolved_config.config.backend == crate::backend::BackendKind::Rts {
         prepare_rts_prereqs()?;
     }
 
+    ensure_config_file(resolved_config)?;
+
     let rendered = render_unit(
         &service_user,
-        &format!("{BIN_PATH} serve --backend {backend}"),
+        &format!(
+            "{} --config {} serve",
+            BIN_PATH,
+            resolved_config.path.display()
+        ),
     );
 
     let unit_path = Path::new(UNIT_PATH);
@@ -142,36 +148,24 @@ fn run_command(command: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-pub fn installed_backend() -> BackendKind {
-    fs::read_to_string(UNIT_PATH)
-        .ok()
-        .and_then(|unit| parse_backend_from_unit(&unit))
-        .unwrap_or(BackendKind::Fake)
-}
-
-fn parse_backend_from_unit(unit: &str) -> Option<BackendKind> {
-    let exec = unit
-        .lines()
-        .find_map(|line| line.trim().strip_prefix("ExecStart="))?;
-    let mut args = exec.split_whitespace();
-    while let Some(arg) = args.next() {
-        if arg == "--backend" {
-            return match args.next()? {
-                "fake" => Some(BackendKind::Fake),
-                "telis" => Some(BackendKind::Telis),
-                "rts" => Some(BackendKind::Rts),
-                _ => None,
-            };
-        }
-    }
-    Some(BackendKind::Fake)
-}
-
 fn require_root() -> Result<()> {
     if !nix::unistd::Uid::current().is_root() {
         bail!("somfy install must be run as root (use sudo)");
     }
     Ok(())
+}
+
+fn ensure_config_file(resolved_config: &ResolvedConfig) -> Result<()> {
+    if resolved_config.file_present {
+        return Ok(());
+    }
+    let parent = resolved_config.path.parent().unwrap_or(Path::new("/"));
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    atomic_write(
+        &resolved_config.path,
+        &app_config::to_toml(&resolved_config.config)?,
+    )
+    .with_context(|| format!("writing {}", resolved_config.path.display()))
 }
 
 fn resolve_service_user(user_override: Option<String>) -> Result<String> {
@@ -235,10 +229,15 @@ mod tests {
 
     #[test]
     fn render_unit_substitutes_placeholders() {
-        let out = render_unit("pi", "/usr/local/bin/somfy serve --backend rts");
+        let out = render_unit(
+            "pi",
+            "/usr/local/bin/somfy --config /etc/somfy/config.toml serve",
+        );
         assert!(out.contains("User=pi"));
         assert!(out.contains("Group=gpio"));
-        assert!(out.contains("ExecStart=/usr/local/bin/somfy serve --backend rts"));
+        assert!(
+            out.contains("ExecStart=/usr/local/bin/somfy --config /etc/somfy/config.toml serve")
+        );
         assert!(!out.contains("{{SERVICE_USER}}"));
         assert!(!out.contains("{{EXEC_START}}"));
     }

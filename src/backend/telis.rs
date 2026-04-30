@@ -2,7 +2,7 @@ use anyhow::Result;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
-use crate::backend::SelectedChannelRx;
+use crate::backend::{SelectedChannelRx, TelisOptions};
 use crate::gpio::{Channel, TelisButton};
 use crate::remote::Command;
 
@@ -17,8 +17,8 @@ pub(crate) struct TelisBackend {
 }
 
 impl TelisBackend {
-    pub(super) async fn new() -> Result<Self> {
-        let transport = TelisGpioTransport;
+    pub(super) async fn new(options: TelisOptions) -> Result<Self> {
+        let transport = TelisGpioTransport { options };
         let selection = transport.select().await?;
         let (sender, selected_rx) = watch::channel(selection);
         Ok(Self {
@@ -105,20 +105,23 @@ impl TelisBackend {
 }
 
 #[derive(Clone, Debug)]
-struct TelisGpioTransport;
+struct TelisGpioTransport {
+    options: TelisOptions,
+}
 
 impl TelisGpioTransport {
     async fn press(&self, button: TelisButton) -> Result<()> {
-        crate::gpio::trigger_output(button).await
+        crate::gpio::trigger_output(button, &self.options.gpio).await
     }
 
     async fn select(&self) -> Result<Channel> {
+        let options = self.options.clone();
         tokio::spawn(async move {
-            if let Err(e) = crate::gpio::trigger_output(TelisButton::Select).await {
+            if let Err(e) = crate::gpio::trigger_output(TelisButton::Select, &options.gpio).await {
                 tracing::error!("failed to trigger Telis select button: {e}");
             }
         });
 
-        crate::gpio::watch_inputs().await
+        crate::gpio::watch_inputs(&self.options.gpio).await
     }
 }

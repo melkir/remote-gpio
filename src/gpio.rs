@@ -3,6 +3,8 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
+use crate::backend::TelisGpioOptions;
+
 /// Logical remote target selected by the Telis LED row.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Channel {
@@ -62,6 +64,25 @@ impl std::fmt::Display for Channel {
     }
 }
 
+pub fn channel_gpio(channel: Channel, config: &TelisGpioOptions) -> u8 {
+    match channel {
+        Channel::L1 => config.led1,
+        Channel::L2 => config.led2,
+        Channel::L3 => config.led3,
+        Channel::L4 => config.led4,
+        Channel::ALL => unreachable!("ALL is not represented by one Telis LED GPIO"),
+    }
+}
+
+pub fn button_gpio(button: TelisButton, config: &TelisGpioOptions) -> u8 {
+    match button {
+        TelisButton::Select => config.select,
+        TelisButton::Down => config.down,
+        TelisButton::Stop => config.stop,
+        TelisButton::Up => config.up,
+    }
+}
+
 #[cfg(all(feature = "telis", target_os = "linux"))]
 mod platform {
     use super::*;
@@ -75,12 +96,12 @@ mod platform {
 
     /// Monitors GPIO inputs for LED selection changes
     /// Returns the selected LED input or ALL if multiple inputs are detected
-    pub async fn watch_inputs() -> Result<Channel> {
+    pub async fn watch_inputs(config: &TelisGpioOptions) -> Result<Channel> {
         let offsets = [
-            Channel::L1 as u32,
-            Channel::L2 as u32,
-            Channel::L3 as u32,
-            Channel::L4 as u32,
+            config.led1 as u32,
+            config.led2 as u32,
+            config.led3 as u32,
+            config.led4 as u32,
         ];
 
         // Request multiple input lines with edge detection
@@ -116,16 +137,26 @@ mod platform {
 
         // Return ALL if multiple events detected, otherwise return the last event
         if event_count < ALL_EVENTS_THRESHOLD {
-            Channel::try_from(last_event.unwrap())
+            channel_from_gpio(last_event.unwrap(), config)
         } else {
             Ok(Channel::ALL)
         }
     }
 
+    fn channel_from_gpio(value: u32, config: &TelisGpioOptions) -> Result<Channel> {
+        match value as u8 {
+            gpio if gpio == config.led1 => Ok(Channel::L1),
+            gpio if gpio == config.led2 => Ok(Channel::L2),
+            gpio if gpio == config.led3 => Ok(Channel::L3),
+            gpio if gpio == config.led4 => Ok(Channel::L4),
+            _ => Err(anyhow::anyhow!("Invalid channel GPIO value: {}", value)),
+        }
+    }
+
     /// Triggers a Telis button GPIO pin.
-    pub async fn trigger_output(output: TelisButton) -> Result<()> {
+    pub async fn trigger_output(output: TelisButton, config: &TelisGpioOptions) -> Result<()> {
         tracing::debug!("Triggering Telis button: {:?}", output);
-        trigger_output_gpio(output as u8, Duration::from_millis(60)).await
+        trigger_output_gpio(button_gpio(output, config), Duration::from_millis(60)).await
     }
 
     /// Triggers one active-low GPIO output for `duration`.
@@ -161,11 +192,11 @@ mod platform {
 
     use super::*;
 
-    pub async fn watch_inputs() -> Result<Channel> {
+    pub async fn watch_inputs(_config: &TelisGpioOptions) -> Result<Channel> {
         anyhow::bail!("telis GPIO backend requires Linux")
     }
 
-    pub async fn trigger_output(output: TelisButton) -> Result<()> {
+    pub async fn trigger_output(output: TelisButton, _config: &TelisGpioOptions) -> Result<()> {
         anyhow::bail!("telis GPIO backend requires Linux; cannot trigger {output:?}")
     }
 
@@ -189,14 +220,15 @@ mod platform {
         Channel::ALL,
     ];
 
-    pub async fn watch_inputs() -> Result<Channel> {
+    pub async fn watch_inputs(_config: &TelisGpioOptions) -> Result<Channel> {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let idx = LED_INDEX.fetch_add(1, Ordering::Relaxed) % LEDS.len() as u8;
         Ok(LEDS[idx as usize])
     }
 
-    pub async fn trigger_output(output: TelisButton) -> Result<()> {
+    pub async fn trigger_output(output: TelisButton, config: &TelisGpioOptions) -> Result<()> {
         tracing::debug!("Fake triggering Telis button: {:?}", output);
+        let _ = button_gpio(output, config);
         tokio::time::sleep(Duration::from_millis(60)).await;
         Ok(())
     }

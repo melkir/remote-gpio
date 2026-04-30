@@ -4,6 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::backend::{BackendKind, RtsOptions};
+use crate::config::ResolvedConfig;
 use crate::homekit::config;
 use crate::systemd;
 use crate::version;
@@ -41,6 +42,7 @@ pub struct VersionInfo {
 pub struct DoctorReport {
     pub schema_version: u32,
     pub version: VersionInfo,
+    pub config_path: String,
     pub checks: Vec<Check>,
 }
 
@@ -125,8 +127,8 @@ fn status_str(s: Status) -> &'static str {
     }
 }
 
-pub async fn run(json: bool, verbose: bool) -> Result<()> {
-    let report = collect(2000).await;
+pub async fn run(json: bool, verbose: bool, resolved_config: &ResolvedConfig) -> Result<()> {
+    let report = collect(resolved_config, 2000).await;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if verbose {
@@ -140,10 +142,28 @@ pub async fn run(json: bool, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
+pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) -> DoctorReport {
     let mut checks = Vec::new();
 
-    let rendered_unit = render_expected_unit();
+    checks.push(Check {
+        id: "config_file",
+        label: "Config",
+        status: if resolved_config.file_present {
+            Status::Ok
+        } else {
+            Status::Advisory
+        },
+        detail: Some(if resolved_config.file_present {
+            resolved_config.path.display().to_string()
+        } else {
+            format!(
+                "{} not found; using built-in defaults",
+                resolved_config.path.display()
+            )
+        }),
+    });
+
+    let rendered_unit = render_expected_unit(resolved_config);
 
     // unit_installed
     let unit_exists = Path::new(UNIT_PATH).exists();
@@ -275,10 +295,7 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
     }
 
     // gpio_chip_accessible
-    let configured_backend = on_disk
-        .as_deref()
-        .and_then(parse_backend)
-        .unwrap_or(BackendKind::Fake);
+    let configured_backend = resolved_config.config.backend;
     checks.push(Check {
         id: "configured_backend",
         label: "Backend",
@@ -289,11 +306,7 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
     match configured_backend {
         BackendKind::Telis => checks.push(gpio_chip_check()),
         BackendKind::Rts => {
-            let options = on_disk
-                .as_deref()
-                .map(parse_rts_options)
-                .unwrap_or_default();
-            checks.extend(rts_checks(&options));
+            checks.extend(rts_checks(&resolved_config.config.rts));
         }
         BackendKind::Fake => checks.push(Check {
             id: "gpio_chip_accessible",
@@ -326,20 +339,31 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
             git_sha: version::GIT_SHA,
             build_date: version::BUILD_DATE,
         },
+        config_path: resolved_config.path.display().to_string(),
         checks,
     }
 }
 
-fn render_expected_unit() -> Option<String> {
-    let user = std::env::var("SUDO_USER").ok().or_else(|| {
-        nix::unistd::User::from_uid(nix::unistd::Uid::current())
-            .ok()
-            .flatten()
-            .map(|u| u.name)
-    })?;
+fn render_expected_unit(resolved_config: &ResolvedConfig) -> Option<String> {
+    let user = std::fs::read_to_string(UNIT_PATH)
+        .ok()
+        .as_deref()
+        .and_then(parse_service_user)
+        .or_else(|| {
+            std::env::var("SUDO_USER").ok().or_else(|| {
+                nix::unistd::User::from_uid(nix::unistd::Uid::current())
+                    .ok()
+                    .flatten()
+                    .map(|u| u.name)
+            })
+        })?;
     Some(crate::commands::install::render_unit(
         &user,
-        &format!("{BIN_PATH} serve --backend fake"),
+        &format!(
+            "{} --config {} serve",
+            BIN_PATH,
+            resolved_config.path.display()
+        ),
     ))
 }
 
@@ -349,30 +373,23 @@ fn exec_start_matches(unit: &str) -> bool {
         let Some(rest) = l.strip_prefix("ExecStart=") else {
             return false;
         };
-        let Some(args) = rest.strip_prefix(BIN_PATH) else {
+        let Some(rest) = rest.strip_prefix(BIN_PATH) else {
             return false;
         };
-        // Allow flags after "serve" (e.g. "serve --verbose")
-        args.split_whitespace().next() == Some("serve")
-    })
-}
-
-fn parse_backend(unit: &str) -> Option<BackendKind> {
-    let exec = unit
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("ExecStart="))?;
-    let mut args = exec.split_whitespace();
-    while let Some(arg) = args.next() {
-        if arg == "--backend" {
-            return match args.next()? {
-                "fake" => Some(BackendKind::Fake),
-                "telis" => Some(BackendKind::Telis),
-                "rts" => Some(BackendKind::Rts),
-                _ => None,
-            };
+        if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+            return false;
         }
-    }
-    Some(BackendKind::Fake)
+        let mut args = rest.split_whitespace();
+        while let Some(arg) = args.next() {
+            if arg == "serve" {
+                return true;
+            }
+            if arg == "--config" {
+                let _ = args.next();
+            }
+        }
+        false
+    })
 }
 
 fn parse_service_user(unit: &str) -> Option<String> {
@@ -576,43 +593,6 @@ fn rts_state_file_check() -> Check {
     }
 }
 
-fn parse_rts_options(unit: &str) -> RtsOptions {
-    let mut options = RtsOptions::default();
-    let Some(exec) = unit
-        .lines()
-        .find_map(|l| l.trim().strip_prefix("ExecStart="))
-    else {
-        return options;
-    };
-    let mut args = exec.split_whitespace();
-    while let Some(arg) = args.next() {
-        match arg {
-            "--rts-spi-device" => {
-                if let Some(v) = args.next() {
-                    options.spi_device = v.to_string();
-                }
-            }
-            "--rts-gdo0-gpio" => {
-                if let Some(Ok(v)) = args.next().map(str::parse) {
-                    options.gdo0_gpio = v;
-                }
-            }
-            "--pigpiod-addr" => {
-                if let Some(v) = args.next() {
-                    options.pigpiod_addr = v.to_string();
-                }
-            }
-            "--rts-frame-count" => {
-                if let Some(Ok(v)) = args.next().map(str::parse) {
-                    options.frame_count = v;
-                }
-            }
-            _ => {}
-        }
-    }
-    options
-}
-
 #[cfg(not(feature = "telis"))]
 fn gpio_chip_check() -> Check {
     Check {
@@ -767,6 +747,7 @@ mod tests {
                 git_sha: "dev",
                 build_date: "today",
             },
+            config_path: "/etc/somfy/config.toml".into(),
             checks: vec![check("a", Status::Ok), check("b", Status::Blocking)],
         };
         assert!(report.has_blocking_failure());
@@ -781,6 +762,7 @@ mod tests {
                 git_sha: "dev",
                 build_date: "today",
             },
+            config_path: "/etc/somfy/config.toml".into(),
             checks: vec![check("a", Status::Ok), check("b", Status::Advisory)],
         };
         assert!(!report.has_blocking_failure());

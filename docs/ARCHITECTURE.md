@@ -21,7 +21,7 @@ HTTP/SSE/HomeKit surface is identical.
 
 `ActiveBackend` (`src/backend/mod.rs`) is the single seam between the UI layer
 and the hardware. Three implementations live behind compile-time features and a
-runtime `--backend` flag:
+runtime config value:
 
 | Backend | Module                 | What it does                                                                                   |
 | ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
@@ -35,8 +35,9 @@ All three implement the same shape:
 - `execute_on(channel, command)` for stateless CLI/HomeKit commands; never mutates selection on RTS, may move the physical selector on Telis.
 - `selected_channel()` / `subscribe_selected_channel()` for the live selection watch channel.
 
-Live backend switching is intentionally unsupported. Pick one at install time
-via `somfy install --backend …`; the unit's `ExecStart` carries the choice.
+Live backend switching is intentionally unsupported. Pick one in
+`/etc/somfy/config.toml`; the systemd unit points at the config file and the
+config carries hardware choices.
 
 ## Module Map
 
@@ -49,7 +50,7 @@ via `somfy install --backend …`; the unit's `ExecStart` carries the choice.
 | RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
 | HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
 | HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.   |
-| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, homekit, and `rts dump                                        |
+| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                   |
 
 The important boundaries are `hap` versus `homekit` (protocol vs project), and
 `backend/`\* versus everything above (hardware vs UX).

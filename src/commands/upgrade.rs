@@ -139,9 +139,10 @@ async fn apply_swap(new_bin: &Path) -> Result<()> {
 
     fs::rename(new_bin, bin_path).context("moving new binary into place")?;
 
-    // Reconcile unit with new binary's template; preserve the selected backend
-    // and pick up SUDO_USER.
-    install::run(None, install::installed_backend()).context("refreshing unit")?;
+    // Reconcile unit with the new binary's template and resolved config.
+    let resolved_config =
+        crate::config::resolve(None).context("loading config for unit refresh")?;
+    install::run(None, &resolved_config).context("refreshing unit")?;
 
     systemd::systemctl(&["start", "somfy"]).context("starting somfy")?;
 
@@ -149,7 +150,7 @@ async fn apply_swap(new_bin: &Path) -> Result<()> {
         .await
         .context("service did not become active")?;
 
-    let report = doctor::collect(0).await;
+    let report = doctor::collect(&resolved_config, 0).await;
     if report.has_blocking_failure() {
         bail!("post-upgrade doctor reported blocking failure");
     }

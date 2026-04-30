@@ -1,6 +1,7 @@
 pub mod backend;
 pub mod cli;
 pub mod commands;
+pub mod config;
 pub mod embed;
 pub mod gpio;
 pub mod hap;
