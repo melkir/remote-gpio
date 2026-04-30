@@ -68,9 +68,6 @@ impl RtsBackend {
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
-        if command == Command::Prog {
-            tracing::warn!("rts execute_on received Prog from a non-CLI path; transmitting anyway");
-        }
         let rts_command = RtsCommand::try_from(command)?;
         self.transmit(channel, rts_command).await
     }
