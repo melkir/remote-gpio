@@ -1,8 +1,8 @@
 # Hardware Notes
 
-A deeper look at the two physical setups `somfy` supports — the wired Telis 4 backend and the CC1101 RTS radio backend — and how each turns hardware events into synchronized UI state. For a broader codebase tour, see [ARCHITECTURE.md](ARCHITECTURE.md).
+A deeper look at the two physical setups `somfy` supports — the wired Telis 4 driver and the CC1101 RTS radio driver — and how each turns hardware events into synchronized UI state. For a broader codebase tour, see [ARCHITECTURE.md](ARCHITECTURE.md).
 
-## Telis 4 backend
+## Telis 4 driver
 
 ### Raspberry Pi ↔ Somfy Telis 4
 
@@ -68,7 +68,7 @@ pub async fn trigger_output(output: Output) -> Result<()> {
 
 #### Input Debouncing
 
-The backend watches input lines with edge detection, collecting up to 16 events within a 300ms window:
+The driver watches input lines with edge detection, collecting up to 16 events within a 300ms window:
 
 - **Multiple rapid edges:** selection is `ALL` (group mode — LEDs blink).
 - **Single edge:** maps to `L1`–`L4`.
@@ -84,9 +84,9 @@ while event_count < 16 && start_time.elapsed() < timeout_duration {
 // 16+ edges in 300ms = ALL, otherwise map last edge to L1-L4
 ```
 
-## CC1101 RTS backend
+## CC1101 RTS driver
 
-The RTS backend skips the wired remote and transmits Somfy RTS frames directly at 433.42 MHz. Each `Channel` (`L1`–`L4`, `ALL`) is a separate virtual remote with its own 24-bit ID and rolling-code counter persisted to `$STATE_DIRECTORY/rts.json`.
+The RTS driver skips the wired remote and transmits Somfy RTS frames directly at 433.42 MHz. Each `Channel` (`L1`–`L4`, `ALL`) is a separate virtual remote with its own 24-bit ID and rolling-code counter persisted to `$STATE_DIRECTORY/rts.json`.
 
 ### Wiring
 
@@ -107,7 +107,7 @@ A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
 The Pi drives the CC1101 in async serial OOK mode and uses `pigpiod` waveforms to clock the Somfy pulse train onto GDO0. Each press emits four frames (one initial + three repeats), Manchester-encoded with 640 µs half-symbols.
 
 ```
-RtsBackend::transmit(channel, command)
+RtsDriver::transmit(channel, command)
   -> reserve rolling code (atomic write to rts.json on block boundaries)
   -> encode 7-byte RTS frame (key, command/checksum, rolling code BE, remote ID LE)
   -> obfuscate (XOR cascade)
@@ -118,9 +118,9 @@ RtsBackend::transmit(channel, command)
   -> commit rolling code in memory
 ```
 
-CC1101, pigpiod TCP, and GDO0 are configured once at backend startup; per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
+CC1101, pigpiod TCP, and GDO0 are configured once at driver startup; per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
 
-When the resolved config selects the RTS backend, `sudo somfy install`
+When the resolved config selects the RTS driver, `sudo somfy install`
 provisions the runtime dependency by installing the `pigpio` package, writing a
 systemd drop-in that starts `pigpiod -l`, and enabling `pigpiod`.
 
@@ -130,7 +130,7 @@ Hardware settings should come from built-in defaults or `/etc/somfy/config.toml`
 not repeated CLI flags or environment variables.
 
 ```toml
-mode = "rts"
+driver = "rts"
 
 [rts]
 spi_device = "/dev/spidev0.0"
@@ -179,7 +179,7 @@ sudo somfy remote prog L1
 The CC1101 register set in `src/rts/cc1101.rs` is a starting point and has **not** been validated against a scope or SDR yet. Before relying on it:
 
 1. Confirm motors are Somfy RTS (not io-homecontrol).
-2. With `somfy serve` running and the RTS backend selected by config, scope GDO0 during a `somfy remote up L1`. Wake-up should be ~9.4 ms high / ~89.6 ms low; Manchester half-symbols 640 µs.
+2. With `somfy serve` running and the RTS driver selected by config, scope GDO0 during a `somfy remote up L1`. Wake-up should be ~9.4 ms high / ~89.6 ms low; Manchester half-symbols 640 µs.
 3. With an SDR (rtl-sdr, HackRF) tuned to 433.42 MHz, verify carrier presence and absence between frames.
 4. If pairing fails, capture frames with an existing real Somfy remote and compare obfuscated bytes — the encoder has golden tests, but key-byte values can vary by motor generation.
 

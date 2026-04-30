@@ -715,9 +715,9 @@ mod tests {
 
     #[cfg(feature = "fake")]
     #[tokio::test]
-    async fn full_individual_write_batch_sends_one_all_backend_command() {
+    async fn full_individual_write_batch_sends_one_all_driver_command() {
         let remote_control = Arc::new(
-            RemoteControl::with_backend(crate::backend::BackendConfig::default())
+            RemoteControl::with_driver(crate::driver::DriverConfig::default())
                 .await
                 .unwrap(),
         );
@@ -741,7 +741,7 @@ mod tests {
         assert_eq!(outcome.statuses.len(), 4);
         assert_eq!(
             remote_control.operations(),
-            vec![crate::backend::ProtocolOperation::FakeCommand {
+            vec![crate::driver::ProtocolOperation::FakeCommand {
                 channel: Channel::ALL,
                 command: Command::Up,
             }]
@@ -752,7 +752,7 @@ mod tests {
     #[tokio::test]
     async fn cache_hit_does_not_break_full_batch_coalesce() {
         let remote_control = Arc::new(
-            RemoteControl::with_backend(crate::backend::BackendConfig::default())
+            RemoteControl::with_driver(crate::driver::DriverConfig::default())
                 .await
                 .unwrap(),
         );
@@ -777,7 +777,7 @@ mod tests {
         assert!(outcome.all_success());
         assert_eq!(
             remote_control.operations(),
-            vec![crate::backend::ProtocolOperation::FakeCommand {
+            vec![crate::driver::ProtocolOperation::FakeCommand {
                 channel: Channel::ALL,
                 command: Command::Up,
             }]

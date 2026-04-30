@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
-use crate::backend::{RtsOptions, SelectedChannelRx};
+use crate::driver::{RtsOptions, SelectedChannelRx};
 use crate::gpio::Channel;
 use crate::remote::Command;
 use crate::rts::cc1101::Cc1101;
@@ -28,7 +28,7 @@ type Spi = spidev::Spidev;
 type Spi = std::fs::File;
 
 #[derive(Debug)]
-pub(crate) struct RtsBackend {
+pub(crate) struct RtsDriver {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
     options: RtsOptions,
@@ -37,7 +37,7 @@ pub(crate) struct RtsBackend {
     hardware: Arc<StdMutex<Hardware>>,
 }
 
-impl RtsBackend {
+impl RtsDriver {
     pub(crate) async fn new(options: RtsOptions) -> Result<Self> {
         if options.gdo0_gpio > MAX_BCM_GPIO {
             bail!(

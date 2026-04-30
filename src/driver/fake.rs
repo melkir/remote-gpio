@@ -5,20 +5,20 @@ use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
 #[cfg(test)]
-use crate::backend::ProtocolOperation;
-use crate::backend::SelectedChannelRx;
+use crate::driver::ProtocolOperation;
+use crate::driver::SelectedChannelRx;
 use crate::gpio::Channel;
 use crate::remote::Command;
 
 #[derive(Debug)]
-pub(crate) struct FakeBackend {
+pub(crate) struct FakeDriver {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
     transport: FakeTransport,
     execute_lock: Mutex<()>,
 }
 
-impl FakeBackend {
+impl FakeDriver {
     pub(super) fn new(selected_channel: Channel) -> Self {
         let (sender, selected_rx) = watch::channel(selected_channel);
         Self {
@@ -130,34 +130,34 @@ mod tests {
 
     #[tokio::test]
     async fn execute_select_updates_and_broadcasts_selection() {
-        let backend = FakeBackend::new(Channel::L1);
-        let mut rx = backend.subscribe_selected_channel();
+        let driver = FakeDriver::new(Channel::L1);
+        let mut rx = driver.subscribe_selected_channel();
 
-        backend
+        driver
             .execute(Command::Select, Some(Channel::L3))
             .await
             .unwrap();
 
         rx.changed().await.unwrap();
         assert_eq!(*rx.borrow_and_update(), Channel::L3);
-        assert_eq!(backend.selected_channel(), Channel::L3);
+        assert_eq!(driver.selected_channel(), Channel::L3);
         assert_eq!(
-            backend.operations(),
+            driver.operations(),
             vec![ProtocolOperation::TelisSelection(Channel::L3)]
         );
     }
 
     #[tokio::test]
     async fn execute_on_does_not_mutate_or_broadcast_selection() {
-        let backend = FakeBackend::new(Channel::L1);
-        let rx = backend.subscribe_selected_channel();
+        let driver = FakeDriver::new(Channel::L1);
+        let rx = driver.subscribe_selected_channel();
 
-        backend.execute_on(Channel::L3, Command::Up).await.unwrap();
+        driver.execute_on(Channel::L3, Command::Up).await.unwrap();
 
-        assert_eq!(backend.selected_channel(), Channel::L1);
+        assert_eq!(driver.selected_channel(), Channel::L1);
         assert!(!rx.has_changed().unwrap());
         assert_eq!(
-            backend.operations(),
+            driver.operations(),
             vec![ProtocolOperation::FakeCommand {
                 channel: Channel::L3,
                 command: Command::Up

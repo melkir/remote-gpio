@@ -53,7 +53,7 @@ pub enum Command {
     Uninstall,
     /// Restart the systemd service
     Restart,
-    /// Operate the configured remote backend
+    /// Operate the configured remote driver
     Remote {
         #[command(subcommand)]
         command: RemoteCommand,

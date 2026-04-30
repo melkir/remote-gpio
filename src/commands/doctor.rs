@@ -3,8 +3,8 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::backend::{BackendKind, RtsOptions};
 use crate::config::ResolvedConfig;
+use crate::driver::{DriverKind, RtsOptions};
 use crate::homekit::config;
 use crate::systemd;
 use crate::version;
@@ -74,12 +74,14 @@ impl DoctorReport {
                 Status::Skipped => "[-]",
             };
             match &check.detail {
-                Some(d) if check.status != Status::Ok => println!(
-                    "{marker} {:<width$} ({})",
-                    check.label,
-                    d,
-                    width = label_width
-                ),
+                Some(d) if check.status != Status::Ok || check.id == "configured_driver" => {
+                    println!(
+                        "{marker} {:<width$} ({})",
+                        check.label,
+                        d,
+                        width = label_width
+                    )
+                }
                 _ => println!("{marker} {}", check.label),
             }
         }
@@ -294,25 +296,25 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
         }
     }
 
-    // gpio_chip_accessible
-    let configured_mode = resolved_config.config.mode;
+    // driver-specific hardware checks
+    let configured_driver = resolved_config.config.driver;
     checks.push(Check {
-        id: "configured_mode",
-        label: "Mode",
+        id: "configured_driver",
+        label: "Driver",
         status: Status::Ok,
-        detail: Some(configured_mode.to_string()),
+        detail: Some(configured_driver.to_string()),
     });
-    checks.push(compiled_backend_check(configured_mode));
-    match configured_mode {
-        BackendKind::Telis => checks.push(gpio_chip_check()),
-        BackendKind::Rts => {
+    checks.push(compiled_driver_check(configured_driver));
+    match configured_driver {
+        DriverKind::Telis => checks.push(gpio_chip_check()),
+        DriverKind::Rts => {
             checks.extend(rts_checks(&resolved_config.config.rts));
         }
-        BackendKind::Fake => checks.push(Check {
+        DriverKind::Fake => checks.push(Check {
             id: "gpio_chip_accessible",
             label: "GPIO",
             status: Status::Skipped,
-            detail: Some("fake backend selected".into()),
+            detail: Some("fake driver selected".into()),
         }),
     }
 
@@ -430,15 +432,15 @@ fn gpio_chip_check() -> Check {
     }
 }
 
-fn compiled_backend_check(backend: BackendKind) -> Check {
-    let compiled = match backend {
-        BackendKind::Fake => cfg!(feature = "fake"),
-        BackendKind::Telis => cfg!(feature = "telis"),
-        BackendKind::Rts => cfg!(feature = "rts"),
+fn compiled_driver_check(driver: DriverKind) -> Check {
+    let compiled = match driver {
+        DriverKind::Fake => cfg!(feature = "fake"),
+        DriverKind::Telis => cfg!(feature = "telis"),
+        DriverKind::Rts => cfg!(feature = "rts"),
     };
     Check {
-        id: "backend_compiled",
-        label: "Backend feature",
+        id: "driver_compiled",
+        label: "Driver feature",
         status: if compiled {
             Status::Ok
         } else {
@@ -448,7 +450,7 @@ fn compiled_backend_check(backend: BackendKind) -> Check {
             None
         } else {
             Some(format!(
-                "backend \"{backend}\" selected but this binary was built without the \"{backend}\" feature"
+                "driver \"{driver}\" selected but this binary was built without the \"{driver}\" feature"
             ))
         },
     }
@@ -599,7 +601,7 @@ fn gpio_chip_check() -> Check {
         id: "gpio_chip_accessible",
         label: "GPIO",
         status: Status::Skipped,
-        detail: Some("telis backend feature not enabled".into()),
+        detail: Some("telis driver feature not enabled".into()),
     }
 }
 

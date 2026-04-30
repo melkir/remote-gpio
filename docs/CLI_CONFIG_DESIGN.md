@@ -7,16 +7,16 @@ enough for AI tools to inspect, generate, and explain.
 
 ## Goals
 
-- Make the common control path backend-neutral.
-- Keep backend-specific details out of the user-facing command vocabulary.
-- Expose backend diagnostics through structured service logs rather than separate backend command groups.
+- Make the common control path driver-neutral.
+- Keep driver-specific details out of the user-facing command vocabulary.
+- Expose driver diagnostics through structured service logs rather than separate driver command groups.
 - Move persistent hardware choices out of command flags and systemd `ExecStart` strings.
 - Use one configuration resolution model across `serve`, `doctor`, install flows, and one-shot commands.
 
 ## Current Friction
 
 The current CLI leaks implementation details into operator workflows. Users
-usually want to operate a channel, not think about whether the active backend is
+usually want to operate a channel, not think about whether the active driver is
 RTS or Telis.
 
 Persistent settings are also split across command flags, environment variables,
@@ -69,7 +69,7 @@ somfy restart
 somfy uninstall
 ```
 
-Add a backend-neutral `remote` command group for normal operation:
+Add a driver-neutral `remote` command group for normal operation:
 
 ```bash
 somfy remote status
@@ -88,7 +88,7 @@ somfy remote prog L1
 somfy remote select L3
 ```
 
-`remote` should also cover commands that are currently backend-specific. For
+`remote` should also cover commands that are currently driver-specific. For
 example, programming a channel should be expressed as:
 
 ```bash
@@ -114,7 +114,7 @@ somfy logs --follow
 somfy logs --debug
 ```
 
-Frame details and backend diagnostics should live in structured service logs,
+Frame details and driver diagnostics should live in structured service logs,
 rather than in separate operator-facing RTS commands. `somfy logs` should be a
 convenience wrapper around the service logs.
 
@@ -129,7 +129,7 @@ somfy config validate
 `config show` should print the resolved configuration by default. The raw file
 can be inspected directly when needed.
 
-Do not add a public `rts` command group. RTS is a backend implementation, not a
+Do not add a public `rts` command group. RTS is a driver implementation, not a
 top-level operator domain.
 
 ## Argument Rules
@@ -152,12 +152,12 @@ Use flags only for command behavior or output format:
 --dry-run
 ```
 
-Do not expose persistent hardware settings as command flags. Backend selection,
+Do not expose persistent hardware settings as command flags. Driver selection,
 RTS wiring, Telis GPIO mapping, and Telis-assisted programming should come from
 the config file or built-in defaults.
 
-The current backend and RTS hardware flags should be removed as part of this
-cleanup. That includes `--backend`, `--rts-spi-device`, `--rts-gdo0-gpio`,
+The current driver and RTS hardware flags should be removed as part of this
+cleanup. That includes `--driver`, `--rts-spi-device`, `--rts-gdo0-gpio`,
 `--pigpiod-addr`, `--rts-frame-count`, and Telis Prog wiring flags.
 
 Use the same value names everywhere:
@@ -165,7 +165,7 @@ Use the same value names everywhere:
 ```text
 <channel> = L1 | L2 | L3 | L4 | ALL
 <command> = up | down | stop | prog | select
-<backend> = fake | telis | rts
+<driver> = fake | telis | rts
 ```
 
 Remote command channel rules:
@@ -204,7 +204,7 @@ The Telis GPIO defaults should match the wiring in
 [HARDWARE.md](HARDWARE.md#connection-table). `prog` is optional: when it is
 uncommented or otherwise configured, `somfy remote prog <channel>` can use the
 wired Telis Prog button as part of the assisted RTS programming flow. If `prog`
-is omitted, programming uses backend-native behavior.
+is omitted, programming uses driver-native behavior.
 
 Recommended locations:
 
@@ -241,14 +241,14 @@ Config resolution should produce one resolved config object used by:
 `ExecStart` as the source of truth. The systemd unit should point at the binary
 and config path, while the config file carries persistent hardware choices.
 `install` should install the service from the resolved config; config chooses
-the backend and hardware options.
+the driver and hardware options.
 
 ## Flag and Env Cleanup
 
 Remove persistent hardware configuration from the command line and environment.
 These settings should come from config or built-in defaults:
 
-- `somfy serve --backend`
+- `somfy serve --driver`
 - `SOMFY_BACKEND`
 - `--rts-spi-device`
 - `--rts-gdo0-gpio`
@@ -258,8 +258,8 @@ These settings should come from config or built-in defaults:
 - `SOMFY_RTS_GDO0_GPIO`
 - `SOMFY_PIGPIOD_ADDR`
 - `SOMFY_RTS_FRAME_COUNT`
-- `somfy install --backend`
-- `install.sh --backend`
+- `somfy install --driver`
+- `install.sh --driver`
 - `somfy rts prog --with-telis`
 - `--telis-gpio`
 - `--telis-press-ms`
@@ -301,28 +301,28 @@ somfy remote prog L1
 
 should automatically run the assisted sequence:
 
-1. Select the requested channel on the wired Telis backend if needed.
+1. Select the requested channel on the wired Telis driver if needed.
 2. Press the configured Telis Prog GPIO.
 3. Wait the configured delay.
 4. Transmit the RTS Prog frame.
 
-If no Telis Prog GPIO is configured, the same command should use backend-native
+If no Telis Prog GPIO is configured, the same command should use driver-native
 Prog behavior where supported.
 
 Resolution rules:
 
 ```text
 configured gpio  => Telis-assisted Prog by default
-no gpio          => backend-native Prog
+no gpio          => driver-native Prog
 ```
 
 ## Debug Logging
 
 Debugging should not require a separate RTS command vocabulary. Instead, the
-service and one-shot commands should emit structured backend events when debug
+service and one-shot commands should emit structured driver events when debug
 logging is enabled.
 
-For the RTS backend, useful debug fields include:
+For the RTS driver, useful debug fields include:
 
 - channel
 - command
@@ -334,7 +334,7 @@ For the RTS backend, useful debug fields include:
 - pulse count
 - total waveform duration
 
-For the Telis backend, useful debug fields include:
+For the Telis driver, useful debug fields include:
 
 - selected channel before and after command execution
 - GPIO line being pulsed
@@ -343,14 +343,14 @@ For the Telis backend, useful debug fields include:
 
 Debug output should be available in the normal service logs. For systemd
 installs, this means `journalctl -u somfy` should be enough to inspect the
-backend behavior. A convenience command can wrap that:
+driver behavior. A convenience command can wrap that:
 
 ```bash
 somfy logs --follow
 somfy logs --debug
 ```
 
-`--debug` should follow logs with backend debug fields included. Persistent
+`--debug` should follow logs with driver debug fields included. Persistent
 debug mode can be added later if there is a real operator need, but it should
 not be part of the first design because it introduces config mutation and
 service restart behavior.
@@ -358,7 +358,7 @@ service restart behavior.
 ## Implementation Plan
 
 1. Add config loading and `somfy config path/show/validate`.
-2. Teach `serve`, `doctor`, `install`, and backend command execution to use the resolved config.
+2. Teach `serve`, `doctor`, `install`, and driver command execution to use the resolved config.
 3. Add `somfy remote <command> [channel]` as the canonical control surface.
 4. Move frame and GPIO diagnostics into structured debug logs.
 5. Keep RTS-specific diagnostics in structured logs, not in a public command group.

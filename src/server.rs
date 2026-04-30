@@ -280,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_with_channel_selects_then_executes() {
         let remote_control = Arc::new(
-            RemoteControl::with_backend(crate::backend::BackendConfig::default())
+            RemoteControl::with_driver(crate::driver::DriverConfig::default())
                 .await
                 .unwrap(),
         );
@@ -294,8 +294,8 @@ mod tests {
         assert_eq!(
             remote_control.operations(),
             vec![
-                crate::backend::ProtocolOperation::TelisSelection(Channel::L3),
-                crate::backend::ProtocolOperation::FakeCommand {
+                crate::driver::ProtocolOperation::TelisSelection(Channel::L3),
+                crate::driver::ProtocolOperation::FakeCommand {
                     channel: Channel::L3,
                     command: Command::Up,
                 },

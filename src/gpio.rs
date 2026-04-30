@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 use std::str::FromStr;
 
-use crate::backend::TelisGpioOptions;
+use crate::driver::TelisGpioOptions;
 
 /// Logical remote target selected by the Telis LED row.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -15,7 +15,7 @@ pub enum Channel {
     ALL,
 }
 
-/// Represents the Telis button GPIO pins driven by the wired backend.
+/// Represents the Telis button GPIO pins driven by the wired driver.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TelisButton {
     Select = 6,

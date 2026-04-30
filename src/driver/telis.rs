@@ -3,7 +3,7 @@ use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
-use crate::backend::{SelectedChannelRx, TelisOptions};
+use crate::driver::{SelectedChannelRx, TelisOptions};
 use crate::gpio::{Channel, TelisButton};
 use crate::remote::Command;
 
@@ -12,14 +12,14 @@ const PROG_PRESS: Duration = Duration::from_millis(2500);
 const RTS_PROG_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Debug)]
-pub(crate) struct TelisBackend {
+pub(crate) struct TelisDriver {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
     transport: TelisGpioTransport,
     execute_lock: Mutex<()>,
 }
 
-impl TelisBackend {
+impl TelisDriver {
     pub(crate) async fn new(options: TelisOptions) -> Result<Self> {
         let transport = TelisGpioTransport { options };
         let selection = transport.select().await?;
@@ -141,7 +141,7 @@ impl TelisProgrammer {
     }
 
     pub(crate) async fn program(&self, channel: Channel) -> Result<()> {
-        let telis = TelisBackend::new(self.options.clone()).await?;
+        let telis = TelisDriver::new(self.options.clone()).await?;
         telis.program(channel).await
     }
 }

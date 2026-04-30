@@ -2,14 +2,14 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-use crate::backend::{BackendConfig, BackendKind, RtsOptions, TelisOptions};
+use crate::driver::{DriverConfig, DriverKind, RtsOptions, TelisOptions};
 
 pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
-    pub mode: BackendKind,
+    pub driver: DriverKind,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
 }
@@ -17,7 +17,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            mode: BackendKind::Fake,
+            driver: DriverKind::Fake,
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }
@@ -25,9 +25,9 @@ impl Default for AppConfig {
 }
 
 impl AppConfig {
-    pub fn backend_config(&self) -> BackendConfig {
-        BackendConfig {
-            kind: self.mode,
+    pub fn driver_config(&self) -> DriverConfig {
+        DriverConfig {
+            kind: self.driver,
             rts: self.rts.clone(),
             telis: self.telis.clone(),
         }

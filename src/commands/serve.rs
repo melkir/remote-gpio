@@ -15,7 +15,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
     }
 
     let remote_control =
-        Arc::new(RemoteControl::with_backend(resolved_config.config.backend_config()).await?);
+        Arc::new(RemoteControl::with_driver(resolved_config.config.driver_config()).await?);
     let shared_state = Arc::new(AppState {
         remote_control: remote_control.clone(),
     });

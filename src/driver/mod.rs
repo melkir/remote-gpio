@@ -15,11 +15,11 @@ mod rts;
 mod telis;
 
 #[cfg(feature = "fake")]
-use fake::FakeBackend;
+use fake::FakeDriver;
 #[cfg(feature = "rts")]
-use rts::RtsBackend;
+use rts::RtsDriver;
 #[cfg(feature = "telis")]
-use telis::TelisBackend;
+use telis::TelisDriver;
 #[cfg(all(feature = "rts", feature = "telis"))]
 use telis::TelisProgrammer;
 
@@ -32,13 +32,13 @@ pub struct CommandOutcome {
 
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "lowercase")]
-pub enum BackendKind {
+pub enum DriverKind {
     Fake,
     Telis,
     Rts,
 }
 
-impl fmt::Display for BackendKind {
+impl fmt::Display for DriverKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Fake => write!(f, "fake"),
@@ -106,16 +106,16 @@ impl Default for TelisGpioOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct BackendConfig {
-    pub kind: BackendKind,
+pub struct DriverConfig {
+    pub kind: DriverKind,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
 }
 
-impl Default for BackendConfig {
+impl Default for DriverConfig {
     fn default() -> Self {
         Self {
-            kind: BackendKind::Fake,
+            kind: DriverKind::Fake,
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }
@@ -131,55 +131,55 @@ pub(crate) enum ProtocolOperation {
 
 #[derive(Debug)]
 pub(crate) struct CommandRouter {
-    executor: ModeExecutor,
+    executor: DriverExecutor,
     #[cfg(all(feature = "rts", feature = "telis"))]
     telis_programmer: Option<TelisProgrammer>,
 }
 
 #[derive(Debug)]
-enum ModeExecutor {
+enum DriverExecutor {
     #[cfg(feature = "fake")]
-    Fake(FakeBackend),
+    Fake(FakeDriver),
     #[cfg(feature = "telis")]
-    Telis(TelisBackend),
+    Telis(TelisDriver),
     #[cfg(feature = "rts")]
-    Rts(Box<RtsBackend>),
+    Rts(Box<RtsDriver>),
 }
 
 impl CommandRouter {
-    pub async fn new(config: BackendConfig) -> Result<Self> {
+    pub async fn new(config: DriverConfig) -> Result<Self> {
         #[cfg(feature = "rts")]
         let has_telis_prog = config.telis.gpio.prog.is_some();
         #[cfg(all(feature = "rts", feature = "telis"))]
-        let use_telis_programmer = config.kind == BackendKind::Rts && has_telis_prog;
+        let use_telis_programmer = config.kind == DriverKind::Rts && has_telis_prog;
         #[cfg(all(feature = "rts", feature = "telis"))]
         let telis_programmer_options = config.telis.clone();
         let executor = match config.kind {
-            BackendKind::Fake => {
+            DriverKind::Fake => {
                 #[cfg(feature = "fake")]
                 {
-                    ModeExecutor::Fake(FakeBackend::new(Channel::L1))
+                    DriverExecutor::Fake(FakeDriver::new(Channel::L1))
                 }
                 #[cfg(not(feature = "fake"))]
                 {
                     anyhow::bail!(
-                        "backend \"fake\" was selected, but this binary was built without the \"fake\" feature"
+                        "driver \"fake\" was selected, but this binary was built without the \"fake\" feature"
                     )
                 }
             }
-            BackendKind::Telis => {
+            DriverKind::Telis => {
                 #[cfg(feature = "telis")]
                 {
-                    ModeExecutor::Telis(TelisBackend::new(config.telis).await?)
+                    DriverExecutor::Telis(TelisDriver::new(config.telis).await?)
                 }
                 #[cfg(not(feature = "telis"))]
                 {
                     anyhow::bail!(
-                        "backend \"telis\" was selected, but this binary was built without the \"telis\" feature"
+                        "driver \"telis\" was selected, but this binary was built without the \"telis\" feature"
                     )
                 }
             }
-            BackendKind::Rts => {
+            DriverKind::Rts => {
                 #[cfg(feature = "rts")]
                 {
                     if has_telis_prog {
@@ -188,12 +188,12 @@ impl CommandRouter {
                             "telis.gpio.prog is configured, but this binary was built without the \"telis\" feature"
                         );
                     }
-                    ModeExecutor::Rts(Box::new(RtsBackend::new(config.rts).await?))
+                    DriverExecutor::Rts(Box::new(RtsDriver::new(config.rts).await?))
                 }
                 #[cfg(not(feature = "rts"))]
                 {
                     anyhow::bail!(
-                        "backend \"rts\" was selected, but this binary was built without the \"rts\" feature"
+                        "driver \"rts\" was selected, but this binary was built without the \"rts\" feature"
                     )
                 }
             }
@@ -211,19 +211,19 @@ impl CommandRouter {
         let _ = (command, channel);
         match &self.executor {
             #[cfg(feature = "fake")]
-            ModeExecutor::Fake(backend) => backend.execute(command, channel).await,
+            DriverExecutor::Fake(driver) => driver.execute(command, channel).await,
             #[cfg(feature = "telis")]
-            ModeExecutor::Telis(backend) => backend.execute(command, channel).await,
+            DriverExecutor::Telis(driver) => driver.execute(command, channel).await,
             #[cfg(feature = "rts")]
-            ModeExecutor::Rts(backend) => {
+            DriverExecutor::Rts(driver) => {
                 if command == Command::Prog {
-                    self.program_rts(backend.selected_channel()).await
+                    self.program_rts(driver.selected_channel()).await
                 } else {
-                    backend.execute(command, channel).await
+                    driver.execute(command, channel).await
                 }
             }
             #[allow(unreachable_patterns)]
-            _ => unreachable!("no backend variants were compiled"),
+            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
@@ -231,54 +231,54 @@ impl CommandRouter {
         let _ = (channel, command);
         match &self.executor {
             #[cfg(feature = "fake")]
-            ModeExecutor::Fake(backend) => backend.execute_on(channel, command).await,
+            DriverExecutor::Fake(driver) => driver.execute_on(channel, command).await,
             #[cfg(feature = "telis")]
-            ModeExecutor::Telis(backend) => backend.execute_on(channel, command).await,
+            DriverExecutor::Telis(driver) => driver.execute_on(channel, command).await,
             #[cfg(feature = "rts")]
-            ModeExecutor::Rts(backend) => {
+            DriverExecutor::Rts(driver) => {
                 if command == Command::Prog {
                     self.program_rts(channel).await
                 } else {
-                    backend.execute_on(channel, command).await
+                    driver.execute_on(channel, command).await
                 }
             }
             #[allow(unreachable_patterns)]
-            _ => unreachable!("no backend variants were compiled"),
+            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
     pub fn selected_channel(&self) -> Channel {
         match &self.executor {
             #[cfg(feature = "fake")]
-            ModeExecutor::Fake(backend) => backend.selected_channel(),
+            DriverExecutor::Fake(driver) => driver.selected_channel(),
             #[cfg(feature = "telis")]
-            ModeExecutor::Telis(backend) => backend.selected_channel(),
+            DriverExecutor::Telis(driver) => driver.selected_channel(),
             #[cfg(feature = "rts")]
-            ModeExecutor::Rts(backend) => backend.selected_channel(),
+            DriverExecutor::Rts(driver) => driver.selected_channel(),
             #[allow(unreachable_patterns)]
-            _ => unreachable!("no backend variants were compiled"),
+            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
     pub fn subscribe_selected_channel(&self) -> SelectedChannelRx {
         match &self.executor {
             #[cfg(feature = "fake")]
-            ModeExecutor::Fake(backend) => backend.subscribe_selected_channel(),
+            DriverExecutor::Fake(driver) => driver.subscribe_selected_channel(),
             #[cfg(feature = "telis")]
-            ModeExecutor::Telis(backend) => backend.subscribe_selected_channel(),
+            DriverExecutor::Telis(driver) => driver.subscribe_selected_channel(),
             #[cfg(feature = "rts")]
-            ModeExecutor::Rts(backend) => backend.subscribe_selected_channel(),
+            DriverExecutor::Rts(driver) => driver.subscribe_selected_channel(),
             #[allow(unreachable_patterns)]
-            _ => unreachable!("no backend variants were compiled"),
+            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
     #[cfg(all(test, feature = "fake"))]
     pub(crate) fn operations(&self) -> Vec<ProtocolOperation> {
         match &self.executor {
-            ModeExecutor::Fake(backend) => backend.operations(),
+            DriverExecutor::Fake(driver) => driver.operations(),
             #[allow(unreachable_patterns)]
-            _ => unreachable!("fake backend variant was not compiled"),
+            _ => unreachable!("fake driver variant was not compiled"),
         }
     }
 
@@ -292,7 +292,7 @@ impl CommandRouter {
         }
 
         match &self.executor {
-            ModeExecutor::Rts(backend) => backend.execute_on(channel, Command::Prog).await,
+            DriverExecutor::Rts(driver) => driver.execute_on(channel, Command::Prog).await,
             #[allow(unreachable_patterns)]
             _ => unreachable!("RTS programming requires the RTS executor"),
         }

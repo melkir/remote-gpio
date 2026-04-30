@@ -44,7 +44,7 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
         );
     }
 
-    if resolved_config.config.mode == crate::backend::BackendKind::Rts {
+    if resolved_config.config.driver == crate::driver::DriverKind::Rts {
         prepare_rts_prereqs()?;
     }
 
@@ -94,7 +94,7 @@ fn ensure_pigpio_installed() -> Result<()> {
     }
 
     if !command_exists("apt-get") {
-        bail!("pigpiod is not installed and apt-get is unavailable; install the `pigpio` package before using the RTS backend");
+        bail!("pigpiod is not installed and apt-get is unavailable; install the `pigpio` package before using the RTS driver");
     }
 
     run_command("apt-get", &["update"]).context("updating apt package metadata")?;

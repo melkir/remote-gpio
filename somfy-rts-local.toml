@@ -1,4 +1,4 @@
-mode = "rts"
+driver = "rts"
 
 [rts]
 spi_device = "./fake-spi"

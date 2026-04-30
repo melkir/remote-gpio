@@ -11,23 +11,23 @@ time.
 - HTTP/SSE for the web UI.
 - WebSocket for bidirectional API clients.
 - Native HomeKit Accessory Protocol (HAP) for Apple Home.
-- A pluggable backend that talks to the actual hardware.
+- A pluggable driver that talks to the actual hardware.
 
-The frontend is intentionally backend-agnostic. Whether the binary is driving a
+The frontend is intentionally driver-agnostic. Whether the binary is driving a
 wired Telis 4 remote over GPIO or transmitting RTS frames through a CC1101, the
 HTTP/SSE/HomeKit surface is identical.
 
-## Backends
+## Drivers
 
-`ActiveBackend` (`src/backend/mod.rs`) is the single seam between the UI layer
+`CommandRouter` (`src/driver/mod.rs`) is the single seam between the UI layer
 and the hardware. Three implementations live behind compile-time features and a
 runtime config value:
 
-| Backend | Module                 | What it does                                                                                   |
+| Driver | Module                 | What it does                                                                                   |
 | ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `fake`  | `src/backend/fake.rs`  | Records commands in-memory; default for dev and tests.                                         |
-| `telis` | `src/backend/telis.rs` | Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.       |
-| `rts`   | `src/backend/rts.rs`   | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod. |
+| `fake`  | `src/driver/fake.rs`  | Records commands in-memory; default for dev and tests.                                         |
+| `telis` | `src/driver/telis.rs` | Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.       |
+| `rts`   | `src/driver/rts.rs`   | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod. |
 
 All three implement the same shape:
 
@@ -35,7 +35,7 @@ All three implement the same shape:
 - `execute_on(channel, command)` for HomeKit's per-accessory commands; never mutates selection on RTS, may move the physical selector on Telis.
 - `selected_channel()` / `subscribe_selected_channel()` for the live selection watch channel.
 
-Live backend switching is intentionally unsupported. Pick one in
+Live driver switching is intentionally unsupported. Pick one in
 `/etc/somfy/config.toml`; the systemd unit points at the config file and the
 config carries hardware choices.
 
@@ -44,23 +44,23 @@ config carries hardware choices.
 | Area           | Files            | Responsibility                                                                                 |
 | -------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
 | Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                       |
-| Remote control | `src/remote.rs`  | Backend-agnostic command surface, position fan-out, and event broadcasting.                    |
-| Backends       | `src/backend/*`  | `fake`, `telis`, `rts` implementations of the active-backend trait.                            |
-| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis backend.                  |
+| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                    |
+| Drivers       | `src/driver/*`  | `fake`, `telis`, `rts` implementations of the active-driver trait.                            |
+| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                  |
 | RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
 | HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
 | HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.   |
 | CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                   |
 
 The important boundaries are `hap` versus `homekit` (protocol vs project), and
-`backend/`\* versus everything above (hardware vs UX).
+`driver/`\* versus everything above (hardware vs UX).
 
 ## RemoteControl
 
-`RemoteControl` wraps `ActiveBackend` and owns the cross-cutting state that
-isn't backend-specific:
+`RemoteControl` wraps `CommandRouter` and owns the cross-cutting state that
+isn't driver-specific:
 
-- `watch<Channel>` (delegated to the backend) tracks the current selection.
+- `watch<Channel>` (delegated to the driver) tracks the current selection.
 - `broadcast<PositionUpdate>` publishes completed Up/Down movement events.
 
 The selection watch is stateful. A new SSE or WebSocket client subscribes and
@@ -78,7 +78,7 @@ physical RTS remote does over the air.
 
 The hardware can only do one thing at a time. Software callers are more
 flexible: the web UI, REST/WebSocket clients, and HomeKit can all issue
-commands. Each backend serializes its own hardware transactions:
+commands. Each driver serializes its own hardware transactions:
 
 - **Telis** uses `execute_lock` so cycle-and-press sequences don't interleave at the GPIO level.
 - **RTS** uses `transmitter_lock` so two presses can't construct overlapping pigpio waveforms; the selection state lock is separate, so `select` never blocks behind an in-flight transmission.
@@ -149,7 +149,7 @@ State files under the systemd state directory (`/var/lib/somfy/`, or
 
 - `hap.json` — HomeKit identity, setup code, signing key, config/state numbers, paired controllers.
 - `positions.json` — HomeKit position cache.
-- `rts.json` (RTS backend only) — schema-versioned virtual-remote identities, per-channel rolling-code reserves, and persisted `selected_channel`.
+- `rts.json` (RTS driver only) — schema-versioned virtual-remote identities, per-channel rolling-code reserves, and persisted `selected_channel`.
 
 All writes go through the same atomic temp-file-plus-rename helper. The RTS
 state file uses a write-ahead reserve block (default 16 codes) so a crashed or
@@ -162,9 +162,9 @@ automation associations.
 
 ## Design Tradeoffs
 
-- **Pluggable backend:** lets the binary drive a wired Telis remote, a CC1101 radio, or nothing at all without changing the UI surface.
-- **Telis backend uses real hardware as source of truth:** avoids drift for LED selection, but every command pays physical timing cost.
-- **RTS backend persists rolling codes with a reserve block:** a crash loses a handful of unused codes rather than reusing one, which is the irreversible failure mode for RTS pairing.
+- **Pluggable driver:** lets the binary drive a wired Telis remote, a CC1101 radio, or nothing at all without changing the UI surface.
+- **Telis driver uses real hardware as source of truth:** avoids drift for LED selection, but every command pays physical timing cost.
+- **RTS driver persists rolling codes with a reserve block:** a crash loses a handful of unused codes rather than reusing one, which is the irreversible failure mode for RTS pairing.
 - **Queued command execution:** lets multiple software clients use the remote without interleaving operations.
 - **Inferred blind positions with `ALL` fan-out:** useful for HomeKit UX, but not true physical feedback.
 - **Native HAP implementation:** removes Homebridge/Node deployment complexity, but requires maintaining protocol code.

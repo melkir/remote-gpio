@@ -3,7 +3,7 @@ use std::str::FromStr;
 
 use tokio::sync::broadcast;
 
-use crate::backend::{infer_position, CommandOutcome, CommandRouter, SelectedChannelRx};
+use crate::driver::{infer_position, CommandOutcome, CommandRouter, SelectedChannelRx};
 use crate::gpio::Channel;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -39,7 +39,7 @@ impl FromStr for Command {
 /// It handles channel selection and button commands while maintaining the current state.
 #[derive(Debug)]
 pub struct RemoteControl {
-    backend: CommandRouter,
+    router: CommandRouter,
     /// Fan-out of completed Up/Down commands. This is a transient event stream
     /// used to mirror inferred blind position into HomeKit.
     position_tx: broadcast::Sender<PositionUpdate>,
@@ -48,32 +48,32 @@ pub struct RemoteControl {
 impl RemoteControl {
     /// Creates a new RemoteControl instance and initializes the channel state
     pub async fn new() -> Result<Self> {
-        let backend = CommandRouter::new(Default::default()).await?;
+        let router = CommandRouter::new(Default::default()).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
-            backend,
+            router,
             position_tx,
         })
     }
 
-    pub async fn with_backend(config: crate::backend::BackendConfig) -> Result<Self> {
-        let backend = CommandRouter::new(config).await?;
+    pub async fn with_driver(config: crate::driver::DriverConfig) -> Result<Self> {
+        let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
-            backend,
+            router,
             position_tx,
         })
     }
 
     /// Return the latest known channel selector state.
     pub fn current_selection(&self) -> Channel {
-        self.backend.selected_channel()
+        self.router.selected_channel()
     }
 
     /// Subscribe to channel selector changes. New subscribers can immediately read
     /// the latest selection from the returned receiver.
     pub fn subscribe_selection(&self) -> SelectedChannelRx {
-        self.backend.subscribe_selected_channel()
+        self.router.subscribe_selected_channel()
     }
 
     /// Subscribe to position updates emitted after every successful Up/Down.
@@ -81,7 +81,7 @@ impl RemoteControl {
         self.position_tx.subscribe()
     }
 
-    /// Run a UI command against backend state. Directional commands target the
+    /// Run a UI command against driver state. Directional commands target the
     /// selected channel; `Select` optionally targets a specific channel.
     ///
     /// `Select` with `channel=Some` is a no-op after the cycle; `Select` with
@@ -91,7 +91,7 @@ impl RemoteControl {
         command: Command,
         channel: Option<Channel>,
     ) -> Result<CommandOutcome> {
-        self.backend.execute(command, channel).await?;
+        self.router.execute(command, channel).await?;
         let target = self.current_selection();
         Ok(self.complete_command(target, command))
     }
@@ -100,13 +100,13 @@ impl RemoteControl {
     /// public selection state; Telis may update selection because targeting a
     /// channel requires moving the physical selector.
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
-        self.backend.execute_on(channel, command).await?;
+        self.router.execute_on(channel, command).await?;
         Ok(self.complete_command(channel, command))
     }
 
     #[cfg(all(test, feature = "fake"))]
-    pub(crate) fn operations(&self) -> Vec<crate::backend::ProtocolOperation> {
-        self.backend.operations()
+    pub(crate) fn operations(&self) -> Vec<crate::driver::ProtocolOperation> {
+        self.router.operations()
     }
 
     fn complete_command(&self, channel: Channel, command: Command) -> CommandOutcome {
