@@ -1,4 +1,6 @@
 use anyhow::Result;
+use futures_util::future::BoxFuture;
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
@@ -15,19 +17,29 @@ const RTS_PROG_DELAY: Duration = Duration::from_millis(700);
 pub(crate) struct TelisDriver {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
-    transport: TelisGpioTransport,
+    transport: Arc<dyn TelisTransport>,
+    prog_gpio: Option<u8>,
     execute_lock: Mutex<()>,
 }
 
 impl TelisDriver {
     pub(crate) async fn new(options: TelisOptions) -> Result<Self> {
-        let transport = TelisGpioTransport { options };
+        let prog_gpio = options.gpio.prog;
+        let transport = Arc::new(GpioTelisTransport { options });
+        Self::with_transport(transport, prog_gpio).await
+    }
+
+    async fn with_transport(
+        transport: Arc<dyn TelisTransport>,
+        prog_gpio: Option<u8>,
+    ) -> Result<Self> {
         let selection = transport.select().await?;
         let (sender, selected_rx) = watch::channel(selection);
         Ok(Self {
             sender,
             selected_rx,
             transport,
+            prog_gpio,
             execute_lock: Mutex::new(()),
         })
     }
@@ -115,13 +127,10 @@ impl TelisDriver {
 
     async fn press_prog(&self, channel: Channel) -> Result<()> {
         let prog_gpio = self
-            .transport
-            .options
-            .gpio
-            .prog
+            .prog_gpio
             .ok_or_else(|| anyhow::anyhow!("telis.gpio.prog is required for prog"))?;
         tracing::info!(%channel, prog_gpio, "pressing Telis Prog");
-        crate::gpio::trigger_output_gpio(prog_gpio, PROG_PRESS).await?;
+        self.transport.press_gpio(prog_gpio, PROG_PRESS).await?;
         tokio::time::sleep(RTS_PROG_DELAY).await;
         tracing::info!(%channel, prog_gpio, "Telis Prog press complete");
         Ok(())
@@ -146,24 +155,133 @@ impl TelisProgrammer {
     }
 }
 
-#[derive(Clone, Debug)]
-struct TelisGpioTransport {
+trait TelisTransport: std::fmt::Debug + Send + Sync + 'static {
+    fn press(&self, button: TelisButton) -> BoxFuture<'_, Result<()>>;
+    fn press_gpio(&self, gpio: u8, duration: Duration) -> BoxFuture<'_, Result<()>>;
+    fn select(&self) -> BoxFuture<'_, Result<Channel>>;
+}
+
+#[derive(Debug)]
+struct GpioTelisTransport {
     options: TelisOptions,
 }
 
-impl TelisGpioTransport {
-    async fn press(&self, button: TelisButton) -> Result<()> {
-        crate::gpio::trigger_output(button, &self.options.gpio).await
+impl TelisTransport for GpioTelisTransport {
+    fn press(&self, button: TelisButton) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move { crate::gpio::trigger_output(button, &self.options.gpio).await })
     }
 
-    async fn select(&self) -> Result<Channel> {
-        let options = self.options.clone();
-        tokio::spawn(async move {
-            if let Err(e) = crate::gpio::trigger_output(TelisButton::Select, &options.gpio).await {
-                tracing::error!("failed to trigger Telis select button: {e}");
-            }
-        });
+    fn press_gpio(&self, gpio: u8, duration: Duration) -> BoxFuture<'_, Result<()>> {
+        Box::pin(async move { crate::gpio::trigger_output_gpio(gpio, duration).await })
+    }
 
-        crate::gpio::watch_inputs(&self.options.gpio).await
+    fn select(&self) -> BoxFuture<'_, Result<Channel>> {
+        Box::pin(async move {
+            let options = self.options.clone();
+            tokio::spawn(async move {
+                if let Err(e) =
+                    crate::gpio::trigger_output(TelisButton::Select, &options.gpio).await
+                {
+                    tracing::error!("failed to trigger Telis select button: {e}");
+                }
+            });
+
+            crate::gpio::watch_inputs(&self.options.gpio).await
+        })
+    }
+}
+
+#[cfg(all(test, feature = "rts"))]
+mod tests {
+    use super::*;
+    use std::sync::Mutex as StdMutex;
+
+    #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+    enum Event {
+        Button(TelisButton),
+        Gpio(u8),
+    }
+
+    #[derive(Debug)]
+    struct RecordingTransport {
+        selections: StdMutex<Vec<Channel>>,
+        events: StdMutex<Vec<Event>>,
+    }
+
+    impl RecordingTransport {
+        fn new(selections: Vec<Channel>) -> Self {
+            Self {
+                selections: StdMutex::new(selections),
+                events: StdMutex::new(Vec::new()),
+            }
+        }
+
+        fn events(&self) -> Vec<Event> {
+            self.events
+                .lock()
+                .expect("recording transport events mutex")
+                .clone()
+        }
+    }
+
+    impl TelisTransport for RecordingTransport {
+        fn press(&self, button: TelisButton) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async move {
+                self.events
+                    .lock()
+                    .expect("recording transport events mutex")
+                    .push(Event::Button(button));
+                Ok(())
+            })
+        }
+
+        fn press_gpio(&self, gpio: u8, _duration: Duration) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async move {
+                self.events
+                    .lock()
+                    .expect("recording transport events mutex")
+                    .push(Event::Gpio(gpio));
+                Ok(())
+            })
+        }
+
+        fn select(&self) -> BoxFuture<'_, Result<Channel>> {
+            Box::pin(async move {
+                self.events
+                    .lock()
+                    .expect("recording transport events mutex")
+                    .push(Event::Button(TelisButton::Select));
+                let channel = self
+                    .selections
+                    .lock()
+                    .expect("recording transport selections mutex")
+                    .remove(0);
+                Ok(channel)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn program_selects_target_channel_then_presses_prog_gpio() {
+        let transport = Arc::new(RecordingTransport::new(vec![
+            Channel::L1,
+            Channel::L2,
+            Channel::L3,
+        ]));
+        let driver = TelisDriver::with_transport(transport.clone(), Some(5))
+            .await
+            .unwrap();
+
+        driver.program(Channel::L3).await.unwrap();
+
+        assert_eq!(
+            transport.events(),
+            vec![
+                Event::Button(TelisButton::Select),
+                Event::Button(TelisButton::Select),
+                Event::Button(TelisButton::Select),
+                Event::Gpio(5),
+            ]
+        );
     }
 }
