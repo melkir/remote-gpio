@@ -29,6 +29,9 @@ curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh 
 ```
 
 The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Persistent hardware choices live in `/etc/somfy/config.toml`; see [Configuration](docs/HARDWARE.md#configuration).
+Pi builds default to the wired `telis` driver when no config file exists. For
+hardware-free testing on the Pi, create `/etc/somfy/config.toml` with
+`driver = "fake"` before installing.
 
 HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
@@ -49,6 +52,10 @@ The upgrade command pulls the latest stable release, swaps the binary, refreshes
 | `fake`  | none                      | Local dev — logs commands, no hardware.                |
 | `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote. |
 | `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.    |
+
+Built-in defaults are target-aware: Raspberry Pi Linux builds select `telis`;
+local development and CI-style non-Pi builds select `fake`. A config file always
+wins over the built-in default.
 
 Switch drivers by editing `/etc/somfy/config.toml`, then refresh and restart the service:
 

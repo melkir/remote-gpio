@@ -18,7 +18,7 @@ pub struct AppConfig {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
-            driver: DriverKind::Fake,
+            driver: DriverKind::default_for_target(),
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }

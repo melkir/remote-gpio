@@ -25,7 +25,7 @@ runtime config value:
 
 | Driver | Module                 | What it does                                                                                   |
 | ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `fake`  | `src/driver/fake.rs`  | Records commands in-memory; default for dev and tests.                                         |
+| `fake`  | `src/driver/fake.rs`  | Records commands in-memory; default for local dev, tests, and CI-style non-Pi builds.          |
 | `telis` | `src/driver/telis.rs` | Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.       |
 | `rts`   | `src/driver/rts.rs`   | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod. |
 
@@ -38,6 +38,8 @@ All three implement the same shape:
 Live driver switching is intentionally unsupported. Pick one in
 `/etc/somfy/config.toml`; the systemd unit points at the config file and the
 config carries hardware choices.
+When that config file is absent, Raspberry Pi Linux builds default to `telis`;
+other targets default to `fake`.
 
 ## Module Map
 

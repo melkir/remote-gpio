@@ -127,7 +127,9 @@ systemd drop-in that starts `pigpiod -l`, and enabling `pigpiod`.
 ### Configuration
 
 Hardware settings should come from built-in defaults or `/etc/somfy/config.toml`,
-not repeated CLI flags or environment variables.
+not repeated CLI flags or environment variables. Built-in driver defaults are
+target-aware: Raspberry Pi Linux builds select `telis`, while local development
+and CI-style non-Pi builds select `fake`. A config file always wins.
 
 ```toml
 driver = "rts"

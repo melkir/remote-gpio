@@ -280,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn dispatch_with_channel_selects_then_executes() {
         let remote_control = Arc::new(
-            RemoteControl::with_driver(crate::driver::DriverConfig::default())
+            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
                 .await
                 .unwrap(),
         );

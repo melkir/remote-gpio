@@ -44,6 +44,20 @@ pub enum DriverKind {
     Rts,
 }
 
+impl DriverKind {
+    pub fn default_for_target() -> Self {
+        if cfg!(all(
+            feature = "telis",
+            target_os = "linux",
+            any(target_arch = "arm", target_arch = "aarch64")
+        )) {
+            Self::Telis
+        } else {
+            Self::Fake
+        }
+    }
+}
+
 impl fmt::Display for DriverKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -116,8 +130,9 @@ pub struct DriverConfig {
     pub telis: TelisOptions,
 }
 
-impl Default for DriverConfig {
-    fn default() -> Self {
+#[cfg(all(test, feature = "fake"))]
+impl DriverConfig {
+    pub(crate) fn fake() -> Self {
         Self {
             kind: DriverKind::Fake,
             rts: RtsOptions::default(),

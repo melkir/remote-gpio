@@ -46,16 +46,6 @@ pub struct RemoteControl {
 }
 
 impl RemoteControl {
-    /// Creates a new RemoteControl instance and initializes the channel state
-    pub async fn new() -> Result<Self> {
-        let router = CommandRouter::new(Default::default()).await?;
-        let (position_tx, _) = broadcast::channel(64);
-        Ok(Self {
-            router,
-            position_tx,
-        })
-    }
-
     pub async fn with_driver(config: crate::driver::DriverConfig) -> Result<Self> {
         let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
