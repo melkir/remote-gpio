@@ -7,7 +7,7 @@ Wants=network-online.target
 Type=simple
 User={{SERVICE_USER}}
 Group=gpio
-ExecStart={{EXEC_START}} serve
+ExecStart={{EXEC_START}}
 Restart=on-failure
 RestartSec=3
 Environment=RUST_LOG=info

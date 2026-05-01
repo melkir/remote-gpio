@@ -2,18 +2,20 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::commands::doctor;
+use crate::config::ResolvedConfig;
 use crate::homekit;
 use crate::remote::RemoteControl;
 use crate::server::{serve, AppState};
 
-pub async fn run() -> Result<()> {
-    let report = doctor::collect(2000).await;
+pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
+    let report = doctor::collect(&resolved_config, 2000).await;
     report.print_summary();
     if report.has_blocking_failure() {
         std::process::exit(1);
     }
 
-    let remote_control = Arc::new(RemoteControl::new().await?);
+    let remote_control =
+        Arc::new(RemoteControl::with_driver(resolved_config.config.driver_config()).await?);
     let shared_state = Arc::new(AppState {
         remote_control: remote_control.clone(),
     });

@@ -79,7 +79,7 @@ fn status(json: bool, uri_only: bool) -> Result<()> {
     println!("  port        : {}", report.port);
     println!("  state file  : {}", report.state_path);
     println!(
-        "  config/state: {}/{}",
+        "  config     : {}/{}",
         report.config_number, report.state_number
     );
 

@@ -3,13 +3,17 @@ use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::Path;
+use std::process::Command;
 
 use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
 use crate::commands::upgrade::BIN_PREV;
+use crate::config::{self as app_config, ResolvedConfig};
 use crate::homekit::config;
 use crate::systemd;
 
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
+const PIGPIOD_OVERRIDE_PATH: &str = "/etc/systemd/system/pigpiod.service.d/somfy-localhost.conf";
+const PIGPIOD_OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/pigpiod -l\n";
 
 pub fn render_unit(service_user: &str, exec_start: &str) -> String {
     UNIT_TEMPLATE
@@ -17,7 +21,7 @@ pub fn render_unit(service_user: &str, exec_start: &str) -> String {
         .replace("{{EXEC_START}}", exec_start)
 }
 
-pub fn run(user_override: Option<String>) -> Result<()> {
+pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> Result<()> {
     require_root()?;
 
     let service_user = resolve_service_user(user_override)?;
@@ -40,7 +44,20 @@ pub fn run(user_override: Option<String>) -> Result<()> {
         );
     }
 
-    let rendered = render_unit(&service_user, BIN_PATH);
+    if resolved_config.config.driver == crate::driver::DriverKind::Rts {
+        prepare_rts_prereqs()?;
+    }
+
+    ensure_config_file(resolved_config)?;
+
+    let rendered = render_unit(
+        &service_user,
+        &format!(
+            "{} --config {} serve",
+            BIN_PATH,
+            resolved_config.path.display()
+        ),
+    );
 
     let unit_path = Path::new(UNIT_PATH);
     let on_disk = fs::read_to_string(unit_path).ok();
@@ -64,11 +81,91 @@ pub fn run(user_override: Option<String>) -> Result<()> {
     Ok(())
 }
 
+fn prepare_rts_prereqs() -> Result<()> {
+    ensure_pigpio_installed()?;
+    configure_pigpiod_localhost()?;
+    Ok(())
+}
+
+fn ensure_pigpio_installed() -> Result<()> {
+    if command_exists("pigpiod") {
+        tracing::info!("pigpiod already installed");
+        return Ok(());
+    }
+
+    if !command_exists("apt-get") {
+        bail!("pigpiod is not installed and apt-get is unavailable; install the `pigpio` package before using the RTS driver");
+    }
+
+    run_command("apt-get", &["update"]).context("updating apt package metadata")?;
+    run_command("apt-get", &["install", "-y", "pigpio"]).context("installing pigpio")?;
+    Ok(())
+}
+
+fn configure_pigpiod_localhost() -> Result<()> {
+    let override_path = Path::new(PIGPIOD_OVERRIDE_PATH);
+    if !override_path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid pigpiod override path"))?
+        .exists()
+    {
+        fs::create_dir_all(override_path.parent().unwrap())
+            .with_context(|| format!("creating {}", override_path.parent().unwrap().display()))?;
+    }
+
+    let on_disk = fs::read_to_string(override_path).ok();
+    let needs_write = match &on_disk {
+        Some(existing) => existing.trim() != PIGPIOD_OVERRIDE.trim(),
+        None => true,
+    };
+
+    if needs_write {
+        atomic_write(override_path, PIGPIOD_OVERRIDE)?;
+        systemd::systemctl(&["daemon-reload"])?;
+        tracing::info!("wrote {}", PIGPIOD_OVERRIDE_PATH);
+    } else {
+        tracing::info!("{} already in sync", PIGPIOD_OVERRIDE_PATH);
+    }
+
+    systemd::systemctl(&["enable", "--now", "pigpiod"])?;
+    systemd::systemctl(&["restart", "pigpiod"])?;
+    Ok(())
+}
+
+fn command_exists(command: &str) -> bool {
+    let Some(paths) = std::env::var_os("PATH") else {
+        return false;
+    };
+    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
+}
+
+fn run_command(command: &str, args: &[&str]) -> Result<()> {
+    let output = Command::new(command).args(args).output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("{} {} failed: {}", command, args.join(" "), stderr.trim());
+    }
+    Ok(())
+}
+
 fn require_root() -> Result<()> {
     if !nix::unistd::Uid::current().is_root() {
         bail!("somfy install must be run as root (use sudo)");
     }
     Ok(())
+}
+
+fn ensure_config_file(resolved_config: &ResolvedConfig) -> Result<()> {
+    if resolved_config.file_present {
+        return Ok(());
+    }
+    let parent = resolved_config.path.parent().unwrap_or(Path::new("/"));
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+    atomic_write(
+        &resolved_config.path,
+        &app_config::to_toml(&resolved_config.config)?,
+    )
+    .with_context(|| format!("writing {}", resolved_config.path.display()))
 }
 
 fn resolve_service_user(user_override: Option<String>) -> Result<String> {
@@ -132,10 +229,15 @@ mod tests {
 
     #[test]
     fn render_unit_substitutes_placeholders() {
-        let out = render_unit("pi", "/usr/local/bin/somfy");
+        let out = render_unit(
+            "pi",
+            "/usr/local/bin/somfy --config /etc/somfy/config.toml serve",
+        );
         assert!(out.contains("User=pi"));
         assert!(out.contains("Group=gpio"));
-        assert!(out.contains("ExecStart=/usr/local/bin/somfy serve"));
+        assert!(
+            out.contains("ExecStart=/usr/local/bin/somfy --config /etc/somfy/config.toml serve")
+        );
         assert!(!out.contains("{{SERVICE_USER}}"));
         assert!(!out.contains("{{EXEC_START}}"));
     }

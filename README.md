@@ -28,7 +28,12 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. HomeKit pairing is built in — see [HomeKit](#homekit) below.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Persistent hardware choices live in `/etc/somfy/config.toml`; see [Configuration](docs/HARDWARE.md#configuration).
+Pi builds default to the wired `telis` driver when no config file exists. For
+hardware-free testing on the Pi, create `/etc/somfy/config.toml` with
+`driver = "fake"` before installing.
+
+HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
 ### Upgrade
 
@@ -38,23 +43,83 @@ sudo somfy upgrade
 
 The upgrade command pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
 
+### Drivers
+
+`somfy` ships three drivers, selected by the resolved config file:
+
+| Driver | Hardware                  | Use case                                               |
+| ------- | ------------------------- | ------------------------------------------------------ |
+| `fake`  | none                      | Local dev — logs commands, no hardware.                |
+| `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote. |
+| `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.    |
+
+Built-in defaults are target-aware: Raspberry Pi Linux builds select `telis`;
+local development and CI-style non-Pi builds select `fake`. A config file always
+wins over the built-in default.
+
+Switch drivers by editing `/etc/somfy/config.toml`, then refresh and restart the service:
+
+```bash
+sudo somfy config validate
+sudo somfy install
+sudo systemctl restart somfy
+sudo somfy doctor
+```
+
+#### RTS driver
+
+The RTS driver transmits Somfy RTS frames directly through a CC1101 module. Each channel (`L1`–`L4` + `ALL`) is a separate virtual remote with its own 24-bit ID and rolling code, persisted to `/var/lib/somfy/rts.json`.
+
+Enable SPI on the Pi, select RTS in `/etc/somfy/config.toml`, then install. When the resolved config selects RTS, `somfy install` installs `pigpio`, configures `pigpiod` to listen on localhost only, enables `pigpiod`, and refreshes the `somfy` unit.
+
+```bash
+sudo raspi-config            # enable SPI
+sudo somfy install
+sudo somfy doctor
+```
+
+Pair each channel once (motor in programming mode, then):
+
+```bash
+sudo somfy remote prog L1
+sudo somfy remote up L1
+sudo somfy remote down L1
+sudo somfy remote stop L1
+# repeat for L2, L3, L4, ALL as needed
+```
+
+If the original Telis remote's Prog button is wired to the Pi, configure
+`telis.gpio.prog`. `somfy remote prog <channel>` then presses the wired Telis
+Prog button first and sends the matching RTS virtual remote's Prog command. Run
+the same command again to remove that virtual remote from the motor.
+
+Inspect driver behavior through service logs:
+
+```bash
+somfy logs --debug
+```
+
+Wiring and register details: [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver).
+
 ### API
 
 Server listens on `0.0.0.0:5002`.
 
-| Endpoint   | Method    | Description                            |
-| ---------- | --------- | -------------------------------------- |
-| `/ws`      | WebSocket | Real-time LED state + accepts commands |
-| `/events`  | GET       | SSE stream of LED selection changes    |
-| `/led`     | GET       | Current selection (`L1`-`L4` or `ALL`) |
-| `/command` | POST      | Execute command                        |
+| Endpoint   | Method    | Description                                  |
+| ---------- | --------- | -------------------------------------------- |
+| `/ws`      | WebSocket | Real-time selection state + accepts commands |
+| `/events`  | GET       | SSE stream of channel selection changes      |
+| `/channel` | GET       | Last channel selection                       |
+| `/command` | POST      | Execute command                              |
 
 ```json
 {"command": "up"}
 {"command": "down"}
 {"command": "stop"}
+{"command": "up", "channel": "L3"}
 {"command": "select"}
-{"command": "select", "led": "L3"}
+{"command": "select", "channel": "L3"}
+{"command": "prog", "channel": "L3"}
 ```
 
 ### HomeKit

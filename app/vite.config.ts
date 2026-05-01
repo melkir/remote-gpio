@@ -13,7 +13,7 @@ export default defineConfig({
     proxy: {
       '/command': 'http://localhost:5002',
       '/events': 'http://localhost:5002',
-      '/led': 'http://localhost:5002',
+      '/channel': 'http://localhost:5002',
     },
   },
   plugins: [

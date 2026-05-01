@@ -3,6 +3,9 @@ use serde::Serialize;
 use std::path::Path;
 use std::time::Duration;
 
+use crate::config::ResolvedConfig;
+use crate::driver::{DriverKind, RtsOptions};
+use crate::homekit::config;
 use crate::systemd;
 use crate::version;
 
@@ -39,6 +42,7 @@ pub struct VersionInfo {
 pub struct DoctorReport {
     pub schema_version: u32,
     pub version: VersionInfo,
+    pub config_path: String,
     pub checks: Vec<Check>,
 }
 
@@ -70,12 +74,14 @@ impl DoctorReport {
                 Status::Skipped => "[-]",
             };
             match &check.detail {
-                Some(d) if check.status != Status::Ok => println!(
-                    "{marker} {:<width$} ({})",
-                    check.label,
-                    d,
-                    width = label_width
-                ),
+                Some(d) if check.status != Status::Ok || check.id == "configured_driver" => {
+                    println!(
+                        "{marker} {:<width$} ({})",
+                        check.label,
+                        d,
+                        width = label_width
+                    )
+                }
                 _ => println!("{marker} {}", check.label),
             }
         }
@@ -123,8 +129,8 @@ fn status_str(s: Status) -> &'static str {
     }
 }
 
-pub async fn run(json: bool, verbose: bool) -> Result<()> {
-    let report = collect(2000).await;
+pub async fn run(json: bool, verbose: bool, resolved_config: &ResolvedConfig) -> Result<()> {
+    let report = collect(resolved_config, 2000).await;
     if json {
         println!("{}", serde_json::to_string_pretty(&report)?);
     } else if verbose {
@@ -138,10 +144,28 @@ pub async fn run(json: bool, verbose: bool) -> Result<()> {
     Ok(())
 }
 
-pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
+pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) -> DoctorReport {
     let mut checks = Vec::new();
 
-    let rendered_unit = render_expected_unit();
+    checks.push(Check {
+        id: "config_file",
+        label: "Config",
+        status: if resolved_config.file_present {
+            Status::Ok
+        } else {
+            Status::Advisory
+        },
+        detail: Some(if resolved_config.file_present {
+            resolved_config.path.display().to_string()
+        } else {
+            format!(
+                "{} not found; using built-in defaults",
+                resolved_config.path.display()
+            )
+        }),
+    });
+
+    let rendered_unit = render_expected_unit(resolved_config);
 
     // unit_installed
     let unit_exists = Path::new(UNIT_PATH).exists();
@@ -272,8 +296,27 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
         }
     }
 
-    // gpio_chip_accessible
-    checks.push(gpio_chip_check());
+    // driver-specific hardware checks
+    let configured_driver = resolved_config.config.driver;
+    checks.push(Check {
+        id: "configured_driver",
+        label: "Driver",
+        status: Status::Ok,
+        detail: Some(configured_driver.to_string()),
+    });
+    checks.push(compiled_driver_check(configured_driver));
+    match configured_driver {
+        DriverKind::Telis => checks.push(gpio_chip_check()),
+        DriverKind::Rts => {
+            checks.extend(rts_checks(&resolved_config.config.rts));
+        }
+        DriverKind::Fake => checks.push(Check {
+            id: "gpio_chip_accessible",
+            label: "GPIO",
+            status: Status::Skipped,
+            detail: Some("fake driver selected".into()),
+        }),
+    }
 
     // updates_available
     checks.push(updates_check(network_timeout_ms).await);
@@ -298,18 +341,32 @@ pub async fn collect(network_timeout_ms: u64) -> DoctorReport {
             git_sha: version::GIT_SHA,
             build_date: version::BUILD_DATE,
         },
+        config_path: resolved_config.path.display().to_string(),
         checks,
     }
 }
 
-fn render_expected_unit() -> Option<String> {
-    let user = std::env::var("SUDO_USER").ok().or_else(|| {
-        nix::unistd::User::from_uid(nix::unistd::Uid::current())
-            .ok()
-            .flatten()
-            .map(|u| u.name)
-    })?;
-    Some(crate::commands::install::render_unit(&user, BIN_PATH))
+fn render_expected_unit(resolved_config: &ResolvedConfig) -> Option<String> {
+    let user = std::fs::read_to_string(UNIT_PATH)
+        .ok()
+        .as_deref()
+        .and_then(parse_service_user)
+        .or_else(|| {
+            std::env::var("SUDO_USER").ok().or_else(|| {
+                nix::unistd::User::from_uid(nix::unistd::Uid::current())
+                    .ok()
+                    .flatten()
+                    .map(|u| u.name)
+            })
+        })?;
+    Some(crate::commands::install::render_unit(
+        &user,
+        &format!(
+            "{} --config {} serve",
+            BIN_PATH,
+            resolved_config.path.display()
+        ),
+    ))
 }
 
 fn exec_start_matches(unit: &str) -> bool {
@@ -318,11 +375,22 @@ fn exec_start_matches(unit: &str) -> bool {
         let Some(rest) = l.strip_prefix("ExecStart=") else {
             return false;
         };
-        let Some(args) = rest.strip_prefix(BIN_PATH) else {
+        let Some(rest) = rest.strip_prefix(BIN_PATH) else {
             return false;
         };
-        // Allow flags after "serve" (e.g. "serve --verbose")
-        args.split_whitespace().next() == Some("serve")
+        if !rest.is_empty() && !rest.starts_with(char::is_whitespace) {
+            return false;
+        }
+        let mut args = rest.split_whitespace();
+        while let Some(arg) = args.next() {
+            if arg == "serve" {
+                return true;
+            }
+            if arg == "--config" {
+                let _ = args.next();
+            }
+        }
+        false
     })
 }
 
@@ -343,7 +411,7 @@ fn user_in_group(user: &str, group: &str) -> Result<bool> {
     Ok(u.gid == g.gid)
 }
 
-#[cfg(feature = "hw")]
+#[cfg(feature = "telis")]
 fn gpio_chip_check() -> Check {
     match std::fs::OpenOptions::new()
         .read(true)
@@ -364,13 +432,170 @@ fn gpio_chip_check() -> Check {
     }
 }
 
-#[cfg(not(feature = "hw"))]
+fn compiled_driver_check(driver: DriverKind) -> Check {
+    let compiled = match driver {
+        DriverKind::Fake => cfg!(feature = "fake"),
+        DriverKind::Telis => cfg!(feature = "telis"),
+        DriverKind::Rts => cfg!(feature = "rts"),
+    };
+    Check {
+        id: "driver_compiled",
+        label: "Driver feature",
+        status: if compiled {
+            Status::Ok
+        } else {
+            Status::Blocking
+        },
+        detail: if compiled {
+            None
+        } else {
+            Some(format!(
+                "driver \"{driver}\" selected but this binary was built without the \"{driver}\" feature"
+            ))
+        },
+    }
+}
+
+use crate::gpio::MAX_BCM_GPIO;
+
+fn rts_checks(options: &RtsOptions) -> Vec<Check> {
+    let spi_check = match std::fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(&options.spi_device)
+    {
+        Ok(_) => Check {
+            id: "rts_spi_device",
+            label: "RTS SPI",
+            status: Status::Ok,
+            detail: Some(options.spi_device.clone()),
+        },
+        Err(e) => Check {
+            id: "rts_spi_device",
+            label: "RTS SPI",
+            status: Status::Blocking,
+            detail: Some(format!("{}: {e}", options.spi_device)),
+        },
+    };
+
+    let gdo0_check = if options.gdo0_gpio <= MAX_BCM_GPIO {
+        Check {
+            id: "rts_gdo0_gpio",
+            label: "RTS GDO0",
+            status: Status::Ok,
+            detail: Some(format!("BCM{}", options.gdo0_gpio)),
+        }
+    } else {
+        Check {
+            id: "rts_gdo0_gpio",
+            label: "RTS GDO0",
+            status: Status::Blocking,
+            detail: Some(format!(
+                "BCM{} out of range (0..={MAX_BCM_GPIO})",
+                options.gdo0_gpio
+            )),
+        }
+    };
+
+    let pigpiod_check = match std::net::TcpStream::connect_timeout(
+        &options
+            .pigpiod_addr
+            .parse()
+            .unwrap_or_else(|_| "127.0.0.1:8888".parse().unwrap()),
+        Duration::from_millis(500),
+    ) {
+        Ok(_) => Check {
+            id: "pigpiod",
+            label: "pigpiod",
+            status: Status::Ok,
+            detail: Some(options.pigpiod_addr.clone()),
+        },
+        Err(e) => Check {
+            id: "pigpiod",
+            label: "pigpiod",
+            status: Status::Blocking,
+            detail: Some(format!("{}: {e}", options.pigpiod_addr)),
+        },
+    };
+
+    let pigpiod_local_check = match crate::driver::require_pigpiod_loopback(&options.pigpiod_addr) {
+        Ok(()) => Check {
+            id: "pigpiod_localhost_only",
+            label: "pigpiod local",
+            status: Status::Ok,
+            detail: None,
+        },
+        Err(e) => Check {
+            id: "pigpiod_localhost_only",
+            label: "pigpiod local",
+            status: Status::Blocking,
+            detail: Some(e.to_string()),
+        },
+    };
+
+    let state_check = rts_state_file_check();
+
+    vec![
+        spi_check,
+        gdo0_check,
+        pigpiod_check,
+        pigpiod_local_check,
+        state_check,
+    ]
+}
+
+fn rts_state_file_check() -> Check {
+    let path = config::state_dir().join(crate::rts::state::STATE_FILE);
+    let display = path.display().to_string();
+    if !path.exists() {
+        return Check {
+            id: "rts_state_file",
+            label: "RTS state",
+            status: Status::Advisory,
+            detail: Some(format!("{display} not yet created")),
+        };
+    }
+    match std::fs::read_to_string(&path) {
+        Ok(text) => match serde_json::from_str::<crate::rts::state::RtsState>(&text) {
+            Ok(state) if state.schema_version == crate::rts::state::SCHEMA_VERSION => Check {
+                id: "rts_state_file",
+                label: "RTS state",
+                status: Status::Ok,
+                detail: Some(display),
+            },
+            Ok(state) => Check {
+                id: "rts_state_file",
+                label: "RTS state",
+                status: Status::Blocking,
+                detail: Some(format!(
+                    "{display}: schema_version {} unsupported (expected {})",
+                    state.schema_version,
+                    crate::rts::state::SCHEMA_VERSION
+                )),
+            },
+            Err(e) => Check {
+                id: "rts_state_file",
+                label: "RTS state",
+                status: Status::Blocking,
+                detail: Some(format!("{display}: parse error: {e}")),
+            },
+        },
+        Err(e) => Check {
+            id: "rts_state_file",
+            label: "RTS state",
+            status: Status::Blocking,
+            detail: Some(format!("{display}: {e}")),
+        },
+    }
+}
+
+#[cfg(not(feature = "telis"))]
 fn gpio_chip_check() -> Check {
     Check {
         id: "gpio_chip_accessible",
         label: "GPIO",
         status: Status::Skipped,
-        detail: Some("fake hardware feature".into()),
+        detail: Some("telis driver feature not enabled".into()),
     }
 }
 
@@ -518,6 +743,7 @@ mod tests {
                 git_sha: "dev",
                 build_date: "today",
             },
+            config_path: "/etc/somfy/config.toml".into(),
             checks: vec![check("a", Status::Ok), check("b", Status::Blocking)],
         };
         assert!(report.has_blocking_failure());
@@ -532,6 +758,7 @@ mod tests {
                 git_sha: "dev",
                 build_date: "today",
             },
+            config_path: "/etc/somfy/config.toml".into(),
             checks: vec![check("a", Status::Ok), check("b", Status::Advisory)],
         };
         assert!(!report.has_blocking_failure());

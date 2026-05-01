@@ -1,4 +1,4 @@
-# RTS Backend Design
+# RTS Driver Design
 
 ## Goal
 
@@ -6,43 +6,43 @@ Replace the wired physical Somfy Telis 4 RTS remote with Raspberry
 Pi-controlled RF transmission. The Pi acts as a new virtual Somfy RTS remote
 paired with each motor or group.
 
-The wired Telis backend remains supported. Only one backend is active per
+The wired Telis driver remains supported. Only one driver is active per
 process, selected at startup by runtime configuration and gated by compile-time
 features.
 
-## Backend Model
+## Driver Model
 
 Use the same command surface for the web API, HomeKit, and CLI:
 
 - **Channel**: logical target, `L1`, `L2`, `L3`, `L4`, or `ALL`.
-- **Command**: user intent, `Up`, `Down`, `My`, `Stop`, or `Prog`.
-- **Backend**: hardware implementation that transmits a command to a channel.
+- **Command**: user intent, `Up`, `Down`, `Stop`, or `Prog`.
+- **Driver**: hardware implementation that transmits a command to a channel.
 
 The current code calls the target type `Input` because it represents GPIO LED
-inputs in the Telis backend. Rename it to `Channel` before adding the RTS
-backend so both hardware implementations share the correct domain vocabulary
+inputs in the Telis driver. Rename it to `Channel` before adding the RTS
+driver so both hardware implementations share the correct domain vocabulary
 from the start.
 
 ```text
 RemoteControl
-  -> ActiveBackend::Fake | ActiveBackend::Telis | ActiveBackend::Rts
+  -> CommandRouter::Fake | CommandRouter::Telis | CommandRouter::Rts
 ```
 
-The active backend exposes two execution shapes plus selection state:
+The active driver exposes two execution shapes plus selection state:
 
 ```rust
 pub struct CommandOutcome {
     pub inferred_position: Option<u8>,
 }
 
-impl ActiveBackend {
+impl CommandRouter {
     /// Stateful path: directs `command` at the current `selected_channel`.
     /// Used by the HTTP `/command` handler. `Select` mutates selection.
     async fn execute(&self, command: Command) -> Result<CommandOutcome>;
 
-    /// Stateless path: directs `command` at `channel` without consulting or
-    /// mutating `selected_channel`. Used by HomeKit (one accessory per
-    /// channel) and the CLI. Does not emit a `selection` event.
+    /// Direct path: directs `command` at `channel` without consulting or
+    /// mutating `selected_channel`. Used by HomeKit. Does not emit a
+    /// `selection` event.
     async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome>;
 
     fn selected_channel(&self) -> Channel;
@@ -50,33 +50,34 @@ impl ActiveBackend {
 }
 ```
 
-Both backends maintain a `selected_channel` and dispatch directional commands
-(`Up`, `Down`, `My`) through `execute` to that channel. `Select` is a regular
+Both drivers maintain a `selected_channel` and dispatch movement commands
+(`Up`, `Down`, `Stop`) through `execute` to that channel. `Select` is a regular
 command on the stateful path. On Telis it cycles the physical SELECT button
 until the requested LED is active; on RTS it is a zero-RF state update that
 mutates `selected_channel` and broadcasts a `selection` event.
 
-`Prog` is CLI-only and flows through `execute_on`. It is intentionally absent
-from the HTTP and HomeKit surfaces because pairing is a setup-time admin
-operation that should not be reachable from a generic UI tap.
+`Prog` requires an explicit channel at the API boundary. The service selects
+that channel first, then runs driver-native `Prog` through the stateful path.
+Drivers decide whether they support it.
 
 Call paths, outside in:
 
 | Caller      | Entry point           | Touches `selected_channel`? |
 | ----------- | --------------------- | --------------------------- |
-| HTTP UI     | `POST /command`       | yes (via `execute`)         |
-| HomeKit/CLI | `execute_on(ch, cmd)` | no                          |
+| HTTP selected command | `POST /command` without `channel` | yes (via `execute`) |
+| HTTP channel command  | `POST /command` with `channel`    | yes (selects first) |
+| HomeKit               | `execute_on(ch, cmd)`             | no                  |
 
 ### Position Inference
 
 `CommandOutcome::inferred_position` is computed by `RemoteControl`, not by
-the backend. Backends only signal "I sent `Up`/`Down`/`My` to channel X"; the
+the driver. Drivers only signal "I sent `Up`/`Down`/`Stop` to channel X"; the
 position estimator owns the time-based model and the per-channel state.
 
-`ALL` fans out at the position-tracking layer: a successful `Up`/`Down`/`My`
+`ALL` fans out at the position-tracking layer: a successful `Up`/`Down`
 to `ALL` updates the inferred position for every channel paired to react to
 all-channel commands (in practice, `L1` through `L4`), matching what the
-physical remote does over the air. The backend still emits exactly one frame
+physical remote does over the air. The driver still emits exactly one frame
 on the wire.
 
 Telis behavior stays physical:
@@ -97,33 +98,35 @@ execute_on(channel=L2, command=Up)
   -> transmit that frame plus repeats through CC1101
 ```
 
-Live backend switching is intentionally unsupported. It adds state and
+Live driver switching is intentionally unsupported. It adds state and
 coordination questions without a real deployment benefit.
 
 ## Public API
 
-Use domain names in external JSON. Backward compatibility with the previous
-`led` payload name is not required.
+Use domain names in external JSON.
 
-- `POST /command`: `{ "command": "up" }` for directional commands. Directional
-  commands (`up`, `down`, `my`, `stop`) target the currently-selected channel
-  and do not take a `channel` field. `prog` is not exposed on the HTTP surface;
-  pairing happens through the CLI.
+- `POST /command`: `{ "command": "up" }` for movement commands targeting the
+  currently-selected channel.
+- `POST /command`: `{ "command": "up", "channel": "L2" }` selects `L2` and
+  then sends the movement command, so live clients see the selected channel.
+- `POST /command`: `{ "command": "prog", "channel": "L2" }` selects `L2` and
+  then runs driver-native programming; `prog` requires a channel.
 - `POST /command`: `{ "command": "select", "channel": "L2" }` sets the active
   channel directly. `{ "command": "select" }` with no `channel` advances the
   selection one step through `L1 → L2 → L3 → L4 → ALL → L1`.
-- `select` is a public command on both backends. On Telis it drives the
+- `select` is a public command on both drivers. On Telis it drives the
   physical SELECT button until the requested LED is active. On RTS it is a
-  zero-RF state update; the next directional command transmits to the new
+  zero-RF state update; the next movement command transmits to the new
   channel.
-- `stop` remains accepted as the UI spelling for the middle button. It maps to
-  RTS `My` and to the Telis physical `Stop` button.
-- `GET /state`: returns `{ "backend": "telis", "selection": "L2" }` or
-  `{ "backend": "rts", "selection": "L2" }`. Both backends always report a
-  current selection.
-- `GET /events`: emits `selection` events on both backends whenever the active
+- `stop` is the UI spelling for the middle button. It maps to the RTS
+  middle-button frame and to the Telis physical stop button.
+- `GET /channel`: returns the currently-selected channel as plain text, e.g.
+  `L2`. Both drivers always report a current selection. The active driver is
+  intentionally not exposed over HTTP so the UI stays driver-agnostic;
+  `somfy doctor` reports the configured driver for diagnostics.
+- `GET /events`: emits `selection` events on both drivers whenever the active
   channel changes, including from `select` commands and (Telis only) physical
-  remote presses. Use JSON payloads such as `{ "channel": "L2" }`.
+  remote presses. Event payloads are the plain channel name, e.g. `event.data === "L2"`.
 
 HomeKit should use `Channel` and `Command` internally. Its external HomeKit
 accessory shape does not need to change.
@@ -131,41 +134,36 @@ accessory shape does not need to change.
 ## Features
 
 Compile-time features describe what the binary can do. Runtime configuration
-selects the active backend from the compiled set.
+selects the active driver from the compiled set.
 
 ```toml
 [features]
-default = ["fake"]
+default = ["fake", "telis", "rts"]
 fake = []
 telis = ["dep:gpiocdev"]
 rts = ["dep:spidev"]
 ```
 
-The current `hw` feature should be replaced with explicit backend names. If
-runtime config selects a backend that was not compiled in, startup should fail
+The current `hw` feature should be replaced with explicit driver names. If
+runtime config selects a driver that was not compiled in, startup should fail
 clearly:
 
 ```text
-backend "rts" was selected, but this binary was built without the "rts" feature
+driver "rts" was selected, but this binary was built without the "rts" feature
 ```
 
 ## Runtime Configuration
 
-Keep the first implementation on clap arguments with environment fallbacks; do
-not add a config file until the setting surface grows.
+Use a small config file plus built-in defaults. Do not expose persistent
+hardware settings as repeated command flags or environment variables. The
+canonical TOML example lives in [HARDWARE.md](HARDWARE.md#configuration).
 
-| Setting         | CLI                               | Environment             | Default          |
-| --------------- | --------------------------------- | ----------------------- | ---------------- |
-| Active backend  | `somfy serve --backend rts`       | `SOMFY_BACKEND`         | `fake`           |
-| RTS SPI device  | `--rts-spi-device /dev/spidev0.0` | `SOMFY_RTS_SPI_DEVICE`  | `/dev/spidev0.0` |
-| RTS GDO0 GPIO   | `--rts-gdo0-gpio 18`              | `SOMFY_RTS_GDO0_GPIO`   | `18`             |
-| pigpiod address | `--pigpiod-addr 127.0.0.1:8888`   | `SOMFY_PIGPIOD_ADDR`    | `127.0.0.1:8888` |
-| RTS frame count | `--rts-frame-count 4`             | `SOMFY_RTS_FRAME_COUNT` | `4`              |
+If the config file is absent, defaults are enough for local development and the
+documented Raspberry Pi wiring. A system install should point the service at the
+config file; the unit should not carry driver or GPIO options in `ExecStart`.
 
-`somfy install --backend rts` should write the selected backend into the unit,
-preferably as `ExecStart=/usr/local/bin/somfy serve --backend rts`. Doctor
-should report the configured backend and run only the checks relevant to that
-backend.
+Doctor should report the configured driver and run only the checks relevant to
+that driver.
 
 ## Hardware Path
 
@@ -202,7 +200,7 @@ Minimum CC1101 configuration target:
   the radio to idle.
 
 Use `pigpiod` waveforms for timing. `gpiocdev` is suitable for the Telis
-backend's millisecond button pulses, but RTS uses 640us Manchester half-symbols
+driver's millisecond button pulses, but RTS uses 640us Manchester half-symbols
 while the process also runs HTTP, SSE/WebSocket, and HomeKit. Timing should be
 owned by `pigpiod`, not by sleeps in the Rust async scheduler.
 
@@ -212,9 +210,9 @@ Production installs should run `pigpiod` in localhost-only mode:
 pigpiod -l
 ```
 
-For the RTS backend, `somfy doctor` should check:
+For the RTS driver, `somfy doctor` should check:
 
-- the selected backend was compiled into the binary;
+- the selected driver was compiled into the binary;
 - the configured SPI device can be opened by the service user;
 - the configured GDO0 GPIO is a valid BCM GPIO number;
 - `pigpiod` is reachable at the configured localhost address;
@@ -249,7 +247,7 @@ p3:  u32  # request extension length or response result
 ```
 
 Commands with data, such as `WVAG`, append a binary extension after the command
-header. For this backend the only required extension is an array of pigpio
+header. For this driver the only required extension is an array of pigpio
 pulses:
 
 ```text
@@ -263,7 +261,7 @@ gpioPulse_t {
 Keep all wave operations behind the RTS transmission mutex. `pigpiod` waveform
 construction and transmission state is global across clients, so concurrent
 wave construction can corrupt another command's waveform. Call `WVCLR` on
-backend startup to clean up stale waves from prior process exits.
+driver startup to clean up stale waves from prior process exits.
 
 Per transmission, use:
 
@@ -279,7 +277,7 @@ model; only the `pigpiod` daemon is required on the Pi.
 
 ## RTS Protocol
 
-Confirm the motors are Somfy RTS, not io-homecontrol. The RTS backend only
+Confirm the motors are Somfy RTS, not io-homecontrol. The RTS driver only
 implements the 56-bit RTS frame format.
 
 Radio settings:
@@ -293,8 +291,7 @@ Minimum command set:
 
 | Command | RTS code | Notes                                        |
 | ------- | -------: | -------------------------------------------- |
-| `My`    |    `0x1` | Also used as Stop while the motor is moving. |
-| `Stop`  |    `0x1` | API alias for `My`.                          |
+| `Stop`  |    `0x1` | Somfy middle-button frame.                   |
 | `Up`    |    `0x2` | Move up/open.                                |
 | `Down`  |    `0x4` | Move down/close.                             |
 | `Prog`  |    `0x8` | Pair or unpair a virtual remote.             |
@@ -346,7 +343,7 @@ Each channel has its own virtual remote identity:
 channel survives process exits. Default to `L1` when the file is missing or
 the field is absent. Persist on every change with the same atomic-rename
 write used for rolling-code reserve blocks; selects are infrequent compared
-to directional commands, so the extra writes are cheap.
+to movement commands, so the extra writes are cheap.
 
 Generate random 24-bit remote IDs per install. Avoid `0` and avoid reusing an
 ID already present in the local RTS state file.
@@ -378,24 +375,37 @@ user with mode `0600`.
 
 ## Pairing
 
-The RTS backend behaves like a new physical remote. A channel only works after
+The RTS driver behaves like a new physical remote. A channel only works after
 that channel's virtual remote ID has been paired with the target motor or group.
 
 Pairing flow:
 
 1. Put the motor or group into programming mode with an already-paired remote
    or with the motor's physical programming control.
-2. Run `somfy rts prog L1` for the virtual channel that should control it.
-3. Test with `somfy rts send L1 up`, `down`, and `my`.
+2. Run `somfy remote prog L1` for the virtual channel that should control it.
+3. Test with `somfy remote up L1`, `somfy remote down L1`, and
+   `somfy remote stop L1`.
 4. Repeat for `L2`, `L3`, `L4`, and `ALL` as needed.
 
 `ALL` is a separate virtual remote identity. Pair it with every motor or group
 that should react to the all-channel command. Deleting `rts.json` or changing a
 channel's `remote_id` means that channel must be paired again.
 
-## Backend Startup
+If the original Telis Prog button is wired to the Pi, configure `telis.gpio.prog`.
+Then the sync or unsync step can use the same driver-neutral command:
 
-At RTS backend startup:
+```bash
+somfy remote prog L1
+```
+
+The command selects the requested Telis channel, holds the wired Prog button,
+waits briefly, and transmits the RTS Prog frame for the same virtual channel.
+Run it again to remove that virtual remote from the motor. If `telis.gpio.prog`
+is not configured, `prog` uses driver-native behavior.
+
+## Driver Startup
+
+At RTS driver startup:
 
 1. Load or initialize RTS state from `$STATE_DIRECTORY/rts.json`, including
    `selected_channel` (default `L1` if missing).
@@ -407,7 +417,7 @@ At RTS backend startup:
    idle-low.
 
 Serialize RF transmissions behind one transmitter mutex. The radio and pigpiod
-waveform state are single shared hardware resources, so directional commands
+waveform state are single shared hardware resources, so movement commands
 — and on Telis the `select` button cycle — must take this mutex. On RTS,
 `select` is a state-only operation that does not touch the radio; it acquires
 the state lock for `selected_channel` but skips the transmitter mutex so an
@@ -416,7 +426,7 @@ in-flight Up/Down cannot delay a UI selection update.
 ## Waveform
 
 Centralize RTS timing constants in one waveform module so hardware testing can
-tune them without touching the encoder or backend state logic.
+tune them without touching the encoder or driver state logic.
 
 Initial default timings:
 
@@ -450,16 +460,16 @@ the CC1101 GDO0 data line high, `gpioOff` drives it low, and `usDelay` is the
 duration before the next pulse. Idle state is low.
 
 Default to four total frames per command press: one initial frame plus three
-repeat frames. Keep this as a configurable constant for hardware validation.
+repeat frames.
 
 ## Transmission Flow
 
-`RtsBackend::transmit` is the internal RF function called by both `execute`
+`RtsDriver::transmit` is the internal RF function called by both `execute`
 (after resolving `selected_channel`) and `execute_on`. It does not consult or
 mutate selection state.
 
 ```text
-RtsBackend::transmit(channel, command)
+RtsDriver::transmit(channel, command)
   -> lock transmitter mutex
   -> load channel state
   -> reserve rolling-code block if needed
@@ -511,16 +521,16 @@ State tests:
 
 API/domain tests:
 
-- `POST /command` accepts `channel` only on `select` and rejects the old `led`
-  field.
+- `POST /command` accepts channels for movement and `prog`, selects that
+  channel first, and rejects the old `led` field.
 - `select` with an explicit channel sets the selection.
 - `select` without a channel cycles `L1 → L2 → L3 → L4 → ALL → L1`.
-- Directional commands (`up`, `down`, `my`, `stop`) target the currently-
-  selected channel.
-- `stop` maps to the backend command used for the middle button.
-- Both backends report a non-null `selection` in `GET /state`.
-- `execute_on(channel, command)` does not change `selected_channel` and does
-  not emit a `selection` event.
+- Movement commands (`up`, `down`, `stop`) target the currently selected
+  channel, after applying any explicit request channel.
+- `stop` maps to the driver command used for the middle button.
+- `GET /channel` returns the current channel as plain text on both drivers.
+- `execute_on(channel, command)` remains the HomeKit direct path: it does not
+  change `selected_channel` and does not emit a `selection` event.
 - Inferred position fans out to all paired channels when `ALL` is targeted.
 
 pigpiod client tests:
@@ -537,11 +547,10 @@ and the exact timing constants.
 ## Implementation Path
 
 1. **Domain cleanup.** Rename `Input` to `Channel`, split Telis-specific GPIO
-   button names from backend commands, and update HTTP/WS/HomeKit internals
+   button names from driver commands, and update HTTP/WS/HomeKit internals
    to the new `channel` payload name. `select` remains a public command with
-   backend-specific cost (RF cycling on Telis, state-only on RTS); directional
+   driver-specific cost (RF cycling on Telis, state-only on RTS); movement
    commands stop carrying a `channel` field and target the current selection.
-   Backward compatibility is not required for this deployment.
 2. **RTS encoder.** Implement the pure 7-byte encoder with golden tests.
 3. **RTS state.** Add versioned `$STATE_DIRECTORY/rts.json`, random remote IDs,
    atomic writes, and rolling-code reservation.
@@ -551,18 +560,21 @@ and the exact timing constants.
    stream tests, including `WVDEL` cleanup.
 6. **CC1101 driver.** Configure SPI registers for 433.42 MHz async OOK and
    expose TX/idle operations.
-7. **RTS CLI.** Add inspection and manual hardware commands. CLI commands
-   take an explicit channel and route through `execute_on`, so they do not
-   change `selected_channel` or affect what the web UI has highlighted.
+7. **Remote CLI and logs.** Add driver-neutral remote commands and structured
+   debug logs. Remote commands use the same command vocabulary as the web API
+   and HomeKit. Frame and waveform details belong in service logs rather than a
+   public RTS command group.
 
    ```text
-   somfy rts dump L1 up --format json
-   somfy rts send L1 up | down | my
-   somfy rts prog L1
+   somfy remote up L1
+   somfy remote down L1
+   somfy remote stop L1
+   somfy remote prog L1
    ```
 
-8. **Backend selection.** Wire `RtsBackend` into `RemoteControl`, add runtime
-   config, and update install/doctor docs for CC1101, `spidev`, and `pigpiod`.
+8. **Driver selection.** Wire `RtsDriver` into `RemoteControl`, add runtime
+   config loading, and update install/doctor docs for CC1101, `spidev`, and
+   `pigpiod`.
 
 ## References
 

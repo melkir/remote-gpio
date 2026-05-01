@@ -4,6 +4,6 @@ fn main() {
     let exec = args
         .get(1)
         .map(String::as_str)
-        .unwrap_or("/usr/local/bin/somfy");
+        .unwrap_or("/usr/local/bin/somfy --config /etc/somfy/config.toml serve");
     print!("{}", somfy::commands::install::render_unit(user, exec));
 }

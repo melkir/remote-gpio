@@ -1,6 +1,9 @@
+pub mod config;
 pub mod doctor;
 pub mod homekit;
 pub mod install;
+pub mod logs;
+pub mod remote;
 pub mod restart;
 pub mod serve;
 pub mod uninstall;

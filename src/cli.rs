@@ -1,4 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use std::path::PathBuf;
+
+use crate::gpio::Channel;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -11,6 +14,9 @@ use clap::{Parser, Subcommand, ValueEnum};
     ),
 )]
 pub struct Cli {
+    /// Configuration file to read
+    #[arg(long, global = true)]
+    pub config: Option<PathBuf>,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -47,10 +53,22 @@ pub enum Command {
     Uninstall,
     /// Restart the systemd service
     Restart,
+    /// Operate the configured remote driver
+    Remote {
+        #[command(subcommand)]
+        command: RemoteCommand,
+    },
     /// Inspect or reset HomeKit pairing state
     Homekit {
         #[command(subcommand)]
         command: HomekitCommand,
+    },
+    /// Read service logs
+    Logs(LogsArgs),
+    /// Inspect configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
     },
 }
 
@@ -58,6 +76,24 @@ pub enum Command {
 pub enum UpgradeChannel {
     Stable,
     Nightly,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum RemoteCommand {
+    /// Raise the selected or provided channel
+    Up { channel: Option<Channel> },
+    /// Lower the selected or provided channel
+    Down { channel: Option<Channel> },
+    /// Send the middle-button stop/favorite command
+    Stop { channel: Option<Channel> },
+    /// Select a channel
+    Select { channel: Channel },
+    /// Send the programming command for a channel
+    Prog { channel: Channel },
+    /// Print current selected channel
+    Status,
+    /// Watch selected channel changes
+    Watch,
 }
 
 #[derive(Subcommand, Debug)]
@@ -84,4 +120,24 @@ pub enum HomekitCommand {
         /// Controller identifier from `somfy homekit pairings`
         identifier: String,
     },
+}
+
+#[derive(Clone, Debug, Parser)]
+pub struct LogsArgs {
+    /// Follow logs
+    #[arg(short, long)]
+    pub follow: bool,
+    /// Include debug-level service logs while following
+    #[arg(long)]
+    pub debug: bool,
+}
+
+#[derive(Subcommand, Debug)]
+pub enum ConfigCommand {
+    /// Print the resolved config file path
+    Path,
+    /// Print the resolved configuration
+    Show,
+    /// Validate the resolved configuration
+    Validate,
 }

@@ -1,4 +1,4 @@
-use crate::gpio::Input;
+use crate::gpio::Channel;
 use crate::remote::{Command, RemoteControl};
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
@@ -28,9 +28,10 @@ pub struct AppState {
 
 /// Command request structure for HTTP and WebSocket endpoints
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct CommandRequest {
     command: String,
-    led: Option<Input>,
+    channel: Option<Channel>,
 }
 
 /// WebSocket query parameters
@@ -61,7 +62,7 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
         .allow_origin(Any);
 
     Router::new()
-        .route("/led", get(handle_led))
+        .route("/channel", get(handle_channel))
         .route("/events", get(handle_events))
         .route("/command", post(handle_command))
         .route("/ws", get(ws_handler))
@@ -74,12 +75,12 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
         )
 }
 
-/// Handles LED state requests
-async fn handle_led(State(state): State<Arc<AppState>>) -> String {
+/// Returns the currently-selected channel as plain text.
+async fn handle_channel(State(state): State<Arc<AppState>>) -> String {
     state.remote_control.current_selection().to_string()
 }
 
-/// Streams LED selection changes as server-sent events.
+/// Streams channel selection changes as server-sent events.
 async fn handle_events(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
@@ -87,8 +88,8 @@ async fn handle_events(
     rx.mark_changed();
     let stream = stream::unfold(rx, |mut rx| async move {
         rx.changed().await.ok()?;
-        let selection = rx.borrow_and_update().to_string();
-        Some((Ok(Event::default().event("selection").data(selection)), rx))
+        let channel = rx.borrow_and_update().to_string();
+        Some((Ok(Event::default().event("selection").data(channel)), rx))
     });
 
     Sse::new(stream).keep_alive(KeepAlive::default())
@@ -99,16 +100,53 @@ async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
-    let CommandRequest { command, led } = payload;
-    match dispatch(&state.remote_control, &command, led).await {
+    let CommandRequest { command, channel } = payload;
+    match dispatch(&state, &command, channel).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
-async fn dispatch(rc: &RemoteControl, command: &str, led: Option<Input>) -> Result<(), String> {
+async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> Result<(), String> {
+    let (cmd, channel) = validate_command_request(command, channel)?;
+    tracing::info!(command = ?cmd, channel = ?channel, "remote command received");
+    if cmd == Command::Select {
+        state
+            .remote_control
+            .execute(cmd, channel)
+            .await
+            .map_err(|e| e.to_string())?;
+        return Ok(());
+    }
+
+    if let Some(channel) = channel {
+        tracing::debug!(%channel, "selecting channel");
+        state
+            .remote_control
+            .execute(Command::Select, Some(channel))
+            .await
+            .map_err(|e| e.to_string())?;
+    }
+    state
+        .remote_control
+        .execute(cmd, None)
+        .await
+        .map_err(|e| e.to_string())?;
+    tracing::info!(command = ?cmd, "remote command completed");
+    Ok(())
+}
+
+fn validate_command_request(
+    command: &str,
+    channel: Option<Channel>,
+) -> Result<(Command, Option<Channel>), String> {
     let cmd = Command::from_str(command).map_err(|e| e.to_string())?;
-    rc.execute(led, cmd).await.map_err(|e| e.to_string())
+    match (cmd, channel) {
+        (Command::Prog, Some(channel)) => Ok((cmd, Some(channel))),
+        (Command::Prog, None) => Err("prog requires a channel".to_string()),
+        (Command::Select, channel) => Ok((cmd, channel)),
+        (Command::Up | Command::Down | Command::Stop, channel) => Ok((cmd, channel)),
+    }
 }
 
 /// Handles WebSocket upgrade requests
@@ -127,11 +165,11 @@ async fn ws_handler(
 /// Manages WebSocket connections and message handling
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
-    let mut rx_led = state.remote_control.subscribe_selection();
+    let mut rx_channel = state.remote_control.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
-    // Send initial LED state
-    let selection = rx_led.borrow().to_string();
+    // Send initial channel state.
+    let selection = rx_channel.borrow().to_string();
     if sink.send(Message::Text(selection.into())).await.is_err() {
         return;
     }
@@ -144,12 +182,12 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                     break;
                 }
             }
-            // Handle LED state changes
-            result = rx_led.changed() => {
+            // Handle channel state changes.
+            result = rx_channel.changed() => {
                 if result.is_err() {
                     break;
                 }
-                let selection = rx_led.borrow().to_string();
+                let selection = rx_channel.borrow().to_string();
                 if sink.send(Message::Text(selection.into())).await.is_err() {
                     break;
                 }
@@ -159,14 +197,14 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<CommandRequest>(&text) {
-                            Ok(CommandRequest { command, led }) => {
+                            Ok(CommandRequest { command, channel }) => {
                                 // Spawn command processing so LED updates aren't blocked
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
-                                    match dispatch(&state.remote_control, &command, led).await {
+                                    match dispatch(&state, &command, channel).await {
                                         Ok(_) => {
-                                            tracing::info!("[{}:{}] {} {:?}", client_name, port, command, led)
+                                            tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)
                                         }
                                         Err(e) => {
                                             tracing::error!(
@@ -193,5 +231,82 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validate_accepts_select_with_channel() {
+        assert_eq!(
+            validate_command_request("select", Some(Channel::L2)).unwrap(),
+            (Command::Select, Some(Channel::L2))
+        );
+    }
+
+    #[test]
+    fn validate_accepts_select_without_channel() {
+        assert_eq!(
+            validate_command_request("select", None).unwrap(),
+            (Command::Select, None)
+        );
+    }
+
+    #[test]
+    fn validate_accepts_directional_channel() {
+        assert_eq!(
+            validate_command_request("up", Some(Channel::L1)).unwrap(),
+            (Command::Up, Some(Channel::L1))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_prog_without_channel() {
+        let err = validate_command_request("prog", None).unwrap_err();
+        assert!(err.contains("requires a channel"));
+    }
+
+    #[test]
+    fn validate_accepts_prog_with_channel() {
+        assert_eq!(
+            validate_command_request("prog", Some(Channel::L1)).unwrap(),
+            (Command::Prog, Some(Channel::L1))
+        );
+    }
+
+    #[cfg(feature = "fake")]
+    #[tokio::test]
+    async fn dispatch_with_channel_selects_then_executes() {
+        let remote_control = Arc::new(
+            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
+                .await
+                .unwrap(),
+        );
+        let state = AppState {
+            remote_control: remote_control.clone(),
+        };
+
+        dispatch(&state, "up", Some(Channel::L3)).await.unwrap();
+
+        assert_eq!(remote_control.current_selection(), Channel::L3);
+        assert_eq!(
+            remote_control.operations(),
+            vec![
+                crate::driver::ProtocolOperation::TelisSelection(Channel::L3),
+                crate::driver::ProtocolOperation::FakeCommand {
+                    channel: Channel::L3,
+                    command: Command::Up,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn command_request_rejects_legacy_led_field() {
+        let err = serde_json::from_str::<CommandRequest>(r#"{"command":"select","led":"L1"}"#)
+            .unwrap_err();
+        assert!(err.to_string().contains("unknown field"));
     }
 }

@@ -11,7 +11,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::gpio::Input;
+use crate::gpio::Channel;
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWrite,
     CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture, HapStatus,
@@ -24,7 +24,7 @@ use crate::remote::{Command, PositionUpdate, RemoteControl};
 struct Blind {
     aid: u64,
     name: &'static str,
-    led: Input,
+    channel: Channel,
     serial: &'static str,
 }
 
@@ -34,32 +34,26 @@ const BLINDS: &[Blind] = &[
     Blind {
         aid: 2,
         name: "Blind 1",
-        led: Input::L1,
+        channel: Channel::L1,
         serial: "somfy-L1",
     },
     Blind {
         aid: 3,
         name: "Blind 2",
-        led: Input::L2,
+        channel: Channel::L2,
         serial: "somfy-L2",
     },
     Blind {
         aid: 4,
         name: "Blind 3",
-        led: Input::L3,
+        channel: Channel::L3,
         serial: "somfy-L3",
     },
     Blind {
         aid: 5,
         name: "Blind 4",
-        led: Input::L4,
+        channel: Channel::L4,
         serial: "somfy-L4",
-    },
-    Blind {
-        aid: 6,
-        name: "All Blinds",
-        led: Input::ALL,
-        serial: "somfy-ALL",
     },
 ];
 
@@ -79,11 +73,20 @@ const IID_BRIDGE_VERSION: u64 = 9;
 
 const POSITION_STATE_STOPPED: u8 = 2;
 
+#[derive(Copy, Clone, Debug)]
+struct PendingTargetWrite {
+    index: usize,
+    id: CharacteristicId,
+    blind: &'static Blind,
+    snapped: u8,
+}
+
 pub struct SomfyHapApp {
     remote_control: Arc<RemoteControl>,
     /// aid -> cached position (0 or 100). Updated on any successful write or
     /// external position broadcast.
     positions: Mutex<HashMap<u64, u8>>,
+    persist_positions: bool,
 }
 
 impl SomfyHapApp {
@@ -91,6 +94,16 @@ impl SomfyHapApp {
         Self {
             remote_control,
             positions: Mutex::new(positions::load()),
+            persist_positions: true,
+        }
+    }
+
+    #[cfg(all(test, feature = "fake"))]
+    fn new_with_positions(remote_control: Arc<RemoteControl>, positions: HashMap<u64, u8>) -> Self {
+        Self {
+            remote_control,
+            positions: Mutex::new(positions),
+            persist_positions: false,
         }
     }
 
@@ -106,7 +119,7 @@ impl SomfyHapApp {
             match rx.recv().await {
                 Ok(update) => {
                     let changes = self
-                        .apply_position_for_input(update.led, update.position)
+                        .apply_position_for_channel(update.channel, update.position)
                         .await;
                     if !changes.is_empty() {
                         let _ = event_tx.send(changes);
@@ -128,34 +141,63 @@ impl SomfyHapApp {
             .collect()
     }
 
-    async fn apply_position_for_input(&self, led: Input, pos: u8) -> Vec<CharacteristicEvent> {
-        let Some(blind) = BLINDS.iter().find(|b| b.led == led) else {
+    async fn apply_position_for_channel(
+        &self,
+        channel: Channel,
+        pos: u8,
+    ) -> Vec<CharacteristicEvent> {
+        let snapped = snap_position(pos);
+        if matches!(channel, Channel::ALL) {
+            return self.apply_all_position_change(snapped).await;
+        }
+        let Some(blind) = BLINDS.iter().find(|b| b.channel == channel) else {
             return Vec::new();
         };
-        self.apply_position_change(blind, snap_position(pos)).await
+        self.apply_position_change(blind, snapped).await
     }
 
-    /// Update the cached position for `blind`, propagate the ALL aggregate,
-    /// and persist the snapshot. Returns the characteristic events changed vs.
-    /// the prior cache.
+    /// Update the cached position for `blind` and persist the snapshot. Returns
+    /// the characteristic events changed vs. the prior cache.
     async fn apply_position_change(&self, blind: &Blind, snapped: u8) -> Vec<CharacteristicEvent> {
         let mut positions = self.positions.lock().await;
         if positions.get(&blind.aid).copied() == Some(snapped) {
-            let needs_propagate = matches!(blind.led, Input::ALL)
-                && BLINDS
-                    .iter()
-                    .filter(|b| !matches!(b.led, Input::ALL))
-                    .any(|b| positions.get(&b.aid).copied() != Some(snapped));
-            if !needs_propagate {
-                return Vec::new();
-            }
+            return Vec::new();
         }
         let before = positions.clone();
         positions.insert(blind.aid, snapped);
-        propagate_positions(&mut positions, blind, snapped);
         let snapshot = positions.clone();
-        if let Err(e) = positions::save(&snapshot) {
-            tracing::warn!("failed to persist positions: {e}");
+        if self.persist_positions {
+            if let Err(e) = positions::save(&snapshot) {
+                tracing::warn!("failed to persist positions: {e}");
+            }
+        }
+        drop(positions);
+
+        snapshot
+            .iter()
+            .filter(|(aid, pos)| before.get(aid) != Some(pos))
+            .flat_map(|(aid, pos)| position_events(*aid, *pos))
+            .collect()
+    }
+
+    async fn apply_all_position_change(&self, snapped: u8) -> Vec<CharacteristicEvent> {
+        let mut positions = self.positions.lock().await;
+        if BLINDS
+            .iter()
+            .all(|blind| positions.get(&blind.aid).copied() == Some(snapped))
+        {
+            return Vec::new();
+        }
+
+        let before = positions.clone();
+        for blind in BLINDS {
+            positions.insert(blind.aid, snapped);
+        }
+        let snapshot = positions.clone();
+        if self.persist_positions {
+            if let Err(e) = positions::save(&snapshot) {
+                tracing::warn!("failed to persist positions: {e}");
+            }
         }
         drop(positions);
 
@@ -196,22 +238,25 @@ impl HapAccessoryApp for SomfyHapApp {
     ) -> HapFuture<'a, CharacteristicWriteOutcome> {
         Box::pin(async move {
             let mut outcome = CharacteristicWriteOutcome::default();
+            let mut statuses = Vec::new();
+            let mut target_writes = Vec::new();
             for write in writes {
+                let index = statuses.len();
+                statuses.push(None);
+
                 if let Some(ev) = write.ev {
                     let status = handle_subscription(write.id, ev, subscriptions);
-                    outcome.statuses.push(status);
+                    statuses[index] = Some(status);
                     continue;
                 }
 
                 if write.id.iid.0 == IID_IDENTIFY && is_known_characteristic(write.id) {
-                    outcome
-                        .statuses
-                        .push(CharacteristicWriteStatus::success(write.id));
+                    statuses[index] = Some(CharacteristicWriteStatus::success(write.id));
                     continue;
                 }
 
                 if write.id.iid.0 != IID_TARGET_POSITION || find_blind(write.id.aid.0).is_none() {
-                    outcome.statuses.push(CharacteristicWriteStatus::error(
+                    statuses[index] = Some(CharacteristicWriteStatus::error(
                         write.id,
                         write_error_status(write.id),
                     ));
@@ -221,7 +266,7 @@ impl HapAccessoryApp for SomfyHapApp {
                 let value = match write.value.and_then(|v| v.as_u64()) {
                     Some(v) if v <= 100 => v as u8,
                     _ => {
-                        outcome.statuses.push(CharacteristicWriteStatus::error(
+                        statuses[index] = Some(CharacteristicWriteStatus::error(
                             write.id,
                             HapStatus::InvalidValue,
                         ));
@@ -231,36 +276,72 @@ impl HapAccessoryApp for SomfyHapApp {
                 let blind = find_blind(write.id.aid.0).expect("blind checked above");
                 let snapped = snap_position(value);
 
+                target_writes.push(PendingTargetWrite {
+                    index,
+                    id: write.id,
+                    blind,
+                    snapped,
+                });
+            }
+
+            if let Some(snapped) = grouped_all_target(&target_writes) {
                 let positions = self.positions.lock().await;
-                if already_at_target(&positions, blind, snapped) {
-                    tracing::debug!(
-                        "PUT TargetPosition aid={} value={snapped}: cache hit, no-op",
-                        write.id.aid.0
-                    );
+                if all_at_target(&positions, snapped) {
+                    tracing::debug!("PUT TargetPosition grouped value={snapped}: cache hit, no-op");
+                } else {
+                    drop(positions);
+
+                    let command = if snapped == 100 {
+                        Command::Up
+                    } else {
+                        Command::Down
+                    };
+                    self.remote_control
+                        .execute_on(Channel::ALL, command)
+                        .await
+                        .map_err(|e| anyhow!(e))?;
+
                     outcome
-                        .statuses
-                        .push(CharacteristicWriteStatus::success(write.id));
+                        .events
+                        .extend(self.apply_all_position_change(snapped).await);
+                }
+                for target in target_writes {
+                    statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
+                }
+                outcome.statuses = statuses.into_iter().flatten().collect();
+                return Ok(outcome);
+            }
+
+            for target in target_writes {
+                let positions = self.positions.lock().await;
+                if positions.get(&target.blind.aid).copied() == Some(target.snapped) {
+                    tracing::debug!(
+                        "PUT TargetPosition aid={} value={}: cache hit, no-op",
+                        target.id.aid.0,
+                        target.snapped
+                    );
+                    statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
                     continue;
                 }
                 drop(positions);
 
-                let command = if snapped == 100 {
+                let command = if target.snapped == 100 {
                     Command::Up
                 } else {
                     Command::Down
                 };
                 self.remote_control
-                    .execute(Some(blind.led), command)
+                    .execute_on(target.blind.channel, command)
                     .await
                     .map_err(|e| anyhow!(e))?;
 
-                outcome
-                    .events
-                    .extend(self.apply_position_change(blind, snapped).await);
-                outcome
-                    .statuses
-                    .push(CharacteristicWriteStatus::success(write.id));
+                outcome.events.extend(
+                    self.apply_position_change(target.blind, target.snapped)
+                        .await,
+                );
+                statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
             }
+            outcome.statuses = statuses.into_iter().flatten().collect();
             Ok(outcome)
         })
     }
@@ -288,35 +369,31 @@ fn handle_subscription(
 fn read_characteristic(positions: &HashMap<u64, u8>, id: CharacteristicId) -> CharacteristicRead {
     let aid = id.aid.0;
     let iid = id.iid.0;
-    let value = match (aid, iid) {
-        (BRIDGE_AID, IID_MANUFACTURER) => json!("Somfy"),
-        (BRIDGE_AID, IID_MODEL) => json!("Telis 4 Bridge"),
-        (BRIDGE_AID, IID_NAME) => json!("Somfy Bridge"),
-        (BRIDGE_AID, IID_SERIAL) => json!("somfy-bridge"),
-        (BRIDGE_AID, IID_FIRMWARE) => json!(env!("CARGO_PKG_VERSION")),
-        (BRIDGE_AID, IID_BRIDGE_VERSION) => json!("1.1.0"),
-        (_, IID_IDENTIFY) if is_known_characteristic(id) => {
-            return CharacteristicRead::error(id, HapStatus::WriteOnly);
+    let value = if aid == BRIDGE_AID {
+        match iid {
+            IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
+            IID_MANUFACTURER => json!("Somfy"),
+            IID_MODEL => json!("Telis 4 Bridge"),
+            IID_NAME => json!("Somfy Bridge"),
+            IID_SERIAL => json!("somfy-bridge"),
+            IID_FIRMWARE => json!(env!("CARGO_PKG_VERSION")),
+            IID_BRIDGE_VERSION => json!("1.1.0"),
+            _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
         }
-        (a, IID_MANUFACTURER) if find_blind(a).is_some() => json!("Somfy"),
-        (a, IID_MODEL) if find_blind(a).is_some() => json!("Telis 4"),
-        (a, IID_NAME) => match find_blind(a) {
-            Some(blind) => json!(blind.name),
-            None => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
-        },
-        (a, IID_SERIAL) => match find_blind(a) {
-            Some(blind) => json!(blind.serial),
-            None => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
-        },
-        (a, IID_FIRMWARE) if find_blind(a).is_some() => json!(env!("CARGO_PKG_VERSION")),
-        (a, IID_CURRENT_POSITION) if find_blind(a).is_some() => {
-            json!(effective_position(positions, a))
+    } else if let Some(blind) = find_blind(aid) {
+        match iid {
+            IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
+            IID_MANUFACTURER => json!("Somfy"),
+            IID_MODEL => json!("Telis 4"),
+            IID_NAME => json!(blind.name),
+            IID_SERIAL => json!(blind.serial),
+            IID_FIRMWARE => json!(env!("CARGO_PKG_VERSION")),
+            IID_CURRENT_POSITION | IID_TARGET_POSITION => json!(effective_position(positions, aid)),
+            IID_POSITION_STATE => json!(POSITION_STATE_STOPPED),
+            _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
         }
-        (a, IID_TARGET_POSITION) if find_blind(a).is_some() => {
-            json!(effective_position(positions, a))
-        }
-        (a, IID_POSITION_STATE) if find_blind(a).is_some() => json!(POSITION_STATE_STOPPED),
-        _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
+    } else {
+        return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist);
     };
     CharacteristicRead::success(id, value)
 }
@@ -389,36 +466,26 @@ fn snap_position(value: u8) -> u8 {
     }
 }
 
-fn already_at_target(positions: &HashMap<u64, u8>, blind: &Blind, snapped: u8) -> bool {
-    if matches!(blind.led, Input::ALL) {
-        BLINDS
-            .iter()
-            .filter(|b| !matches!(b.led, Input::ALL))
-            .all(|b| positions.get(&b.aid).copied() == Some(snapped))
-    } else {
-        positions.get(&blind.aid).copied() == Some(snapped)
-    }
+fn all_at_target(positions: &HashMap<u64, u8>, snapped: u8) -> bool {
+    BLINDS
+        .iter()
+        .all(|blind| positions.get(&blind.aid).copied() == Some(snapped))
 }
 
-fn propagate_positions(positions: &mut HashMap<u64, u8>, changed: &Blind, snapped: u8) {
-    if matches!(changed.led, Input::ALL) {
-        for b in BLINDS.iter().filter(|b| !matches!(b.led, Input::ALL)) {
-            positions.insert(b.aid, snapped);
-        }
-        return;
+fn grouped_all_target(targets: &[PendingTargetWrite]) -> Option<u8> {
+    let first = targets.first()?;
+    if !targets.iter().all(|target| target.snapped == first.snapped) {
+        return None;
     }
-    let individuals: Vec<&Blind> = BLINDS
+
+    let covers_all_individuals = BLINDS
         .iter()
-        .filter(|b| !matches!(b.led, Input::ALL))
-        .collect();
-    let all_match = individuals
-        .iter()
-        .all(|b| positions.get(&b.aid).copied() == Some(snapped));
-    let all_blind = BLINDS.iter().find(|b| matches!(b.led, Input::ALL));
-    if let Some(all_blind) = all_blind {
-        if all_match {
-            positions.insert(all_blind.aid, snapped);
-        }
+        .all(|blind| targets.iter().any(|target| target.blind.aid == blind.aid));
+
+    if covers_all_individuals {
+        Some(first.snapped)
+    } else {
+        None
     }
 }
 
@@ -426,22 +493,7 @@ fn effective_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
     let Some(blind) = find_blind(aid) else {
         return 100;
     };
-    if !matches!(blind.led, Input::ALL) {
-        return positions.get(&aid).copied().unwrap_or(100);
-    }
-
-    let mut individual_positions = BLINDS
-        .iter()
-        .filter(|b| !matches!(b.led, Input::ALL))
-        .map(|b| positions.get(&b.aid).copied());
-    let Some(Some(first)) = individual_positions.next() else {
-        return positions.get(&aid).copied().unwrap_or(100);
-    };
-    if individual_positions.all(|pos| pos == Some(first)) {
-        first
-    } else {
-        positions.get(&aid).copied().unwrap_or(100)
-    }
+    positions.get(&blind.aid).copied().unwrap_or(100)
 }
 
 fn find_blind(aid: u64) -> Option<&'static Blind> {
@@ -603,85 +655,133 @@ mod tests {
     }
 
     #[test]
-    fn all_blinds_position_uses_matching_individual_positions() {
+    fn all_at_target_checks_individual_blinds_only() {
         let mut positions = HashMap::new();
         positions.insert(2, 0);
         positions.insert(3, 0);
         positions.insert(4, 0);
         positions.insert(5, 0);
 
-        assert_eq!(effective_position(&positions, 6), 0);
+        assert!(all_at_target(&positions, 0));
+        assert!(!all_at_target(&positions, 100));
     }
 
     #[test]
-    fn propagate_keeps_aggregate_when_individuals_diverge() {
-        let mut positions = HashMap::new();
-        positions.insert(2, 0);
-        positions.insert(3, 0);
-        positions.insert(4, 0);
-        positions.insert(5, 0);
-        positions.insert(6, 0);
+    fn full_individual_batch_groups_to_all_blinds() {
+        let targets = [2, 3, 4, 5]
+            .into_iter()
+            .map(|aid| pending_target(aid, 100))
+            .collect::<Vec<_>>();
 
-        let changed = find_blind(2).unwrap();
+        let snapped = grouped_all_target(&targets).unwrap();
+
+        assert_eq!(snapped, 100);
+    }
+
+    #[test]
+    fn accessories_expose_four_blinds() {
+        let body = build_accessories(&[(2, 100), (3, 100), (4, 100), (5, 100)]);
+        let aids = body["accessories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|accessory| accessory["aid"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(aids, vec![1, 2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn partial_individual_batch_does_not_group_to_all_blinds() {
+        let targets = [2, 3]
+            .into_iter()
+            .map(|aid| pending_target(aid, 100))
+            .collect::<Vec<_>>();
+
+        assert!(grouped_all_target(&targets).is_none());
+    }
+
+    #[test]
+    fn mixed_direction_batch_does_not_group_to_all_blinds() {
+        let targets = vec![
+            pending_target(2, 100),
+            pending_target(3, 100),
+            pending_target(4, 0),
+            pending_target(5, 100),
+        ];
+
+        assert!(grouped_all_target(&targets).is_none());
+    }
+
+    #[cfg(feature = "fake")]
+    #[tokio::test]
+    async fn full_individual_write_batch_sends_one_all_driver_command() {
+        let remote_control = Arc::new(
+            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
+                .await
+                .unwrap(),
+        );
+        let app = SomfyHapApp::new_with_positions(remote_control.clone(), HashMap::new());
+        let writes = [2, 3, 4, 5]
+            .into_iter()
+            .map(|aid| CharacteristicWrite {
+                id: CharacteristicId::new(aid, IID_TARGET_POSITION),
+                value: Some(json!(100)),
+                ev: None,
+            })
+            .collect::<Vec<_>>();
+        let mut subscriptions = Subscriptions::default();
+
+        let outcome = app
+            .write_characteristics(writes, &mut subscriptions)
+            .await
+            .unwrap();
+
+        assert!(outcome.all_success());
+        assert_eq!(outcome.statuses.len(), 4);
+        assert_eq!(
+            remote_control.operations(),
+            vec![crate::driver::ProtocolOperation::FakeCommand {
+                channel: Channel::ALL,
+                command: Command::Up,
+            }]
+        );
+    }
+
+    #[cfg(feature = "fake")]
+    #[tokio::test]
+    async fn cache_hit_does_not_break_full_batch_coalesce() {
+        let remote_control = Arc::new(
+            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
+                .await
+                .unwrap(),
+        );
+        let mut positions = HashMap::new();
         positions.insert(2, 100);
-        propagate_positions(&mut positions, changed, 100);
-        assert_eq!(positions.get(&6), Some(&0));
+        let app = SomfyHapApp::new_with_positions(remote_control.clone(), positions);
+        let writes = [2, 3, 4, 5]
+            .into_iter()
+            .map(|aid| CharacteristicWrite {
+                id: CharacteristicId::new(aid, IID_TARGET_POSITION),
+                value: Some(json!(100)),
+                ev: None,
+            })
+            .collect::<Vec<_>>();
+        let mut subscriptions = Subscriptions::default();
 
-        let all_blind = find_blind(6).unwrap();
-        assert!(matches!(all_blind.led, Input::ALL));
-        assert!(!already_at_target(&positions, all_blind, 0));
-    }
+        let outcome = app
+            .write_characteristics(writes, &mut subscriptions)
+            .await
+            .unwrap();
 
-    #[test]
-    fn all_blinds_position_falls_back_when_individual_positions_are_missing_or_mixed() {
-        let mut positions = HashMap::new();
-        positions.insert(6, 100);
-        positions.insert(2, 0);
-        positions.insert(3, 0);
-        positions.insert(4, 100);
-        positions.insert(5, 0);
-
-        assert_eq!(effective_position(&positions, 6), 100);
-
-        positions.insert(6, 0);
-        positions.remove(&4);
-        assert_eq!(effective_position(&positions, 6), 0);
-    }
-
-    #[test]
-    fn all_write_propagates_to_individual_blinds() {
-        let mut positions = HashMap::new();
-        let all_blind = find_blind(6).unwrap();
-        propagate_positions(&mut positions, all_blind, 100);
-
-        for aid in [2, 3, 4, 5] {
-            assert_eq!(positions.get(&aid), Some(&100));
-        }
-    }
-
-    #[test]
-    fn individual_write_updates_aggregate_when_all_match() {
-        let mut positions = HashMap::new();
-        positions.insert(2, 100);
-        positions.insert(3, 0);
-        positions.insert(4, 0);
-        positions.insert(5, 0);
-        positions.insert(6, 100);
-
-        let changed = find_blind(2).unwrap();
-        positions.insert(2, 0);
-        propagate_positions(&mut positions, changed, 0);
-
-        assert_eq!(positions.get(&6), Some(&0));
-    }
-
-    #[test]
-    fn repeated_target_is_noop() {
-        let mut positions = HashMap::new();
-        positions.insert(2, 100);
-        let blind = find_blind(2).unwrap();
-
-        assert!(already_at_target(&positions, blind, 100));
+        assert!(outcome.all_success());
+        assert_eq!(
+            remote_control.operations(),
+            vec![crate::driver::ProtocolOperation::FakeCommand {
+                channel: Channel::ALL,
+                command: Command::Up,
+            }]
+        );
     }
 
     #[test]
@@ -692,5 +792,14 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| e.id == CharacteristicId::new(2, IID_CURRENT_POSITION)));
+    }
+
+    fn pending_target(aid: u64, snapped: u8) -> PendingTargetWrite {
+        PendingTargetWrite {
+            index: 0,
+            id: CharacteristicId::new(aid, IID_TARGET_POSITION),
+            blind: find_blind(aid).unwrap(),
+            snapped,
+        }
     }
 }

@@ -10,7 +10,7 @@ export function App() {
   const [activeLed, setActiveLed] = useState<string | null>(null);
   const { triggerHaptic: shortHaptic } = useHaptic(100);
   const { triggerHaptic: longHaptic } = useHaptic(200);
-  const send = useCallback(async (payload: { command: string; led?: string }) => {
+  const send = useCallback(async (payload: { command: string; channel?: string }) => {
     const response = await fetch('/command', {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -30,13 +30,16 @@ export function App() {
 
     async function syncSelection() {
       try {
-        const response = await fetch('/led', {
+        const response = await fetch('/channel', {
           cache: 'no-store',
           signal: controller.signal,
         });
 
         if (response.ok) {
-          setActiveLed((await response.text()).trim());
+          const channel = (await response.text()).trim();
+          if (channel) {
+            setActiveLed(channel);
+          }
         }
       } catch (error) {
         if (!controller.signal.aborted) {
@@ -52,7 +55,7 @@ export function App() {
 
   const attrs = useLongPress(
     () => {
-      send({ command: 'select', led: 'ALL' });
+      send({ command: 'select', channel: 'ALL' });
     },
     {
       threshold: 500,
@@ -106,16 +109,16 @@ export function App() {
 
       {/* LED Row */}
       <div className="flex flex-row items-center justify-center gap-12">
-        {['L1', 'L2', 'L3', 'L4'].map((led) => (
+        {['L1', 'L2', 'L3', 'L4'].map((channel) => (
           <Button
-            key={led}
+            key={channel}
             variant="ghost"
             className="size-12 rounded-full active:scale-95"
-            aria-label={`Select ${led}`}
-            onClick={() => send({ command: 'select', led })}
+            aria-label={`Select ${channel}`}
+            onClick={() => send({ command: 'select', channel })}
           >
             <Circle
-              fill={activeLed === 'ALL' || activeLed === led ? 'currentColor' : undefined}
+              fill={activeLed === 'ALL' || activeLed === channel ? 'currentColor' : undefined}
               className="size-6"
             />
           </Button>

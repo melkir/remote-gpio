@@ -4,9 +4,10 @@ version = "0.2.0"
 edition = "2021"
 
 [features]
-default = ["fake"]
-hw = ["dep:gpiocdev"]
+default = ["fake", "telis", "rts"]
 fake = []
+telis = ["dep:gpiocdev"]
+rts = ["dep:spidev"]
 
 [dependencies]
 axum = { version = "0.8", features = ["json", "ws"] }
@@ -14,17 +15,17 @@ tokio = { version = "1.52", features = ["rt", "macros", "sync", "time", "signal"
 tower-http = { version = "0.6", features = ["trace", "cors"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+toml = "1.1"
 anyhow = "1.0"
 base64 = "0.22"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-gpiocdev = { version = "0.8", features = ["uapi_v2", "async_tokio"], optional = true }
 futures-util = "0.3"
 
 clap = { version = "4.6", features = ["derive", "env"] }
 rust-embed = { version = "8.11", features = ["mime-guess"] }
 mime_guess = "2.0"
-reqwest = { version = "0.13.2", default-features = false, features = [
+reqwest = { version = "0.13.3", default-features = false, features = [
   "rustls-no-provider",
   "json",
   "stream",
@@ -46,6 +47,10 @@ httparse = "1.10"
 http = "1.4"
 num-bigint = "0.4"
 qrcode = { version = "0.14", default-features = false }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gpiocdev = { version = "0.8", features = ["uapi_v2", "async_tokio"], optional = true }
+spidev = { version = "0.7", optional = true }
 
 [build-dependencies]
 anyhow = "1.0"

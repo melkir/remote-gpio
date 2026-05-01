@@ -6,92 +6,102 @@ time.
 
 ## Mental Model
 
-`somfy` turns one physical Somfy Telis 4 remote into several software-facing
-interfaces:
+`somfy` exposes one Somfy installation through several software interfaces:
 
 - HTTP/SSE for the web UI.
 - WebSocket for bidirectional API clients.
 - Native HomeKit Accessory Protocol (HAP) for Apple Home.
-- GPIO reads and writes against the physical remote.
+- A pluggable driver that talks to the actual hardware.
 
-The physical remote remains the source of truth for LED selection. The software
-does not emulate a remote from scratch; it presses the real buttons and reads
-the real LEDs.
+The frontend is intentionally driver-agnostic. Whether the binary is driving a
+wired Telis 4 remote over GPIO or transmitting RTS frames through a CC1101, the
+HTTP/SSE/HomeKit surface is identical.
+
+## Drivers
+
+`CommandRouter` (`src/driver/mod.rs`) is the single seam between the UI layer
+and the hardware. Three implementations live behind compile-time features and a
+runtime config value:
+
+| Driver | Module                 | What it does                                                                                   |
+| ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| `fake`  | `src/driver/fake.rs`  | Records commands in-memory; default for local dev, tests, and CI-style non-Pi builds.          |
+| `telis` | `src/driver/telis.rs` | Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.       |
+| `rts`   | `src/driver/rts.rs`   | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod. |
+
+All three implement the same shape:
+
+- `execute(command, channel?)` for stateful UI commands (Select mutates selection; directional commands target the current selection).
+- `execute_on(channel, command)` for HomeKit's per-accessory commands; never mutates selection on RTS, may move the physical selector on Telis.
+- `selected_channel()` / `subscribe_selected_channel()` for the live selection watch channel.
+
+Live driver switching is intentionally unsupported. Pick one in
+`/etc/somfy/config.toml`; the systemd unit points at the config file and the
+config carries hardware choices.
+When that config file is absent, Raspberry Pi Linux builds default to `telis`;
+other targets default to `fake`.
 
 ## Module Map
 
-| Area           | Files            | Responsibility                                                                                  |
-| -------------- | ---------------- | ----------------------------------------------------------------------------------------------- |
-| Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                        |
-| Remote control | `src/remote.rs`  | Serializes physical button sequences, tracks selected LED, emits movement events.               |
-| GPIO           | `src/gpio.rs`    | Low-level Linux GPIO input/output mapping and debounce logic.                                   |
-| HAP core       | `src/hap/*`      | Generic-ish HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing. |
-| HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.    |
-| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, and HomeKit lifecycle commands.                                |
+| Area           | Files            | Responsibility                                                                                 |
+| -------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
+| Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                       |
+| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                    |
+| Drivers       | `src/driver/*`  | `fake`, `telis`, `rts` implementations of the active-driver trait.                            |
+| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                  |
+| RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
+| HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
+| HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.   |
+| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                   |
 
-The important boundary is `hap` versus `homekit`: `hap` should stay about the
-protocol, while `homekit` knows this project exposes Somfy blinds over that
-protocol.
+The important boundaries are `hap` versus `homekit` (protocol vs project), and
+`driver/`\* versus everything above (hardware vs UX).
 
 ## RemoteControl
 
-`RemoteControl` is the central coordination point for the physical remote.
+`RemoteControl` wraps `CommandRouter` and owns the cross-cutting state that
+isn't driver-specific:
 
-It has two different async streams:
-
-- `watch<Input>` tracks the current LED selection.
+- `watch<Channel>` (delegated to the driver) tracks the current selection.
 - `broadcast<PositionUpdate>` publishes completed Up/Down movement events.
 
-They are deliberately separate.
+The selection watch is stateful. A new SSE or WebSocket client subscribes and
+immediately learns whether the active channel is `L1`, `L2`, `L3`, `L4`, or
+`ALL`. On Telis the selection follows the physical LEDs; on RTS it is
+persisted to `rts.json` and survives restart.
 
-The selection watch channel is stateful. A new SSE or WebSocket client can
-subscribe and immediately know whether the remote is on `L1`, `L2`, `L3`, `L4`,
-or `ALL`. Selection changes can happen without blind movement, for example when
-the user presses `select`.
-
-The position broadcast channel is event-like. It only fires after a successful
-`Up` or `Down` command and carries an inferred HomeKit position: `100` for Up,
-`0` for Down. It does not represent the current selected LED and should not be
-used as a state cache.
+The position broadcast is event-like. It fires after every successful `Up` /
+`Down` and carries an inferred HomeKit position (`100` for Up, `0` for Down).
+When the command targets `ALL`, `complete_command` fans the update out to
+`L1`–`L4` so HomeKit's per-channel position cache stays consistent with what a
+physical RTS remote does over the air.
 
 ## Command Serialization
 
-The physical remote can only do one thing at a time. Software callers are more
-flexible: the web UI, REST/WebSocket clients, and HomeKit can all issue commands.
+The hardware can only do one thing at a time. Software callers are more
+flexible: the web UI, REST/WebSocket clients, and HomeKit can all issue
+commands. Each driver serializes its own hardware transactions:
 
-`RemoteControl::execute` uses `execute_lock` to serialize the full hardware
-transaction:
+- **Telis** uses `execute_lock` so cycle-and-press sequences don't interleave at the GPIO level.
+- **RTS** serializes presses through the hardware mutex inside the blocking transmitter (the radio + pigpio client live behind a single `Mutex`, run on `spawn_blocking`); the selection state lock is separate, so `select` never blocks behind an in-flight transmission.
 
-1. Optionally cycle the remote to the requested LED.
-2. Press the requested button.
-3. Publish the inferred position update if the command was Up or Down.
-
-The lock is not access control. Multiple people can observe the remote and
-multiple callers can submit commands. The lock only guarantees that command
-sequences do not interleave at the GPIO level.
-
-This removes the physical limitation of one hand touching the remote while
-keeping the important invariant: every button press applies to the LED selected
-for that command.
-
-The alternative would be rejecting concurrent commands with a “busy” error.
-That would more closely mimic a physical remote, but it would make the software
-less useful. Queueing command sequences is simpler for users and still keeps the
-hardware behavior coherent.
+The lock is not access control — multiple callers can submit commands. It just
+guarantees coherent hardware sequences. Queueing keeps software callers simpler
+than rejecting concurrent commands with a "busy" error.
 
 ## Web Flow
 
 The web server exposes one command endpoint and two live-state transports:
 
-- `GET /led` for the current selection.
-- `POST /command` for one command.
-- `GET /events` for the Preact PWA's SSE stream of LED updates.
-- `GET /ws` for bidirectional clients that want live LED updates and command messages.
+- `GET /channel` for the current selection (plain text, e.g. `L2`).
+- `POST /command` for one command (`{"command":"up"}`, `{"command":"up","channel":"L3"}`, or `{"command":"select","channel":"L3"}`).
+- `GET /events` for the Preact PWA's SSE stream of selection updates (`event.data === "L2"`).
+- `GET /ws` for bidirectional clients that want live updates and command messages.
 
 Both live transports subscribe to `RemoteControl::subscribe_selection()`, send
-the current LED immediately, and then forward selection changes. Incoming
-WebSocket commands are spawned as tasks so LED updates keep flowing while a
-command is cycling through the physical remote.
+the current channel immediately, and then forward selection changes. Incoming
+WebSocket commands are spawned as tasks so updates keep flowing while a command
+is in flight.
 
 ## HomeKit Flow
 
@@ -136,13 +146,17 @@ on IO and event multiplexing.
 
 ## Persistence
 
-There are two state files:
+State files under the systemd state directory (`/var/lib/somfy/`, or
+`./hap-state` in debug builds):
 
-- `hap.json` contains the HomeKit identity, setup code, signing key, config/state numbers, and paired controllers.
-- `positions.json` contains the HomeKit position cache.
+- `hap.json` — HomeKit identity, setup code, signing key, config/state numbers, paired controllers.
+- `positions.json` — HomeKit position cache.
+- `rts.json` (RTS driver only) — schema-versioned virtual-remote identities, per-channel rolling-code reserves, and persisted `selected_channel`.
 
-Both files are stored under the systemd state directory in production and under
-`./hap-state` in debug builds. Writes are atomic via temp file plus rename.
+All writes go through the same atomic temp-file-plus-rename helper. The RTS
+state file uses a write-ahead reserve block (default 16 codes) so a crashed or
+yanked Pi loses at most a few unused codes rather than allowing the rolling
+counter to roll backwards — losing a code is harmless, replaying one isn't.
 
 Identity stability matters. Changing the HAP identity forces re-pairing.
 Changing accessory IDs or characteristic IDs can make Home lose room, name, and
@@ -150,11 +164,13 @@ automation associations.
 
 ## Design Tradeoffs
 
-- **Real hardware as source of truth:** avoids drift for LED selection, but all commands must respect physical timing.
-- **Queued command execution:** lets multiple software clients use the remote without interleaving GPIO operations.
-- **Inferred blind positions:** useful for HomeKit UX, but not true physical feedback.
+- **Pluggable driver:** lets the binary drive a wired Telis remote, a CC1101 radio, or nothing at all without changing the UI surface.
+- **Telis driver uses real hardware as source of truth:** avoids drift for LED selection, but every command pays physical timing cost.
+- **RTS driver persists rolling codes with a reserve block:** a crash loses a handful of unused codes rather than reusing one, which is the irreversible failure mode for RTS pairing.
+- **Queued command execution:** lets multiple software clients use the remote without interleaving operations.
+- **Inferred blind positions with `ALL` fan-out:** useful for HomeKit UX, but not true physical feedback.
 - **Native HAP implementation:** removes Homebridge/Node deployment complexity, but requires maintaining protocol code.
-- **Generic HAP core plus Somfy adapter:** keeps protocol code cleaner while making project-specific quirks explicit.
+- **pigpiod for RF timing instead of in-process sleeps:** 640 µs Manchester half-symbols don't tolerate Tokio scheduler jitter; pigpiod owns the microsecond budget.
 
 ## Good First Places To Read
 

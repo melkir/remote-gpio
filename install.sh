@@ -3,12 +3,30 @@ set -euo pipefail
 
 REPO="melkir/remote-gpio"
 TARGET_ARCH="armv7l"
+INSTALL_ARGS=()
+GLOBAL_ARGS=()
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         -h|--help)
-            echo "Usage: install.sh"
+            echo "Usage: install.sh [--config PATH] [--user USER]"
             exit 0
+            ;;
+        --config)
+            if [[ $# -lt 2 ]]; then
+                echo "error: --config requires a value" >&2
+                exit 1
+            fi
+            GLOBAL_ARGS+=("--config" "$2")
+            shift 2
+            ;;
+        --user)
+            if [[ $# -lt 2 ]]; then
+                echo "error: --user requires a value" >&2
+                exit 1
+            fi
+            INSTALL_ARGS+=("--user" "$2")
+            shift 2
             ;;
         *) echo "error: unknown flag: $1" >&2; exit 1 ;;
     esac
@@ -71,7 +89,7 @@ install -m 0755 "$tmp/somfy" /usr/local/bin/somfy
 
 echo "Running somfy install..."
 # Preserve SUDO_USER so the unit runs as the invoking user
-/usr/local/bin/somfy install
+/usr/local/bin/somfy "${GLOBAL_ARGS[@]}" install "${INSTALL_ARGS[@]}"
 
 cat <<EOF
 

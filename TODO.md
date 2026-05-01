@@ -1,0 +1,79 @@
+# TODO
+
+## RTS Backend
+
+Track implementation progress for [docs/RTS_BACKEND.md](docs/RTS_BACKEND.md).
+
+### Phase 1: Domain Cleanup
+
+- [x] Rename `Input` to `Channel` across Rust, HomeKit, server, and frontend-facing payloads.
+- [x] Split Telis GPIO button/output names from domain backend commands.
+- [x] Update HTTP and WebSocket command payloads from `led` to `channel`.
+- [x] Add `GET /channel` returning the current channel as plain text (backend-agnostic; backend identity lives in `somfy doctor`).
+- [x] Change SSE `selection` events to plain text channel-name payloads (e.g. `L2`).
+- [x] Keep `select` as a public command and reject stale `led` payloads.
+- [x] Ensure directional commands target the current selected channel instead of carrying a channel.
+- [x] Update HomeKit internals to use `Channel`.
+- [x] Add or update tests for command parsing, selection behavior, API payloads, and position propagation.
+
+### Phase 2: Backend Abstraction
+
+- [x] Introduce backend abstraction behind `RemoteControl`.
+- [x] Move current physical Telis behavior into a `TelisBackend`.
+- [x] Add or preserve a `FakeBackend` for local/default builds.
+- [x] Add `CommandOutcome` plumbing for inferred position updates.
+- [x] Implement stateful `execute(command)` for HTTP UI commands.
+- [x] Implement stateless `execute_on(channel, command)` for HomeKit and CLI commands.
+- [x] Ensure `execute_on` has backend-specific selection semantics: RTS does not mutate selected-channel state; Telis may update/broadcast physical selection because targeting requires moving the real selector.
+
+### Phase 3: RTS Pure Logic
+
+- [x] Refine backend internals into controller + transport layers: backend controllers own command/selection semantics; transports perform concrete IO such as Telis GPIO presses, RTS waveform transmission, or logging/fake recording.
+- [x] Add transport-level fakes/logging so tests can assert generated protocol operations without reimplementing backend behavior.
+- [x] Add RTS command code mapping.
+- [x] Implement 7-byte RTS frame encoding.
+- [x] Implement checksum generation.
+- [x] Implement frame obfuscation.
+- [x] Add golden/unit tests for command codes, byte order, checksum, and obfuscation.
+- [x] Add versioned `$STATE_DIRECTORY/rts.json` state.
+- [x] Generate independent random 24-bit remote IDs per channel.
+- [x] Persist and restore `selected_channel`.
+- [x] Implement rolling-code reservation with atomic writes.
+- [x] Add state tests for missing files, schema versions, independent codes, restart behavior, and failed transmit behavior.
+
+### Phase 4: Waveform and Hardware Clients
+
+- [x] Add RTS waveform builder that emits `gpioPulse_t`-style pulse vectors.
+- [x] Add waveform tests for wake-up, sync cycles, Manchester ordering, pulse counts, and duration.
+- [x] Implement minimal `pigpiod` socket client.
+- [x] Support `MODES`, `WRITE`, `WVCLR`, `WVNEW`, `WVAG`, `WVCRE`, `WVTX`, `WVBSY`, `WVDEL`, and `WVHLT`.
+- [x] Add fake stream tests for pigpio command encoding and error mapping.
+- [x] Add CC1101 SPI driver behind the `rts` feature.
+- [x] Configure CC1101 for 433.42 MHz ASK/OOK asynchronous serial transmission.
+- [x] Expose CC1101 TX and idle operations.
+
+### Phase 5: Runtime Wiring
+
+- [x] Replace Cargo feature `hw` with explicit `fake`, `telis`, and `rts` features.
+- [x] Add `somfy serve --backend` with `SOMFY_BACKEND` fallback.
+- [x] Add RTS runtime options for SPI device, GDO0 GPIO, pigpiod address, and frame count.
+- [x] Fail startup clearly when a selected backend was not compiled into the binary.
+- [x] Wire `RtsBackend` into `RemoteControl`.
+- [x] Add `somfy rts dump CHANNEL COMMAND --format json`.
+- [x] Add `somfy rts send CHANNEL up|down|my`.
+- [x] Add `somfy rts prog CHANNEL`.
+- [x] Route RTS CLI commands through `execute_on`.
+- [x] Update `somfy install --backend rts` to write the selected backend into the unit.
+- [x] Update `somfy doctor` with backend-specific checks.
+
+### Phase 6: Validation and Docs
+
+- [x] Run `mise run check` after each major phase.
+- [ ] Validate SPI access on a Raspberry Pi.
+- [ ] Validate `pigpiod` connectivity and localhost-only mode.
+- [ ] Validate CC1101 register configuration with scope or SDR.
+- [ ] Validate RTS waveform timing constants with hardware.
+- [ ] Validate pairing and command behavior for `L1`, `L2`, `L3`, `L4`, and `ALL`.
+- [x] Update `README.md` with RTS setup and pairing flow.
+- [x] Update `docs/HARDWARE.md` with CC1101 wiring.
+- [x] Update `docs/ARCHITECTURE.md` once the backend abstraction is stable.
