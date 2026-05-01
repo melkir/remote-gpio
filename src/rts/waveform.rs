@@ -5,10 +5,10 @@ pub const WAKEUP_LOW_US: u32 = 89_565;
 pub const HARDWARE_SYNC_HIGH_US: u32 = 2_560;
 pub const HARDWARE_SYNC_LOW_US: u32 = 2_560;
 pub const SOFTWARE_SYNC_HIGH_US: u32 = 4_550;
-pub const SOFTWARE_SYNC_LOW_US: u32 = 640;
+pub const SOFTWARE_SYNC_LOW_US: u32 = 1_550;
 pub const MANCHESTER_HALF_SYMBOL_US: u32 = 640;
 pub const INTER_FRAME_GAP_US: u32 = 30_415;
-pub const DEFAULT_FRAME_COUNT: usize = 4;
+pub const FRAME_COUNT: usize = 4;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GpioPulse {
@@ -17,7 +17,11 @@ pub struct GpioPulse {
     pub us_delay: u32,
 }
 
-pub fn build(frame: RtsFrame, gpio: u8, frame_count: usize) -> Vec<GpioPulse> {
+pub fn build(frame: RtsFrame, gpio: u8) -> Vec<GpioPulse> {
+    build_n(frame, gpio, FRAME_COUNT)
+}
+
+fn build_n(frame: RtsFrame, gpio: u8, frame_count: usize) -> Vec<GpioPulse> {
     let mask = 1u32 << gpio;
     let mut pulses = Vec::new();
     let bytes = frame.bytes();
@@ -100,7 +104,7 @@ mod tests {
 
     #[test]
     fn first_frame_contains_wakeup_and_two_hardware_sync_cycles() {
-        let pulses = build(test_frame(), GPIO, 1);
+        let pulses = build_n(test_frame(), GPIO, 1);
 
         assert_eq!(
             &pulses[..8],
@@ -151,7 +155,7 @@ mod tests {
 
     #[test]
     fn repeat_frame_omits_wakeup_and_uses_seven_hardware_sync_cycles() {
-        let pulses = build(test_frame(), GPIO, 2);
+        let pulses = build_n(test_frame(), GPIO, 2);
         let repeat = &pulses[first_frame_pulse_count()..];
 
         assert_eq!(repeat[0].us_delay, HARDWARE_SYNC_HIGH_US);
@@ -163,7 +167,7 @@ mod tests {
 
     #[test]
     fn manchester_bits_are_emitted_msb_first() {
-        let pulses = build(test_frame(), GPIO, 1);
+        let pulses = build_n(test_frame(), GPIO, 1);
         let data = &pulses[8..16];
 
         // First encoded byte is 0xA0: 1,0,1,0...
@@ -184,10 +188,10 @@ mod tests {
 
     #[test]
     fn pulse_count_and_total_duration_match_default_frame_count() {
-        let pulses = build(test_frame(), GPIO, DEFAULT_FRAME_COUNT);
+        let pulses = build(test_frame(), GPIO);
 
         assert_eq!(pulses.len(), 508);
-        assert_eq!(total_duration(&pulses), 645_880);
+        assert_eq!(total_duration(&pulses), 649_520);
     }
 
     fn first_frame_pulse_count() -> usize {

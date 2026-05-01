@@ -1,19 +1,17 @@
 use anyhow::{bail, Context, Result};
-use std::net::TcpStream;
+use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
 use crate::driver::{RtsOptions, SelectedChannelRx};
-use crate::gpio::Channel;
+use crate::gpio::{Channel, MAX_BCM_GPIO};
 use crate::remote::Command;
 use crate::rts::cc1101::Cc1101;
 use crate::rts::frame::{RtsCommand, RtsFrame};
 use crate::rts::pigpio::PigpioClient;
 use crate::rts::state::RtsStateStore;
 use crate::rts::waveform;
-
-const MAX_BCM_GPIO: u8 = 31;
 
 #[derive(Debug)]
 struct Hardware {
@@ -33,7 +31,6 @@ pub(crate) struct RtsDriver {
     selected_rx: SelectedChannelRx,
     options: RtsOptions,
     state: Mutex<RtsStateStore>,
-    transmitter_lock: Mutex<()>,
     transmitter: Arc<dyn RtsTransmitter>,
 }
 
@@ -45,6 +42,7 @@ impl RtsDriver {
                 options.gdo0_gpio
             );
         }
+        require_loopback(&options.pigpiod_addr)?;
         let state = RtsStateStore::load_or_init_default()?;
         let selected_channel = state.selected_channel();
         let (sender, selected_rx) = watch::channel(selected_channel);
@@ -70,7 +68,6 @@ impl RtsDriver {
             selected_rx,
             options,
             state: Mutex::new(state),
-            transmitter_lock: Mutex::new(()),
             transmitter,
         }
     }
@@ -130,8 +127,6 @@ impl RtsDriver {
     }
 
     async fn transmit(&self, channel: Channel, command: RtsCommand) -> Result<()> {
-        let _guard = self.transmitter_lock.lock().await;
-
         let (rolling_code, remote_id) = {
             let mut state = self.state.lock().await;
             let rolling_code = state.reserve_rolling_code(channel)?;
@@ -140,7 +135,7 @@ impl RtsDriver {
         };
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
-        let pulses = waveform::build(frame, self.options.gdo0_gpio, self.options.frame_count);
+        let pulses = waveform::build(frame, self.options.gdo0_gpio);
         let pulse_count = pulses.len();
         let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
         tracing::debug!(
@@ -150,7 +145,6 @@ impl RtsDriver {
             remote_id,
             frame = %hex::encode(frame.bytes()),
             gpio = self.options.gdo0_gpio,
-            frame_count = self.options.frame_count,
             pulse_count,
             total_duration_us,
             "rts waveform prepared"
@@ -220,9 +214,6 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
         radio
             .configure_ook_433_42()
             .context("configuring CC1101 for 433.42 MHz async OOK")?;
-        tracing::warn!(
-            "CC1101 register set is unvalidated; verify timing with a scope or SDR before pairing"
-        );
         let mut pigpio = PigpioClient::connect(&options.pigpiod_addr)
             .with_context(|| format!("connecting to pigpiod at {}", options.pigpiod_addr))?;
         pigpio.set_output(options.gdo0_gpio)?;
@@ -290,6 +281,25 @@ fn transmit_blocking(
     Ok(())
 }
 
+pub(crate) fn require_loopback(addr: &str) -> Result<()> {
+    let socket: SocketAddr = addr
+        .parse()
+        .with_context(|| format!("parsing pigpiod address {addr}"))?;
+    let ip = match socket.ip() {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => v6
+            .to_ipv4_mapped()
+            .map(IpAddr::V4)
+            .unwrap_or(IpAddr::V6(v6)),
+    };
+    if !ip.is_loopback() {
+        bail!(
+            "pigpiod address {addr} is not loopback; pigpiod is unauthenticated and must be reached via 127.0.0.1 / ::1 (run `pigpiod -l`)"
+        );
+    }
+    Ok(())
+}
+
 fn next_channel(channel: Channel) -> Channel {
     match channel {
         Channel::L1 => Channel::L2,
@@ -337,7 +347,6 @@ mod tests {
         let driver = RtsDriver::new_for_test(
             RtsOptions {
                 gdo0_gpio: 18,
-                frame_count: waveform::DEFAULT_FRAME_COUNT,
                 ..RtsOptions::default()
             },
             &state_path,

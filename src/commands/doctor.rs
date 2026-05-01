@@ -456,7 +456,7 @@ fn compiled_driver_check(driver: DriverKind) -> Check {
     }
 }
 
-const MAX_BCM_GPIO: u8 = 31;
+use crate::gpio::MAX_BCM_GPIO;
 
 fn rts_checks(options: &RtsOptions) -> Vec<Check> {
     let spi_check = match std::fs::OpenOptions::new()
@@ -518,25 +518,19 @@ fn rts_checks(options: &RtsOptions) -> Vec<Check> {
         },
     };
 
-    let pigpiod_local_check = {
-        let host = options
-            .pigpiod_addr
-            .rsplit_once(':')
-            .map(|(host, _)| host)
-            .unwrap_or(&options.pigpiod_addr);
-        let local = matches!(host, "127.0.0.1" | "localhost" | "::1" | "[::1]");
-        Check {
+    let pigpiod_local_check = match crate::driver::require_pigpiod_loopback(&options.pigpiod_addr) {
+        Ok(()) => Check {
             id: "pigpiod_localhost_only",
             label: "pigpiod local",
-            status: if local { Status::Ok } else { Status::Advisory },
-            detail: if local {
-                None
-            } else {
-                Some(format!(
-                    "configured pigpiod address {host} is not localhost; run `pigpiod -l`"
-                ))
-            },
-        }
+            status: Status::Ok,
+            detail: None,
+        },
+        Err(e) => Check {
+            id: "pigpiod_localhost_only",
+            label: "pigpiod local",
+            status: Status::Blocking,
+            detail: Some(e.to_string()),
+        },
     };
 
     let state_check = rts_state_file_check();

@@ -22,6 +22,8 @@ mod telis;
 use fake::FakeDriver;
 #[cfg(feature = "rts")]
 use rts::RtsDriver;
+#[cfg(feature = "rts")]
+pub(crate) use rts::require_loopback as require_pigpiod_loopback;
 #[cfg(feature = "telis")]
 use telis::TelisDriver;
 #[cfg(all(feature = "rts", feature = "telis"))]
@@ -58,7 +60,6 @@ pub struct RtsOptions {
     pub spi_device: String,
     pub gdo0_gpio: u8,
     pub pigpiod_addr: String,
-    pub frame_count: usize,
 }
 
 impl Default for RtsOptions {
@@ -67,7 +68,6 @@ impl Default for RtsOptions {
             spi_device: "/dev/spidev0.0".to_string(),
             gdo0_gpio: 18,
             pigpiod_addr: "127.0.0.1:8888".to_string(),
-            frame_count: crate::rts::waveform::DEFAULT_FRAME_COUNT,
         }
     }
 }
@@ -389,7 +389,6 @@ mod tests {
         let rts_driver = rts::RtsDriver::new_for_test(
             RtsOptions {
                 gdo0_gpio: 18,
-                frame_count: crate::rts::waveform::DEFAULT_FRAME_COUNT,
                 ..RtsOptions::default()
             },
             &state_path,

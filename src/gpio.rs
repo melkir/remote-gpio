@@ -5,6 +5,8 @@ use std::str::FromStr;
 
 use crate::driver::TelisGpioOptions;
 
+pub const MAX_BCM_GPIO: u8 = 31;
+
 /// Logical remote target selected by the Telis LED row.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Channel {

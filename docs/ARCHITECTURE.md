@@ -81,7 +81,7 @@ flexible: the web UI, REST/WebSocket clients, and HomeKit can all issue
 commands. Each driver serializes its own hardware transactions:
 
 - **Telis** uses `execute_lock` so cycle-and-press sequences don't interleave at the GPIO level.
-- **RTS** uses `transmitter_lock` so two presses can't construct overlapping pigpio waveforms; the selection state lock is separate, so `select` never blocks behind an in-flight transmission.
+- **RTS** serializes presses through the hardware mutex inside the blocking transmitter (the radio + pigpio client live behind a single `Mutex`, run on `spawn_blocking`); the selection state lock is separate, so `select` never blocks behind an in-flight transmission.
 
 The lock is not access control — multiple callers can submit commands. It just
 guarantees coherent hardware sequences. Queueing keeps software callers simpler

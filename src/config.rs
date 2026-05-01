@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::driver::{DriverConfig, DriverKind, RtsOptions, TelisOptions};
+use crate::gpio::MAX_BCM_GPIO;
 
 pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 
@@ -70,11 +71,8 @@ pub fn to_toml(config: &AppConfig) -> Result<String> {
 }
 
 pub fn validate(config: &AppConfig) -> Result<()> {
-    if config.rts.gdo0_gpio > 31 {
-        bail!("rts.gdo0_gpio must be a BCM GPIO in 0..=31");
-    }
-    if config.rts.frame_count == 0 {
-        bail!("rts.frame_count must be greater than zero");
+    if config.rts.gdo0_gpio > MAX_BCM_GPIO {
+        bail!("rts.gdo0_gpio must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
     }
     for (name, gpio) in [
         ("telis.gpio.up", config.telis.gpio.up),
@@ -86,13 +84,13 @@ pub fn validate(config: &AppConfig) -> Result<()> {
         ("telis.gpio.led3", config.telis.gpio.led3),
         ("telis.gpio.led4", config.telis.gpio.led4),
     ] {
-        if gpio > 31 {
-            bail!("{name} must be a BCM GPIO in 0..=31");
+        if gpio > MAX_BCM_GPIO {
+            bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
         }
     }
     if let Some(gpio) = config.telis.gpio.prog {
-        if gpio > 31 {
-            bail!("telis.gpio.prog must be a BCM GPIO in 0..=31");
+        if gpio > MAX_BCM_GPIO {
+            bail!("telis.gpio.prog must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
         }
     }
     Ok(())

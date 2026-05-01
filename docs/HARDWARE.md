@@ -136,7 +136,6 @@ driver = "rts"
 spi_device = "/dev/spidev0.0"
 gdo0_gpio = 18
 pigpiod_addr = "127.0.0.1:8888"
-frame_count = 4
 
 [telis.gpio]
 up = 26
