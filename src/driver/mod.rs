@@ -21,9 +21,9 @@ mod telis;
 #[cfg(feature = "fake")]
 use fake::FakeDriver;
 #[cfg(feature = "rts")]
-use rts::RtsDriver;
-#[cfg(feature = "rts")]
 pub(crate) use rts::require_loopback as require_pigpiod_loopback;
+#[cfg(feature = "rts")]
+use rts::RtsDriver;
 #[cfg(feature = "telis")]
 use telis::TelisDriver;
 #[cfg(all(feature = "rts", feature = "telis"))]
