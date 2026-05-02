@@ -123,7 +123,7 @@ fn reset() -> Result<()> {
     println!("  setup id   : {}", state.setup_id);
     println!("  setup code : {}", display_setup_code(&state.setup_code));
     println!();
-    println!("Run `sudo somfy restart` to apply the new HomeKit identity.");
+    println!("Run `somfy restart` to apply the new HomeKit identity.");
     Ok(())
 }
 
@@ -176,6 +176,6 @@ fn unpair(identifier: &str) -> Result<()> {
     store.save_state(&state)?;
 
     println!("Removed HomeKit pairing `{identifier}`.");
-    println!("Run `sudo somfy restart` to drop any in-memory pairing state.");
+    println!("Run `somfy restart` to drop any in-memory pairing state.");
     Ok(())
 }

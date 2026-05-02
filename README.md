@@ -53,9 +53,11 @@ The upgrade command pulls the latest stable release, swaps the binary, refreshes
 Switch driver in one command — rewrites the config, runs any new-driver prereqs (e.g. `pigpiod` for `rts`), and restarts the service:
 
 ```bash
-sudo somfy config set-driver rts
+somfy config set-driver rts
 somfy doctor
 ```
+
+`install` adds the invoking user to the `somfy` group and drops a polkit rule, so day-to-day commands (`config set-driver`, `restart`, `homekit reset`) run without `sudo`. `install` and `upgrade` still need root because they touch `/usr/local/bin/somfy` and `/etc/systemd/system/`.
 
 For RTS wiring, CC1101 register notes, and pairing, see [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver). Driver behavior shows up in service logs via `somfy logs --debug`.
 

@@ -1,4 +1,4 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 
 use crate::commands::install;
 use crate::config::{self, ResolvedConfig};
@@ -15,10 +15,6 @@ pub fn show(resolved: &ResolvedConfig) -> Result<()> {
 }
 
 pub fn set_driver(resolved: &ResolvedConfig, kind: DriverKind) -> Result<()> {
-    if !nix::unistd::Uid::current().is_root() {
-        bail!("somfy config set-driver must be run as root (use sudo)");
-    }
-
     if resolved.config.driver == kind {
         println!("driver already set to {kind}");
         return Ok(());

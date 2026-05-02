@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::Path;
 use std::process::Command;
 
@@ -14,6 +14,9 @@ use crate::systemd;
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
 const PIGPIOD_OVERRIDE_PATH: &str = "/etc/systemd/system/pigpiod.service.d/somfy-localhost.conf";
 const PIGPIOD_OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/pigpiod -l\n";
+pub const POLKIT_RULE_PATH: &str = "/etc/polkit-1/rules.d/50-somfy.rules";
+const POLKIT_RULE: &str = include_str!("../../assets/somfy-polkit.rules");
+const SOMFY_GROUP: &str = "somfy";
 
 pub fn render_unit(
     service_user: &str,
@@ -51,11 +54,16 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
         );
     }
 
+    ensure_somfy_group()?;
+    ensure_user_in_somfy_group(&service_user)?;
+
     if resolved_config.config.driver == crate::driver::DriverKind::Rts {
         prepare_rts_prereqs()?;
     }
 
     ensure_config_file(resolved_config)?;
+    apply_config_acl(resolved_config)?;
+    install_polkit_rule()?;
 
     let rendered = render_unit(
         &service_user,
@@ -197,18 +205,91 @@ pub(crate) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("invalid unit path"))?;
     let tmp = parent.join(format!(".{}.tmp", filename.to_string_lossy()));
 
+    let existing_mode = fs::metadata(path).ok().map(|m| m.mode() & 0o777);
+    let mode = existing_mode.unwrap_or(0o644);
+
     {
         let mut f = fs::OpenOptions::new()
             .write(true)
             .create(true)
             .truncate(true)
-            .mode(0o644)
+            .mode(mode)
             .open(&tmp)?;
         f.write_all(contents.as_bytes())?;
         f.sync_all()?;
     }
+    // Open() honors umask; force the intended mode explicitly.
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
 
     fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+fn ensure_somfy_group() -> Result<()> {
+    if nix::unistd::Group::from_name(SOMFY_GROUP)
+        .with_context(|| format!("looking up group {SOMFY_GROUP}"))?
+        .is_some()
+    {
+        return Ok(());
+    }
+    run_command("groupadd", &["--system", SOMFY_GROUP])
+        .with_context(|| format!("creating group {SOMFY_GROUP}"))
+}
+
+fn ensure_user_in_somfy_group(user: &str) -> Result<()> {
+    let output = Command::new("id").args(["-nG", user]).output()?;
+    if output.status.success() {
+        let groups = String::from_utf8_lossy(&output.stdout);
+        if groups.split_whitespace().any(|g| g == SOMFY_GROUP) {
+            return Ok(());
+        }
+    }
+    run_command("usermod", &["-aG", SOMFY_GROUP, user])
+        .with_context(|| format!("adding {user} to group {SOMFY_GROUP}"))
+}
+
+fn apply_config_acl(resolved_config: &ResolvedConfig) -> Result<()> {
+    let group = nix::unistd::Group::from_name(SOMFY_GROUP)
+        .with_context(|| format!("looking up group {SOMFY_GROUP}"))?
+        .ok_or_else(|| anyhow::anyhow!("group {SOMFY_GROUP} missing"))?;
+    let root_uid = nix::unistd::Uid::from_raw(0);
+
+    let parent = resolved_config.path.parent().unwrap_or(Path::new("/"));
+    // 02775: setgid so new files inherit `somfy` group; group-writable so members can rewrite the config.
+    fs::set_permissions(parent, fs::Permissions::from_mode(0o2775))
+        .with_context(|| format!("setting permissions on {}", parent.display()))?;
+    nix::unistd::chown(parent, Some(root_uid), Some(group.gid))
+        .with_context(|| format!("setting owner on {}", parent.display()))?;
+
+    if resolved_config.path.exists() {
+        fs::set_permissions(&resolved_config.path, fs::Permissions::from_mode(0o664))
+            .with_context(|| {
+                format!("setting permissions on {}", resolved_config.path.display())
+            })?;
+        nix::unistd::chown(&resolved_config.path, Some(root_uid), Some(group.gid))
+            .with_context(|| format!("setting owner on {}", resolved_config.path.display()))?;
+    }
+    Ok(())
+}
+
+fn install_polkit_rule() -> Result<()> {
+    let path = Path::new(POLKIT_RULE_PATH);
+    let parent = path
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("invalid polkit rule path"))?;
+    fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
+
+    let on_disk = fs::read_to_string(path).ok();
+    let needs_write = match &on_disk {
+        Some(existing) => existing.trim() != POLKIT_RULE.trim(),
+        None => true,
+    };
+    if needs_write {
+        atomic_write(path, POLKIT_RULE)?;
+        tracing::info!("wrote {}", POLKIT_RULE_PATH);
+    } else {
+        tracing::info!("{} already in sync", POLKIT_RULE_PATH);
+    }
     Ok(())
 }
 
@@ -297,7 +378,6 @@ mod tests {
 
     #[test]
     fn atomic_write_creates_file_with_mode_0644() {
-        use std::os::unix::fs::MetadataExt;
         let dir = tempfile::tempdir().unwrap();
         let target = dir.path().join("somfy.service");
         atomic_write(&target, "hello\n").unwrap();
@@ -306,6 +386,18 @@ mod tests {
         assert_eq!(mode, 0o644);
         let tmp_sibling = dir.path().join(".somfy.service.tmp");
         assert!(!tmp_sibling.exists());
+    }
+
+    #[test]
+    fn atomic_write_preserves_existing_mode() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("config.toml");
+        atomic_write(&target, "first\n").unwrap();
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o664)).unwrap();
+        atomic_write(&target, "second\n").unwrap();
+        assert_eq!(fs::read_to_string(&target).unwrap(), "second\n");
+        let mode = fs::metadata(&target).unwrap().mode() & 0o777;
+        assert_eq!(mode, 0o664);
     }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
