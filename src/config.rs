@@ -11,6 +11,7 @@ pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
     pub driver: DriverKind,
+    pub homekit: bool,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
 }
@@ -19,6 +20,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             driver: DriverKind::default_for_target(),
+            homekit: false,
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }
@@ -94,4 +96,27 @@ pub fn validate(config: &AppConfig) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_homekit_defaults_disabled() {
+        let config: AppConfig = toml::from_str("driver = \"fake\"\n").unwrap();
+        assert!(!config.homekit);
+    }
+
+    #[test]
+    fn parses_homekit_flag() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "telis"
+homekit = false
+"#,
+        )
+        .unwrap();
+        assert!(!config.homekit);
+    }
 }

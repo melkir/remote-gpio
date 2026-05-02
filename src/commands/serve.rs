@@ -20,15 +20,19 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         remote_control: remote_control.clone(),
     });
 
-    let _hap_announcement = match homekit::start(remote_control).await {
-        Ok(a) => Some(a),
-        Err(e) => {
-            tracing::warn!(
-                "HAP subsystem failed to start, continuing without HomeKit: {}",
-                e
-            );
-            None
+    let _hap_announcement = if resolved_config.config.homekit {
+        match homekit::start(remote_control).await {
+            Ok(a) => Some(a),
+            Err(e) => {
+                tracing::warn!(
+                    "HAP subsystem failed to start, continuing without HomeKit: {}",
+                    e
+                );
+                None
+            }
         }
+    } else {
+        None
     };
 
     tokio::select! {
