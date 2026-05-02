@@ -164,8 +164,8 @@ reachability, and `rts.json` schema. The pigpiod endpoint is fixed to
 Each channel is paired independently. With the motor in programming mode (already-paired remote, or motor's prog button):
 
 ```bash
-sudo somfy remote prog L1
-sudo somfy remote up L1   # confirm direction
+somfy remote prog L1
+somfy remote up L1   # confirm direction
 ```
 
 `somfy remote prog <channel>` sends the RTS Prog frame for that virtual channel.
@@ -174,7 +174,7 @@ press a wired Telis Prog button; put the motor in programming mode with an
 already-paired remote or the motor's physical Prog control before sending it.
 
 ```bash
-sudo somfy remote prog L1
+somfy remote prog L1
 ```
 
 `ALL` is a separate virtual remote — pair it with every motor that should react to all-channel commands.
