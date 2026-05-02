@@ -85,7 +85,7 @@ pub fn button_gpio(button: TelisButton, config: &TelisGpioOptions) -> u8 {
     }
 }
 
-#[cfg(all(feature = "telis", target_os = "linux"))]
+#[cfg(target_os = "linux")]
 mod platform {
     use super::*;
     use anyhow::Context;
@@ -188,47 +188,12 @@ mod platform {
     }
 }
 
-#[cfg(all(feature = "telis", not(target_os = "linux")))]
+#[cfg(not(target_os = "linux"))]
 mod platform {
     use std::sync::atomic::{AtomicU8, Ordering};
     use std::time::Duration;
 
     use super::*;
-
-    static LED_INDEX: AtomicU8 = AtomicU8::new(0);
-    const LEDS: [Channel; 5] = [
-        Channel::L1,
-        Channel::L2,
-        Channel::L3,
-        Channel::L4,
-        Channel::ALL,
-    ];
-
-    pub async fn watch_inputs(_config: &TelisGpioOptions) -> Result<Channel> {
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        let idx = LED_INDEX.fetch_add(1, Ordering::Relaxed) % LEDS.len() as u8;
-        Ok(LEDS[idx as usize])
-    }
-
-    pub async fn trigger_output(output: TelisButton, config: &TelisGpioOptions) -> Result<()> {
-        tracing::debug!("Fake triggering Telis button: {:?}", output);
-        let _ = button_gpio(output, config);
-        tokio::time::sleep(Duration::from_millis(60)).await;
-        Ok(())
-    }
-
-    pub async fn trigger_output_gpio(gpio: u8, duration: Duration) -> Result<()> {
-        tracing::debug!("Fake triggering GPIO{gpio} for {:?}", duration);
-        tokio::time::sleep(duration).await;
-        Ok(())
-    }
-}
-
-#[cfg(not(feature = "telis"))]
-mod platform {
-    use super::*;
-    use std::sync::atomic::{AtomicU8, Ordering};
-    use std::time::Duration;
 
     static LED_INDEX: AtomicU8 = AtomicU8::new(0);
     const LEDS: [Channel; 5] = [

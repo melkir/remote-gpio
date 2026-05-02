@@ -94,7 +94,7 @@ impl RemoteControl {
         Ok(self.complete_command(channel, command))
     }
 
-    #[cfg(all(test, feature = "fake"))]
+    #[cfg(test)]
     pub(crate) fn operations(&self) -> Vec<crate::driver::ProtocolOperation> {
         self.router.operations()
     }

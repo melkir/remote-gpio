@@ -3,12 +3,6 @@ name = "somfy"
 version = "0.3.0"
 edition = "2021"
 
-[features]
-default = ["fake", "telis", "rts"]
-fake = []
-telis = ["dep:gpiocdev"]
-rts = ["dep:spidev"]
-
 [dependencies]
 axum = { version = "0.8", features = ["json", "ws"] }
 tokio = { version = "1.52", features = ["rt", "macros", "sync", "time", "signal"] }
@@ -49,8 +43,8 @@ num-bigint = "0.4"
 qrcode = { version = "0.14", default-features = false }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-gpiocdev = { version = "0.8", features = ["uapi_v2", "async_tokio"], optional = true }
-spidev = { version = "0.7", optional = true }
+gpiocdev = { version = "0.8", features = ["uapi_v2", "async_tokio"] }
+spidev = { version = "0.7" }
 
 [build-dependencies]
 anyhow = "1.0"

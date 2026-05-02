@@ -1,32 +1,22 @@
 use anyhow::Result;
 use clap::ValueEnum;
-#[cfg(all(feature = "rts", feature = "telis"))]
 use futures_util::future::BoxFuture;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-#[cfg(all(feature = "rts", feature = "telis"))]
 use std::sync::Arc;
 use tokio::sync::watch::Receiver;
 
 use crate::gpio::Channel;
 use crate::remote::Command;
 
-#[cfg(feature = "fake")]
 mod fake;
-#[cfg(feature = "rts")]
 mod rts;
-#[cfg(feature = "telis")]
 mod telis;
 
-#[cfg(feature = "fake")]
 use fake::FakeDriver;
-#[cfg(feature = "rts")]
 pub(crate) use rts::require_loopback as require_pigpiod_loopback;
-#[cfg(feature = "rts")]
 use rts::RtsDriver;
-#[cfg(feature = "telis")]
 use telis::TelisDriver;
-#[cfg(all(feature = "rts", feature = "telis"))]
 use telis::TelisProgrammer;
 
 pub type SelectedChannelRx = Receiver<Channel>;
@@ -47,7 +37,6 @@ pub enum DriverKind {
 impl DriverKind {
     pub fn default_for_target() -> Self {
         if cfg!(all(
-            feature = "telis",
             target_os = "linux",
             any(target_arch = "arm", target_arch = "aarch64")
         )) {
@@ -130,7 +119,7 @@ pub struct DriverConfig {
     pub telis: TelisOptions,
 }
 
-#[cfg(all(test, feature = "fake"))]
+#[cfg(test)]
 impl DriverConfig {
     pub(crate) fn fake() -> Self {
         Self {
@@ -141,7 +130,7 @@ impl DriverConfig {
     }
 }
 
-#[cfg(all(test, feature = "fake"))]
+#[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProtocolOperation {
     TelisSelection(Channel),
@@ -151,89 +140,38 @@ pub(crate) enum ProtocolOperation {
 #[derive(Debug)]
 pub(crate) struct CommandRouter {
     executor: DriverExecutor,
-    #[cfg(all(feature = "rts", feature = "telis"))]
     telis_programmer: Option<Arc<dyn Programmer>>,
 }
 
 #[derive(Debug)]
 enum DriverExecutor {
-    #[cfg(feature = "fake")]
     Fake(FakeDriver),
-    #[cfg(feature = "telis")]
     Telis(TelisDriver),
-    #[cfg(feature = "rts")]
     Rts(Box<RtsDriver>),
 }
 
 impl CommandRouter {
     pub async fn new(config: DriverConfig) -> Result<Self> {
-        #[cfg(feature = "rts")]
         let has_telis_prog = config.telis.gpio.prog.is_some();
-        #[cfg(all(feature = "rts", feature = "telis"))]
         let use_telis_programmer = config.kind == DriverKind::Rts && has_telis_prog;
-        #[cfg(all(feature = "rts", feature = "telis"))]
         let telis_programmer_options = config.telis.clone();
         let executor = match config.kind {
-            DriverKind::Fake => {
-                #[cfg(feature = "fake")]
-                {
-                    DriverExecutor::Fake(FakeDriver::new(Channel::L1))
-                }
-                #[cfg(not(feature = "fake"))]
-                {
-                    anyhow::bail!(
-                        "driver \"fake\" was selected, but this binary was built without the \"fake\" feature"
-                    )
-                }
-            }
-            DriverKind::Telis => {
-                #[cfg(feature = "telis")]
-                {
-                    DriverExecutor::Telis(TelisDriver::new(config.telis).await?)
-                }
-                #[cfg(not(feature = "telis"))]
-                {
-                    anyhow::bail!(
-                        "driver \"telis\" was selected, but this binary was built without the \"telis\" feature"
-                    )
-                }
-            }
-            DriverKind::Rts => {
-                #[cfg(feature = "rts")]
-                {
-                    if has_telis_prog {
-                        #[cfg(not(feature = "telis"))]
-                        anyhow::bail!(
-                            "telis.gpio.prog is configured, but this binary was built without the \"telis\" feature"
-                        );
-                    }
-                    DriverExecutor::Rts(Box::new(RtsDriver::new(config.rts).await?))
-                }
-                #[cfg(not(feature = "rts"))]
-                {
-                    anyhow::bail!(
-                        "driver \"rts\" was selected, but this binary was built without the \"rts\" feature"
-                    )
-                }
-            }
+            DriverKind::Fake => DriverExecutor::Fake(FakeDriver::new(Channel::L1)),
+            DriverKind::Telis => DriverExecutor::Telis(TelisDriver::new(config.telis).await?),
+            DriverKind::Rts => DriverExecutor::Rts(Box::new(RtsDriver::new(config.rts).await?)),
         };
 
         Ok(Self {
             executor,
-            #[cfg(all(feature = "rts", feature = "telis"))]
             telis_programmer: use_telis_programmer
                 .then(|| Arc::new(TelisProgrammer::new(telis_programmer_options)) as Arc<_>),
         })
     }
 
     pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
-        let _ = (command, channel);
         match &self.executor {
-            #[cfg(feature = "fake")]
             DriverExecutor::Fake(driver) => driver.execute(command, channel).await,
-            #[cfg(feature = "telis")]
             DriverExecutor::Telis(driver) => driver.execute(command, channel).await,
-            #[cfg(feature = "rts")]
             DriverExecutor::Rts(driver) => {
                 if command == Command::Prog {
                     self.program_rts(driver.selected_channel()).await
@@ -241,19 +179,13 @@ impl CommandRouter {
                     driver.execute(command, channel).await
                 }
             }
-            #[allow(unreachable_patterns)]
-            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
-        let _ = (channel, command);
         match &self.executor {
-            #[cfg(feature = "fake")]
             DriverExecutor::Fake(driver) => driver.execute_on(channel, command).await,
-            #[cfg(feature = "telis")]
             DriverExecutor::Telis(driver) => driver.execute_on(channel, command).await,
-            #[cfg(feature = "rts")]
             DriverExecutor::Rts(driver) => {
                 if command == Command::Prog {
                     self.program_rts(channel).await
@@ -261,38 +193,26 @@ impl CommandRouter {
                     driver.execute_on(channel, command).await
                 }
             }
-            #[allow(unreachable_patterns)]
-            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
     pub fn selected_channel(&self) -> Channel {
         match &self.executor {
-            #[cfg(feature = "fake")]
             DriverExecutor::Fake(driver) => driver.selected_channel(),
-            #[cfg(feature = "telis")]
             DriverExecutor::Telis(driver) => driver.selected_channel(),
-            #[cfg(feature = "rts")]
             DriverExecutor::Rts(driver) => driver.selected_channel(),
-            #[allow(unreachable_patterns)]
-            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
     pub fn subscribe_selected_channel(&self) -> SelectedChannelRx {
         match &self.executor {
-            #[cfg(feature = "fake")]
             DriverExecutor::Fake(driver) => driver.subscribe_selected_channel(),
-            #[cfg(feature = "telis")]
             DriverExecutor::Telis(driver) => driver.subscribe_selected_channel(),
-            #[cfg(feature = "rts")]
             DriverExecutor::Rts(driver) => driver.subscribe_selected_channel(),
-            #[allow(unreachable_patterns)]
-            _ => unreachable!("no driver variants were compiled"),
         }
     }
 
-    #[cfg(all(test, feature = "fake"))]
+    #[cfg(test)]
     pub(crate) fn operations(&self) -> Vec<ProtocolOperation> {
         match &self.executor {
             DriverExecutor::Fake(driver) => driver.operations(),
@@ -301,9 +221,7 @@ impl CommandRouter {
         }
     }
 
-    #[cfg(feature = "rts")]
     async fn program_rts(&self, channel: Channel) -> Result<()> {
-        #[cfg(feature = "telis")]
         if let Some(programmer) = &self.telis_programmer {
             tracing::info!(%channel, "starting Telis-assisted RTS programming");
             programmer.program(channel).await?;
@@ -318,12 +236,10 @@ impl CommandRouter {
     }
 }
 
-#[cfg(all(feature = "rts", feature = "telis"))]
 trait Programmer: fmt::Debug + Send + Sync + 'static {
     fn program(&self, channel: Channel) -> BoxFuture<'_, Result<()>>;
 }
 
-#[cfg(all(feature = "rts", feature = "telis"))]
 impl Programmer for TelisProgrammer {
     fn program(&self, channel: Channel) -> BoxFuture<'_, Result<()>> {
         Box::pin(async move { TelisProgrammer::program(self, channel).await })
@@ -351,7 +267,6 @@ mod tests {
         assert_eq!(infer_position(Command::Prog), None);
     }
 
-    #[cfg(all(feature = "rts", feature = "telis"))]
     #[tokio::test]
     async fn rts_prog_runs_telis_programmer_before_pairing_waveform() {
         use crate::rts::frame::RtsCommand;

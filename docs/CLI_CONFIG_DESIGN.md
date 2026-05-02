@@ -54,7 +54,7 @@ somfy logs --debug
 
 somfy config path
 somfy config show
-somfy config validate
+somfy config set-driver <fake|telis|rts>
 ```
 
 Keep lifecycle commands at the top level because they are already common,
@@ -123,11 +123,15 @@ Add a `config` domain for inspectability:
 ```bash
 somfy config path
 somfy config show
-somfy config validate
+somfy config set-driver <fake|telis|rts>
 ```
 
-`config show` should print the resolved configuration by default. The raw file
-can be inspected directly when needed.
+`config show` prints the resolved configuration by default; the raw file can be
+inspected directly when needed. `set-driver` rewrites the config, runs any
+new-driver prereqs (e.g. `pigpiod` for `rts`), and restarts the service in one
+shot. Validation is implicit: every code path that loads the config runs it
+through `config::validate`, so a separate `config validate` subcommand is not
+needed.
 
 Do not add a public `rts` command group. RTS is a driver implementation, not a
 top-level operator domain.

@@ -78,7 +78,6 @@ impl TelisDriver {
         }
     }
 
-    #[cfg(feature = "rts")]
     pub(crate) async fn program(&self, channel: Channel) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
         self.select_to(channel, true).await?;
@@ -137,13 +136,11 @@ impl TelisDriver {
     }
 }
 
-#[cfg(feature = "rts")]
 #[derive(Clone, Debug)]
 pub(crate) struct TelisProgrammer {
     options: TelisOptions,
 }
 
-#[cfg(feature = "rts")]
 impl TelisProgrammer {
     pub(crate) fn new(options: TelisOptions) -> Self {
         Self { options }
@@ -191,7 +188,7 @@ impl TelisTransport for GpioTelisTransport {
     }
 }
 
-#[cfg(all(test, feature = "rts"))]
+#[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;

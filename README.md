@@ -29,9 +29,8 @@ curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh 
 ```
 
 The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Persistent hardware choices live in `/etc/somfy/config.toml`; see [Configuration](docs/HARDWARE.md#configuration).
-Pi builds default to the wired `telis` driver when no config file exists. For
-hardware-free testing on the Pi, create `/etc/somfy/config.toml` with
-`driver = "fake"` before installing.
+Pi builds default to the wired `telis` driver when no config file exists. Switch
+drivers any time with `sudo somfy config set-driver <fake|telis|rts>`.
 
 HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
@@ -57,12 +56,11 @@ Built-in defaults are target-aware: Raspberry Pi Linux builds select `telis`;
 local development and CI-style non-Pi builds select `fake`. A config file always
 wins over the built-in default.
 
-Switch drivers by editing `/etc/somfy/config.toml`, then refresh and restart the service:
+Switch drivers in one command — this rewrites `/etc/somfy/config.toml`, runs any
+new-driver prereqs (e.g. `pigpiod` setup for `rts`), and restarts the service:
 
 ```bash
-sudo somfy config validate
-sudo somfy install
-sudo systemctl restart somfy
+sudo somfy config set-driver rts
 sudo somfy doctor
 ```
 
@@ -70,11 +68,13 @@ sudo somfy doctor
 
 The RTS driver transmits Somfy RTS frames directly through a CC1101 module. Each channel (`L1`–`L4` + `ALL`) is a separate virtual remote with its own 24-bit ID and rolling code, persisted to `/var/lib/somfy/rts.json`.
 
-Enable SPI on the Pi, select RTS in `/etc/somfy/config.toml`, then install. When the resolved config selects RTS, `somfy install` installs `pigpio`, configures `pigpiod` to listen on localhost only, enables `pigpiod`, and refreshes the `somfy` unit.
+Enable SPI on the Pi, then switch to the RTS driver. `somfy config set-driver rts`
+installs `pigpio`, configures `pigpiod` to listen on localhost only, enables it,
+and restarts `somfy`.
 
 ```bash
-sudo raspi-config            # enable SPI
-sudo somfy install
+sudo raspi-config                  # enable SPI
+sudo somfy config set-driver rts
 sudo somfy doctor
 ```
 

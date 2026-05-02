@@ -7,8 +7,9 @@ Pi-controlled RF transmission. The Pi acts as a new virtual Somfy RTS remote
 paired with each motor or group.
 
 The wired Telis driver remains supported. Only one driver is active per
-process, selected at startup by runtime configuration and gated by compile-time
-features.
+process, selected at startup by runtime configuration. All drivers are always
+compiled into the binary; switching is purely a config change (followed by a
+restart, which `somfy config set-driver` handles in one shot).
 
 ## Driver Model
 
@@ -131,26 +132,16 @@ Use domain names in external JSON.
 HomeKit should use `Channel` and `Command` internally. Its external HomeKit
 accessory shape does not need to change.
 
-## Features
+## Compilation
 
-Compile-time features describe what the binary can do. Runtime configuration
-selects the active driver from the compiled set.
-
-```toml
-[features]
-default = ["fake", "telis", "rts"]
-fake = []
-telis = ["dep:gpiocdev"]
-rts = ["dep:spidev"]
-```
-
-The current `hw` feature should be replaced with explicit driver names. If
-runtime config selects a driver that was not compiled in, startup should fail
-clearly:
-
-```text
-driver "rts" was selected, but this binary was built without the "rts" feature
-```
+There are no Cargo feature gates. All three drivers (`fake`, `telis`, `rts`)
+are unconditionally compiled into the binary; selection is purely a runtime
+concern. The Linux-only deps (`gpiocdev`, `spidev`) live under
+`[target.'cfg(target_os = "linux")'.dependencies]`, so non-Linux dev builds
+swap real hardware code for stubs via `cfg(target_os = "linux")`. Earlier
+revisions had per-driver Cargo features; they were dropped because the savings
+(~50–100 KB on a 3.9 MB binary) did not justify ~60 conditional-compile sites
+across the source tree.
 
 ## Runtime Configuration
 

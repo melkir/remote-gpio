@@ -414,7 +414,6 @@ fn user_in_group(user: &str, group: &str) -> Result<bool> {
     Ok(u.gid == g.gid)
 }
 
-#[cfg(feature = "telis")]
 fn gpio_chip_check() -> Check {
     match std::fs::OpenOptions::new()
         .read(true)
@@ -565,16 +564,6 @@ fn rts_state_file_check() -> Check {
             status: Status::Blocking,
             detail: Some(format!("{display}: {e}")),
         },
-    }
-}
-
-#[cfg(not(feature = "telis"))]
-fn gpio_chip_check() -> Check {
-    Check {
-        id: "gpio_chip_accessible",
-        label: "GPIO",
-        status: Status::Skipped,
-        detail: Some("telis driver feature not enabled".into()),
     }
 }
 

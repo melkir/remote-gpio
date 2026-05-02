@@ -276,7 +276,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "fake")]
     #[tokio::test]
     async fn dispatch_with_channel_selects_then_executes() {
         let remote_control = Arc::new(

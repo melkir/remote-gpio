@@ -26,7 +26,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 - `src/config.rs` — TOML config (`/etc/somfy/config.toml`): selects the driver and supplies its options. `validate()` is the single gate.
 - `src/server.rs` — Axum routes (`/events`, `/ws`, `/command`, `/channel`, embedded static files).
 - `src/remote.rs` — `RemoteControl` state engine; broadcasts the selected `Channel` via `watch::channel` (the legacy `led` payload was removed).
-- `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (each behind its Cargo feature). When the `rts` driver is selected and `telis.gpio.prog` is set, `TelisProgrammer` handles `Prog` via the wired Telis remote.
+- `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (all three are always compiled into the binary; selection is purely runtime via config). When the `rts` driver is selected and `telis.gpio.prog` is set, `TelisProgrammer` handles `Prog` via the wired Telis remote.
 - `src/rts/` — RTS protocol: `frame` (encode + obfuscation), `waveform` (pulse builder, fixed 4 frames, patent-derived 1280µs bit period), `state` (per-channel rolling code, atomic write-ahead reserve at `$STATE_DIRECTORY/rts.json`), `pigpio` (TCP client to `pigpiod`, loopback-only), `cc1101` (SPI driver for OOK @ 433.42 MHz).
 - `src/gpio.rs` — `gpiocdev` wrapper used by the Telis driver. Output pulses are 60ms active-low; input debounce uses a 300ms edge-count window. Hosts the shared `MAX_BCM_GPIO` constant.
 - `build.rs` + `vergen` — embeds git SHA and build date at compile time.
@@ -36,7 +36,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 ## Key Patterns
 
 - **Error handling:** `anyhow::Result<T>` throughout the Rust code.
-- **Driver seam:** all hardware lives behind `CommandRouter`. The HTTP/SSE/WS/HomeKit surfaces never branch on driver kind — they call `execute` / `execute_on`. New transports go through `CommandRouter`; new hardware goes behind a new `DriverExecutor` variant gated by a Cargo feature.
+- **Driver seam:** all hardware lives behind `CommandRouter`. The HTTP/SSE/WS/HomeKit surfaces never branch on driver kind — they call `execute` / `execute_on`. New transports go through `CommandRouter`; new hardware goes behind a new `DriverExecutor` variant. There are no Cargo feature gates — every driver is always compiled in, and `cfg(target_os = "linux")` is the only platform gate (used to swap real hardware code for stubs on macOS dev builds).
 - **Channel, not LED, on the wire:** SSE/WS payloads and the `/command` POST identify targets by `channel` (`L1`–`L4` / `ALL`). Any reference to `led` is legacy and rejected by the server.
 - **RTS rolling-code safety:** `RtsStateStore` reserves a block of codes ahead of transmit and only commits on success; the file is rewritten via tmp + atomic rename + fsync. A crash mid-transmit may burn up to `DEFAULT_RESERVE_SIZE` codes per channel — that's intentional and within the receiver window.
 - **pigpiod is loopback-only, hard.** `RtsDriver::new` and the doctor probe both reject non-loopback `pigpiod_addr` (`require_loopback`). pigpiod is unauthenticated; treat any non-loopback config as a security bug, not a preference.

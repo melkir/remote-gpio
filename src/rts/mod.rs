@@ -1,4 +1,3 @@
-#[cfg(feature = "rts")]
 pub mod cc1101;
 pub mod frame;
 pub mod pigpio;

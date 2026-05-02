@@ -20,11 +20,11 @@ HTTP/SSE/HomeKit surface is identical.
 ## Drivers
 
 `CommandRouter` (`src/driver/mod.rs`) is the single seam between the UI layer
-and the hardware. Three implementations live behind compile-time features and a
-runtime config value:
+and the hardware. Three implementations are always compiled in; selection is
+purely runtime via the config file:
 
-| Driver | Module                 | What it does                                                                                   |
-| ------- | ---------------------- | ---------------------------------------------------------------------------------------------- |
+| Driver  | Module                | What it does                                                                                   |
+| ------- | --------------------- | ---------------------------------------------------------------------------------------------- |
 | `fake`  | `src/driver/fake.rs`  | Records commands in-memory; default for local dev, tests, and CI-style non-Pi builds.          |
 | `telis` | `src/driver/telis.rs` | Drives the wired Telis 4 remote: GPIO output pulses + LED edge debouncing for selection.       |
 | `rts`   | `src/driver/rts.rs`   | Acts as a virtual RTS remote: per-channel rolling codes + CC1101 OOK transmission via pigpiod. |
@@ -35,10 +35,11 @@ All three implement the same shape:
 - `execute_on(channel, command)` for HomeKit's per-accessory commands; never mutates selection on RTS, may move the physical selector on Telis.
 - `selected_channel()` / `subscribe_selected_channel()` for the live selection watch channel.
 
-Live driver switching is intentionally unsupported. Pick one in
-`/etc/somfy/config.toml`; the systemd unit points at the config file and the
-config carries hardware choices.
-When that config file is absent, Raspberry Pi Linux builds default to `telis`;
+Live driver switching is unsupported within a running process — the driver is
+constructed once at startup. Operators switch drivers by running
+`sudo somfy config set-driver <kind>`, which rewrites `/etc/somfy/config.toml`,
+runs any new-driver prereqs (e.g. `pigpiod` for `rts`), and restarts the unit.
+When the config file is absent, Raspberry Pi Linux builds default to `telis`;
 other targets default to `fake`.
 
 ## Module Map
@@ -46,9 +47,9 @@ other targets default to `fake`.
 | Area           | Files            | Responsibility                                                                                 |
 | -------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
 | Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                       |
-| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                    |
-| Drivers       | `src/driver/*`  | `fake`, `telis`, `rts` implementations of the active-driver trait.                            |
-| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                  |
+| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                     |
+| Drivers        | `src/driver/*`   | `fake`, `telis`, `rts` implementations of the active-driver trait.                             |
+| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                   |
 | RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
 | HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
 | HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.   |

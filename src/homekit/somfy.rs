@@ -98,7 +98,7 @@ impl SomfyHapApp {
         }
     }
 
-    #[cfg(all(test, feature = "fake"))]
+    #[cfg(test)]
     fn new_with_positions(remote_control: Arc<RemoteControl>, positions: HashMap<u64, u8>) -> Self {
         Self {
             remote_control,
@@ -713,7 +713,6 @@ mod tests {
         assert!(grouped_all_target(&targets).is_none());
     }
 
-    #[cfg(feature = "fake")]
     #[tokio::test]
     async fn full_individual_write_batch_sends_one_all_driver_command() {
         let remote_control = Arc::new(
@@ -748,7 +747,6 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "fake")]
     #[tokio::test]
     async fn cache_hit_does_not_break_full_batch_coalesce() {
         let remote_control = Arc::new(
