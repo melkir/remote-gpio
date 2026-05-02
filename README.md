@@ -1,4 +1,4 @@
-## RemoteGPIO
+# RemoteGPIO
 
 Self-hosted Somfy Telis 4 controller for Raspberry Pi with native HomeKit, a Preact PWA, and live SSE/WebSocket sync.
 
@@ -28,9 +28,7 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Persistent hardware choices live in `/etc/somfy/config.toml`; see [Configuration](docs/HARDWARE.md#configuration).
-Pi builds default to the wired `telis` driver when no config file exists. Switch
-drivers any time with `sudo somfy config set-driver <fake|telis|rts>`.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Persistent hardware choices live in `/etc/somfy/config.toml` (see [Configuration](docs/HARDWARE.md#configuration)); the default driver is `telis`.
 
 HomeKit pairing is built in — see [HomeKit](#homekit) below.
 
@@ -44,62 +42,22 @@ The upgrade command pulls the latest stable release, swaps the binary, refreshes
 
 ### Drivers
 
-`somfy` ships three drivers, selected by the resolved config file:
+`somfy` ships three drivers, selected at runtime by `/etc/somfy/config.toml`:
 
-| Driver | Hardware                  | Use case                                               |
+| Driver  | Hardware                  | Use case                                               |
 | ------- | ------------------------- | ------------------------------------------------------ |
 | `fake`  | none                      | Local dev — logs commands, no hardware.                |
 | `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote. |
 | `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.    |
 
-Built-in defaults are target-aware: Raspberry Pi Linux builds select `telis`;
-local development and CI-style non-Pi builds select `fake`. A config file always
-wins over the built-in default.
-
-Switch drivers in one command — this rewrites `/etc/somfy/config.toml`, runs any
-new-driver prereqs (e.g. `pigpiod` setup for `rts`), and restarts the service:
+Switch driver in one command — rewrites the config, runs any new-driver prereqs (e.g. `pigpiod` for `rts`), and restarts the service:
 
 ```bash
 sudo somfy config set-driver rts
 sudo somfy doctor
 ```
 
-#### RTS driver
-
-The RTS driver transmits Somfy RTS frames directly through a CC1101 module. Each channel (`L1`–`L4` + `ALL`) is a separate virtual remote with its own 24-bit ID and rolling code, persisted to `/var/lib/somfy/rts.json`.
-
-Enable SPI on the Pi, then switch to the RTS driver. `somfy config set-driver rts`
-installs `pigpio`, configures `pigpiod` to listen on localhost only, enables it,
-and restarts `somfy`.
-
-```bash
-sudo raspi-config                  # enable SPI
-sudo somfy config set-driver rts
-sudo somfy doctor
-```
-
-Pair each channel once (motor in programming mode, then):
-
-```bash
-sudo somfy remote prog L1
-sudo somfy remote up L1
-sudo somfy remote down L1
-sudo somfy remote stop L1
-# repeat for L2, L3, L4, ALL as needed
-```
-
-If the original Telis remote's Prog button is wired to the Pi, configure
-`telis.gpio.prog`. `somfy remote prog <channel>` then presses the wired Telis
-Prog button first and sends the matching RTS virtual remote's Prog command. Run
-the same command again to remove that virtual remote from the motor.
-
-Inspect driver behavior through service logs:
-
-```bash
-somfy logs --debug
-```
-
-Wiring and register details: [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver).
+For RTS wiring, CC1101 register notes, pairing, and the Telis-Prog assist flow, see [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver). Driver behavior shows up in service logs via `somfy logs --debug`.
 
 ### API
 
@@ -141,7 +99,6 @@ somfy homekit --help
 ```
 
 See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
-For a newcomer-oriented walkthrough of the whole codebase, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Versioning
 
@@ -159,6 +116,8 @@ CI never touches the Pi. Deployment is a pull from the device over SSH.
 
 ### More
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — codebase tour, data flow, concurrency model, and major tradeoffs.
-- [docs/HARDWARE.md](docs/HARDWARE.md) — wiring, GPIO timing, concurrency model, and the "why" behind the design.
-- [CLAUDE.md](CLAUDE.md) — build commands, repo layout, and patterns worth knowing before editing.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — codebase tour, drivers, data flow.
+- [docs/HARDWARE.md](docs/HARDWARE.md) — wiring, GPIO timing, RTS bring-up.
+- [docs/RTS_DRIVER.md](docs/RTS_DRIVER.md) — RTS wire format, waveform, pigpiod commands.
+- [docs/HAP.md](docs/HAP.md) — HomeKit accessory protocol details.
+- [CLAUDE.md](CLAUDE.md) — repo layout and patterns for code changes.
