@@ -6,40 +6,62 @@ TARGET_ARCH="armv7l"
 INSTALL_ARGS=()
 GLOBAL_ARGS=()
 
+print_logo() {
+    cat <<'EOF'
+
+   ┌─────────────────────────────┐
+   │   somfy · remote-gpio       │
+   │   Pi-driven Somfy blinds    │
+   └─────────────────────────────┘
+
+EOF
+}
+
+usage() {
+    cat <<EOF
+Usage: install.sh [--config PATH] [--user USER]
+
+  --config PATH    config file path (forwarded to somfy)
+  --user USER      service user (defaults to \$SUDO_USER)
+
+After install, switch driver with:  sudo somfy config set-driver <fake|telis|rts>
+EOF
+}
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        -h|--help)
-            echo "Usage: install.sh [--config PATH] [--user USER]"
-            exit 0
-            ;;
+        -h|--help) usage; exit 0 ;;
         --config)
-            if [[ $# -lt 2 ]]; then
-                echo "error: --config requires a value" >&2
-                exit 1
-            fi
-            GLOBAL_ARGS+=("--config" "$2")
-            shift 2
-            ;;
+            [[ $# -ge 2 ]] || { echo "error: --config requires a value" >&2; exit 1; }
+            GLOBAL_ARGS+=("--config" "$2"); shift 2 ;;
         --user)
-            if [[ $# -lt 2 ]]; then
-                echo "error: --user requires a value" >&2
-                exit 1
-            fi
-            INSTALL_ARGS+=("--user" "$2")
-            shift 2
-            ;;
-        *) echo "error: unknown flag: $1" >&2; exit 1 ;;
+            [[ $# -ge 2 ]] || { echo "error: --user requires a value" >&2; exit 1; }
+            INSTALL_ARGS+=("--user" "$2"); shift 2 ;;
+        *) echo "error: unknown flag: $1" >&2; usage >&2; exit 1 ;;
     esac
 done
 
+print_logo
+
+# Batch preflight: collect all problems, report together.
+errors=()
+
 arch="$(uname -m)"
 if [[ "$arch" != "$TARGET_ARCH" ]]; then
-    echo "error: somfy only ships for $TARGET_ARCH (Raspberry Pi armv7). Detected: $arch" >&2
-    exit 1
+    errors+=("somfy only ships for $TARGET_ARCH (Raspberry Pi armv7). Detected: $arch")
 fi
 
 if [[ $EUID -ne 0 ]]; then
-    echo "error: run with sudo" >&2
+    errors+=("must be run as root (use sudo)")
+fi
+
+for cmd in curl sha256sum install; do
+    command -v "$cmd" >/dev/null 2>&1 || errors+=("required command not found: $cmd")
+done
+
+if (( ${#errors[@]} > 0 )); then
+    echo "Preflight failed:" >&2
+    for e in "${errors[@]}"; do echo "  - $e" >&2; done
     exit 1
 fi
 
@@ -92,6 +114,10 @@ echo "Running somfy install..."
 /usr/local/bin/somfy "${GLOBAL_ARGS[@]}" install "${INSTALL_ARGS[@]}"
 
 cat <<EOF
+
+Switch driver (fake/telis/rts):
+
+  sudo somfy config set-driver rts
 
 HomeKit pairing: the somfy binary advertises itself natively over mDNS.
 Show the pairing QR code and setup code:

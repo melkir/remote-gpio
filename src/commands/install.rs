@@ -81,7 +81,7 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
     Ok(())
 }
 
-fn prepare_rts_prereqs() -> Result<()> {
+pub(crate) fn prepare_rts_prereqs() -> Result<()> {
     ensure_pigpio_installed()?;
     configure_pigpiod_localhost()?;
     Ok(())
@@ -180,7 +180,7 @@ fn resolve_service_user(user_override: Option<String>) -> Result<String> {
     bail!("cannot determine service user; pass --user <pi-user> when invoking directly as root");
 }
 
-fn atomic_write(path: &Path, contents: &str) -> Result<()> {
+pub(crate) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     let parent = path.parent().unwrap_or(Path::new("/"));
     let filename = path
         .file_name()

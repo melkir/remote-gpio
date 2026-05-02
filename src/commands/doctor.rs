@@ -62,7 +62,11 @@ impl DoctorReport {
         let visible: Vec<&Check> = self
             .checks
             .iter()
-            .filter(|c| c.status != Status::Skipped && c.id != "deployed_version")
+            .filter(|c| {
+                c.status != Status::Skipped
+                    && c.id != "deployed_version"
+                    && c.id != "configured_driver"
+            })
             .collect();
         let label_width = visible.iter().map(|c| c.label.len()).max().unwrap_or(10);
         for check in &visible {
@@ -74,7 +78,7 @@ impl DoctorReport {
                 Status::Skipped => "[-]",
             };
             match &check.detail {
-                Some(d) if check.status != Status::Ok || check.id == "configured_driver" => {
+                Some(d) if check.status != Status::Ok => {
                     println!(
                         "{marker} {:<width$} ({})",
                         check.label,
@@ -304,7 +308,6 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
         status: Status::Ok,
         detail: Some(configured_driver.to_string()),
     });
-    checks.push(compiled_driver_check(configured_driver));
     match configured_driver {
         DriverKind::Telis => checks.push(gpio_chip_check()),
         DriverKind::Rts => {
@@ -428,30 +431,6 @@ fn gpio_chip_check() -> Check {
             label: "GPIO",
             status: Status::Blocking,
             detail: Some(format!("/dev/gpiochip0: {e}")),
-        },
-    }
-}
-
-fn compiled_driver_check(driver: DriverKind) -> Check {
-    let compiled = match driver {
-        DriverKind::Fake => cfg!(feature = "fake"),
-        DriverKind::Telis => cfg!(feature = "telis"),
-        DriverKind::Rts => cfg!(feature = "rts"),
-    };
-    Check {
-        id: "driver_compiled",
-        label: "Driver feature",
-        status: if compiled {
-            Status::Ok
-        } else {
-            Status::Blocking
-        },
-        detail: if compiled {
-            None
-        } else {
-            Some(format!(
-                "driver \"{driver}\" selected but this binary was built without the \"{driver}\" feature"
-            ))
         },
     }
 }

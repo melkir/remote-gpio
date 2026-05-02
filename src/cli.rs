@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
+use crate::driver::DriverKind;
 use crate::gpio::Channel;
 
 #[derive(Parser, Debug)]
@@ -138,6 +139,9 @@ pub enum ConfigCommand {
     Path,
     /// Print the resolved configuration
     Show,
-    /// Validate the resolved configuration
-    Validate,
+    /// Switch the active driver, restart the service, and run any new-driver prereqs
+    SetDriver {
+        #[arg(value_enum)]
+        kind: DriverKind,
+    },
 }

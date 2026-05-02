@@ -45,9 +45,9 @@ async fn main() -> Result<()> {
                 let resolved_config = somfy::config::resolve(config_path)?;
                 somfy::commands::config::show(&resolved_config)
             }
-            somfy::cli::ConfigCommand::Validate => {
+            somfy::cli::ConfigCommand::SetDriver { kind } => {
                 let resolved_config = somfy::config::resolve(config_path)?;
-                somfy::commands::config::validate(&resolved_config)
+                somfy::commands::config::set_driver(&resolved_config, kind)
             }
         },
     }
