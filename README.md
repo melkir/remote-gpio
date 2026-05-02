@@ -54,7 +54,7 @@ Switch driver in one command — rewrites the config, runs any new-driver prereq
 
 ```bash
 sudo somfy config set-driver rts
-sudo somfy doctor
+somfy doctor
 ```
 
 For RTS wiring, CC1101 register notes, and pairing, see [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver). Driver behavior shows up in service logs via `somfy logs --debug`.
