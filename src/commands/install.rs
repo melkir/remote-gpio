@@ -85,7 +85,8 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
     }
 
     prepare_state_dir(&service_user_info)?;
-    systemd::systemctl(&["enable", "--now", "somfy"])?;
+    systemd::systemctl(&["enable", "somfy"])?;
+    systemd::systemctl(&["restart", "somfy"])?;
     println!("somfy installed as {service_user}, service enabled");
     Ok(())
 }
