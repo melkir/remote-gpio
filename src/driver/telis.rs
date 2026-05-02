@@ -78,12 +78,6 @@ impl TelisDriver {
         }
     }
 
-    pub(crate) async fn program(&self, channel: Channel) -> Result<()> {
-        let _guard = self.execute_lock.lock().await;
-        self.select_to(channel, true).await?;
-        self.press_prog(channel).await
-    }
-
     pub(super) fn selected_channel(&self) -> Channel {
         *self.selected_rx.borrow()
     }
@@ -133,22 +127,6 @@ impl TelisDriver {
         tokio::time::sleep(RTS_PROG_DELAY).await;
         tracing::info!(%channel, prog_gpio, "Telis Prog press complete");
         Ok(())
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct TelisProgrammer {
-    options: TelisOptions,
-}
-
-impl TelisProgrammer {
-    pub(crate) fn new(options: TelisOptions) -> Self {
-        Self { options }
-    }
-
-    pub(crate) async fn program(&self, channel: Channel) -> Result<()> {
-        let telis = TelisDriver::new(self.options.clone()).await?;
-        telis.program(channel).await
     }
 }
 
@@ -259,7 +237,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn program_selects_target_channel_then_presses_prog_gpio() {
+    async fn execute_on_prog_selects_target_channel_then_presses_prog_gpio() {
         let transport = Arc::new(RecordingTransport::new(vec![
             Channel::L1,
             Channel::L2,
@@ -269,7 +247,7 @@ mod tests {
             .await
             .unwrap();
 
-        driver.program(Channel::L3).await.unwrap();
+        driver.execute_on(Channel::L3, Command::Prog).await.unwrap();
 
         assert_eq!(
             transport.events(),

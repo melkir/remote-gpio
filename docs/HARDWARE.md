@@ -20,7 +20,7 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
 | 35     | GPIO19 | Output    | STOP        | Stop movement         |
 | 33     | GPIO13 | Output    | DOWN        | Lower blinds          |
 | 31     | GPIO6  | Output    | SELECT      | Select next blind     |
-| 29     | GPIO5  | Output    | PROG        | Optional RTS sync     |
+| 29     | GPIO5  | Output    | PROG        | Optional Prog button  |
 | 40     | GPIO21 | Input     | LED1        | Selection indicator 1 |
 | 38     | GPIO20 | Input     | LED2        | Selection indicator 2 |
 | 36     | GPIO16 | Input     | LED3        | Selection indicator 3 |
@@ -163,11 +163,10 @@ sudo somfy remote prog L1
 sudo somfy remote up L1   # confirm direction
 ```
 
-If the Telis remote's Prog button is also wired to the Pi, configure
-`telis.gpio.prog`. `somfy remote prog <channel>` then selects the requested
-Telis channel, holds Prog, waits briefly, and transmits the RTS Prog frame for
-the same virtual channel. Run it again to remove that virtual remote from the
-motor.
+`somfy remote prog <channel>` sends the RTS Prog frame for that virtual channel.
+Run it again to remove that virtual remote from the motor. The command does not
+press a wired Telis Prog button; put the motor in programming mode with an
+already-paired remote or the motor's physical Prog control before sending it.
 
 ```bash
 sudo somfy remote prog L1

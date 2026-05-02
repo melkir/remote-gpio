@@ -57,7 +57,7 @@ sudo somfy config set-driver rts
 sudo somfy doctor
 ```
 
-For RTS wiring, CC1101 register notes, pairing, and the Telis-Prog assist flow, see [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver). Driver behavior shows up in service logs via `somfy logs --debug`.
+For RTS wiring, CC1101 register notes, and pairing, see [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver). Driver behavior shows up in service logs via `somfy logs --debug`.
 
 ### API
 
