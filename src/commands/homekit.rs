@@ -2,6 +2,7 @@ use anyhow::{bail, Context, Result};
 use serde::Serialize;
 
 use crate::cli::HomekitCommand;
+use crate::config::ResolvedConfig;
 use crate::hap::qr;
 use crate::hap::runtime::HapStore;
 use crate::hap::state::display_setup_code;
@@ -27,16 +28,40 @@ struct PairingReport {
     admin: bool,
 }
 
-pub fn run(command: HomekitCommand) -> Result<()> {
+#[derive(Serialize)]
+struct DisabledStatusReport {
+    enabled: bool,
+    config_path: String,
+}
+
+pub fn run(command: HomekitCommand, resolved_config: &ResolvedConfig) -> Result<()> {
     match command {
-        HomekitCommand::Status { json, uri_only } => status(json, uri_only),
+        HomekitCommand::Status { json, uri_only } => status(json, uri_only, resolved_config),
         HomekitCommand::Reset => reset(),
         HomekitCommand::Pairings { json } => pairings(json),
         HomekitCommand::Unpair { identifier } => unpair(&identifier),
     }
 }
 
-fn status(json: bool, uri_only: bool) -> Result<()> {
+fn status(json: bool, uri_only: bool, resolved_config: &ResolvedConfig) -> Result<()> {
+    if !resolved_config.config.homekit {
+        if uri_only {
+            bail!("HomeKit is disabled in {}", resolved_config.path.display());
+        }
+        if json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&DisabledStatusReport {
+                    enabled: false,
+                    config_path: resolved_config.path.display().to_string(),
+                })?
+            );
+        } else {
+            println!("HomeKit is disabled in {}", resolved_config.path.display());
+        }
+        return Ok(());
+    }
+
     let store = homekit::store();
     let state = store.load_or_init().with_context(|| {
         format!(
