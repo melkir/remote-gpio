@@ -90,15 +90,15 @@ The RTS driver skips the wired remote and transmits Somfy RTS frames directly at
 
 ### Wiring
 
-| CC1101 | Raspberry Pi                           | Notes                                    |
-| ------ | -------------------------------------- | ---------------------------------------- |
-| VCC    | 3.3V only                              | The CC1101 is **not** 5V tolerant.       |
-| GND    | GND                                    |                                          |
-| SCLK   | SPI0 SCLK / BCM11                      |                                          |
-| MOSI   | SPI0 MOSI / BCM10                      |                                          |
-| MISO   | SPI0 MISO / BCM9                       |                                          |
-| CSN    | SPI0 CE0 / BCM8 (`/dev/spidev0.0`)     |                                          |
-| GDO0   | BCM18                                  | Drives the OOK data line in async mode. |
+| CC1101 | Raspberry Pi                       | Notes                                   |
+| ------ | ---------------------------------- | --------------------------------------- |
+| VCC    | 3.3V only                          | The CC1101 is **not** 5V tolerant.      |
+| GND    | GND                                |                                         |
+| SCLK   | SPI0 SCLK / BCM11                  |                                         |
+| MOSI   | SPI0 MOSI / BCM10                  |                                         |
+| MISO   | SPI0 MISO / BCM9                   |                                         |
+| CSN    | SPI0 CE0 / BCM8 (`/dev/spidev0.0`) |                                         |
+| GDO0   | BCM18                              | Drives the OOK data line in async mode. |
 
 A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
 
@@ -184,74 +184,43 @@ The CC1101 register set in `src/rts/cc1101.rs` is a starting point and has **not
 3. With an SDR (rtl-sdr, HackRF) tuned to 433.42 MHz, verify carrier presence and absence between frames.
 4. If pairing fails, capture frames with an existing real Somfy remote and compare obfuscated bytes — the encoder has golden tests, but key-byte values can vary by motor generation.
 
-## Architecture
-
-### Data Flow
+## Data Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│                     FRONTEND (Preact/Vite)                  │
-│  EventSource connection with browser-managed reconnect      │
-│  Displays LED indicators & control buttons                  │
-│  Haptic feedback on interactions                            │
+│                     FRONTEND (Preact / Vite PWA)            │
+│  EventSource (browser-managed reconnect)                    │
+│  Channel indicators (L1–L4 / ALL) + Up / Stop / Down        │
 └──────────────────────────┬──────────────────────────────────┘
                            │
             SSE (GET /events) + HTTP (POST /command)
                            │
 ┌──────────────────────────▼──────────────────────────────────┐
-│                  BACKEND (Axum/Tokio)                       │
+│                  BACKEND (Axum / Tokio)                     │
 │                                                             │
 │  Routes:                                                    │
-│  ├─ GET /channel  → Current channel selection               │
-│  ├─ POST /command → Execute button commands                 │
-│  ├─ GET /events   → Server-sent channel selection events    │
-│  ├─ GET /ws       → WebSocket upgrade                       │
-│  └─ /*            → Static files from dist/                 │
+│  ├─ GET  /channel  → currently-selected channel (text)      │
+│  ├─ POST /command  → execute up/down/stop/select/prog       │
+│  ├─ GET  /events   → SSE: selection updates                 │
+│  ├─ GET  /ws       → WebSocket: bidirectional API           │
+│  └─ /*             → embedded Preact PWA                    │
 │                                                             │
-│  RemoteControl:                                             │
-│  └─ watch::channel broadcasts LED state to all clients      │
+│  RemoteControl → CommandRouter (fake / telis / rts)         │
+│   broadcasts the selected Channel via watch::channel        │
 └──────────────────────────┬──────────────────────────────────┘
                            │
-                    gpiocdev (Linux GPIO char device)
-                           │
-┌──────────────────────────▼──────────────────────────────────┐
-│              HARDWARE (Raspberry Pi GPIO)                   │
-│                                                             │
-│  Output pins → Button presses → Somfy Telis 4               │
-│  Input pins  ← LED feedback   ← Somfy Telis 4               │
-└─────────────────────────────────────────────────────────────┘
+              ┌────────────┴────────────┐
+              │                         │
+       gpiocdev (Linux)            spidev + pigpiod
+              │                         │
+┌─────────────▼────────────┐ ┌──────────▼──────────────────────┐
+│ Telis 4 wired remote     │ │ CC1101 OOK @ 433.42 MHz         │
+│ Outputs: Up/Stop/Down/   │ │ Pi drives GDO0 with the full    │
+│   Select/Prog (60 ms     │ │ Somfy pulse train (Manchester,  │
+│   active-low pulses)     │ │ 640 µs half-symbols, 4 frames). │
+│ Inputs: LED1–4 with      │ │ Per-channel virtual remote ID + │
+│   300 ms edge debounce   │ │ rolling code in rts.json.       │
+└──────────────────────────┘ └─────────────────────────────────┘
 ```
 
-### Concurrency Model
-
-The SSE endpoint and WebSocket handler both subscribe to the same
-`watch::channel`, which sends the current LED first and then every selection
-change. The Preact PWA uses SSE plus `POST /command`; WebSocket remains available
-for bidirectional clients. See [ARCHITECTURE.md](ARCHITECTURE.md) for the
-transport-level details.
-
-### State Engine: `RemoteControl`
-
-`RemoteControl` is the central coordinator:
-
-1. **Startup:** presses SELECT, reads LEDs, seeds the `watch::channel`.
-2. **Methods:** `select()`, `up()`, `down()`, `stop()` trigger GPIO.
-3. **Broadcasts:** LED changes propagate to all SSE and WebSocket clients.
-
-## Frontend
-
-The Preact PWA features:
-
-- **Connection status bar:** color-coded (connecting / connected / error).
-- **Control buttons:** large circular Up, Stop, Down.
-- **LED indicators:** clickable dots for L1–L4; center button for SELECT.
-- **Long-press:** sends `ALL` intent for group mode.
-- **Haptics:** 100ms on press, 200ms on finish.
-- **Auto-reconnect:** browser-managed `EventSource` reconnect.
-
-## Why This Design
-
-- **Single source of truth:** the Pi reads real GPIO state and broadcasts — every UI stays consistent.
-- **Low latency:** SSE and WebSocket subscribers get immediate LED feedback.
-- **Non-blocking:** async GPIO timing doesn't stall the runtime.
-- **Small footprint:** easy to audit, extend, or port to different hardware.
+For the protocol-level RTS reference (frame format, checksum, obfuscation, waveform timings, pigpiod commands), see [RTS_DRIVER.md](RTS_DRIVER.md).
