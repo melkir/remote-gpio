@@ -23,7 +23,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 ## Repo Layout
 
 - `src/cli.rs` — clap subcommands. Default is `serve`. Per-command logic under `src/commands/`.
-- `src/config.rs` — TOML config (`/etc/somfy/config.toml`): selects the driver and supplies its options. `validate()` is the single gate.
+- `src/config.rs` — TOML config (`/etc/somfy/config.toml`): selects the driver and supplies shared GPIO, Telis, and RTS options. `validate()` is the single gate.
 - `src/server.rs` — Axum routes (`/events`, `/ws`, `/command`, `/channel`, embedded static files).
 - `src/remote.rs` — `RemoteControl` state engine; broadcasts the selected `Channel` via `watch::channel` (the legacy `led` payload was removed).
 - `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (all three are always compiled into the binary; selection is purely runtime via config). When the `rts` driver is selected and `telis.gpio.prog` is set, `TelisProgrammer` handles `Prog` via the wired Telis remote.
@@ -39,7 +39,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 - **Driver seam:** all hardware lives behind `CommandRouter`. The HTTP/SSE/WS/HomeKit surfaces never branch on driver kind — they call `execute` / `execute_on`. New transports go through `CommandRouter`; new hardware goes behind a new `DriverExecutor` variant. There are no Cargo feature gates — every driver is always compiled in, and `cfg(target_os = "linux")` is the only platform gate (used to swap real hardware code for stubs on macOS dev builds).
 - **Channel, not LED, on the wire:** SSE/WS payloads and the `/command` POST identify targets by `channel` (`L1`–`L4` / `ALL`). Any reference to `led` is legacy and rejected by the server.
 - **RTS rolling-code safety:** `RtsStateStore` reserves a block of codes ahead of transmit and only commits on success; the file is rewritten via tmp + atomic rename + fsync. A crash mid-transmit may burn up to `DEFAULT_RESERVE_SIZE` codes per channel — that's intentional and within the receiver window.
-- **pigpiod is loopback-only, hard.** `RtsDriver::new` and the doctor probe both reject non-loopback `pigpiod_addr` (`require_loopback`). pigpiod is unauthenticated; treat any non-loopback config as a security bug, not a preference.
+- **pigpiod is loopback-only, hard.** The RTS driver uses the fixed local endpoint `127.0.0.1:8888`, and install configures `pigpiod -l`. pigpiod is unauthenticated; treat any non-loopback access as a security bug, not a preference.
 - **RTS waveform timings are fixed.** `FRAME_COUNT = 4` and the timing constants in `src/rts/waveform.rs` are derived from the Somfy patent (US7860481 B2: 1280µs bit period). They are not user-configurable; do not re-add a `frame_count` knob.
 - **Live web transports:** the Preact PWA uses `GET /events` for SSE state and `POST /command` for actions; `/ws` remains as the bidirectional API client transport.
 - **Static serving:** release builds embed `app/dist/`; debug builds read from disk for hot-reload.

@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::ResolvedConfig;
-use crate::driver::{DriverKind, RtsOptions};
+use crate::driver::{DriverKind, RtsOptions, PIGPIOD_ADDR};
+use crate::gpio::GpioOptions;
 use crate::homekit::config;
 use crate::systemd;
 use crate::version;
@@ -309,7 +310,7 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
         detail: Some(configured_driver.to_string()),
     });
     match configured_driver {
-        DriverKind::Telis => checks.push(gpio_chip_check()),
+        DriverKind::Telis => checks.push(gpio_chip_check(&resolved_config.config.gpio)),
         DriverKind::Rts => {
             checks.extend(rts_checks(&resolved_config.config.rts));
         }
@@ -369,6 +370,8 @@ fn render_expected_unit(resolved_config: &ResolvedConfig) -> Option<String> {
             BIN_PATH,
             resolved_config.path.display()
         ),
+        &resolved_config.config.gpio.chip,
+        &resolved_config.config.rts.spi_device,
     ))
 }
 
@@ -414,22 +417,19 @@ fn user_in_group(user: &str, group: &str) -> Result<bool> {
     Ok(u.gid == g.gid)
 }
 
-fn gpio_chip_check() -> Check {
-    match std::fs::OpenOptions::new()
-        .read(true)
-        .open("/dev/gpiochip0")
-    {
+fn gpio_chip_check(options: &GpioOptions) -> Check {
+    match std::fs::OpenOptions::new().read(true).open(&options.chip) {
         Ok(_) => Check {
             id: "gpio_chip_accessible",
             label: "GPIO",
             status: Status::Ok,
-            detail: None,
+            detail: Some(options.chip.clone()),
         },
         Err(e) => Check {
             id: "gpio_chip_accessible",
             label: "GPIO",
             status: Status::Blocking,
-            detail: Some(format!("/dev/gpiochip0: {e}")),
+            detail: Some(format!("{}: {e}", options.chip)),
         },
     }
 }
@@ -456,12 +456,13 @@ fn rts_checks(options: &RtsOptions) -> Vec<Check> {
         },
     };
 
-    let gdo0_check = if options.gdo0_gpio <= MAX_BCM_GPIO {
+    let gdo0_gpio = options.gdo0_gpio();
+    let gdo0_check = if gdo0_gpio <= MAX_BCM_GPIO {
         Check {
             id: "rts_gdo0_gpio",
             label: "RTS GDO0",
             status: Status::Ok,
-            detail: Some(format!("BCM{}", options.gdo0_gpio)),
+            detail: Some(format!("BCM{}", gdo0_gpio)),
         }
     } else {
         Check {
@@ -470,45 +471,34 @@ fn rts_checks(options: &RtsOptions) -> Vec<Check> {
             status: Status::Blocking,
             detail: Some(format!(
                 "BCM{} out of range (0..={MAX_BCM_GPIO})",
-                options.gdo0_gpio
+                gdo0_gpio
             )),
         }
     };
 
     let pigpiod_check = match std::net::TcpStream::connect_timeout(
-        &options
-            .pigpiod_addr
-            .parse()
-            .unwrap_or_else(|_| "127.0.0.1:8888".parse().unwrap()),
+        &PIGPIOD_ADDR.parse().unwrap(),
         Duration::from_millis(500),
     ) {
         Ok(_) => Check {
             id: "pigpiod",
             label: "pigpiod",
             status: Status::Ok,
-            detail: Some(options.pigpiod_addr.clone()),
+            detail: Some(PIGPIOD_ADDR.to_string()),
         },
         Err(e) => Check {
             id: "pigpiod",
             label: "pigpiod",
             status: Status::Blocking,
-            detail: Some(format!("{}: {e}", options.pigpiod_addr)),
+            detail: Some(format!("{PIGPIOD_ADDR}: {e}")),
         },
     };
 
-    let pigpiod_local_check = match crate::driver::require_pigpiod_loopback(&options.pigpiod_addr) {
-        Ok(()) => Check {
-            id: "pigpiod_localhost_only",
-            label: "pigpiod local",
-            status: Status::Ok,
-            detail: None,
-        },
-        Err(e) => Check {
-            id: "pigpiod_localhost_only",
-            label: "pigpiod local",
-            status: Status::Blocking,
-            detail: Some(e.to_string()),
-        },
+    let pigpiod_local_check = Check {
+        id: "pigpiod_localhost_only",
+        label: "pigpiod local",
+        status: Status::Ok,
+        detail: Some("fixed local endpoint".into()),
     };
 
     let state_check = rts_state_file_check();

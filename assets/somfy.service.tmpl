@@ -17,7 +17,8 @@ NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
-DeviceAllow=/dev/gpiochip0 rw
+DeviceAllow={{GPIO_CHIP}} rw
+DeviceAllow={{SPI_DEVICE}} rw
 
 [Install]
 WantedBy=multi-user.target

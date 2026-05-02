@@ -5,7 +5,22 @@ use std::str::FromStr;
 
 use crate::driver::TelisGpioOptions;
 
+pub const DEFAULT_GPIO_CHIP: &str = "/dev/gpiochip0";
 pub const MAX_BCM_GPIO: u8 = 31;
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct GpioOptions {
+    pub chip: String,
+}
+
+impl Default for GpioOptions {
+    fn default() -> Self {
+        Self {
+            chip: DEFAULT_GPIO_CHIP.to_string(),
+        }
+    }
+}
 
 /// Logical remote target selected by the Telis LED row.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -98,7 +113,7 @@ mod platform {
 
     /// Monitors GPIO inputs for LED selection changes
     /// Returns the selected LED input or ALL if multiple inputs are detected
-    pub async fn watch_inputs(config: &TelisGpioOptions) -> Result<Channel> {
+    pub async fn watch_inputs(chip: &str, config: &TelisGpioOptions) -> Result<Channel> {
         let offsets = [
             config.led1 as u32,
             config.led2 as u32,
@@ -108,7 +123,7 @@ mod platform {
 
         // Request multiple input lines with edge detection
         let req = Request::builder()
-            .on_chip("/dev/gpiochip0")
+            .on_chip(chip)
             .with_lines(&offsets)
             .as_input()
             .with_edge_detection(EdgeDetection::BothEdges)
@@ -156,20 +171,24 @@ mod platform {
     }
 
     /// Triggers a Telis button GPIO pin.
-    pub async fn trigger_output(output: TelisButton, config: &TelisGpioOptions) -> Result<()> {
+    pub async fn trigger_output(
+        chip: &str,
+        output: TelisButton,
+        config: &TelisGpioOptions,
+    ) -> Result<()> {
         tracing::debug!("Triggering Telis button: {:?}", output);
-        trigger_output_gpio(button_gpio(output, config), Duration::from_millis(60)).await
+        trigger_output_gpio(chip, button_gpio(output, config), Duration::from_millis(60)).await
     }
 
     /// Triggers one active-low GPIO output for `duration`.
-    pub async fn trigger_output_gpio(gpio: u8, duration: Duration) -> Result<()> {
+    pub async fn trigger_output_gpio(chip: &str, gpio: u8, duration: Duration) -> Result<()> {
         tracing::debug!("Triggering GPIO{gpio} for {:?}", duration);
         let offset = gpio as u32;
         let mut value = Value::Active;
 
         // Request the output line
         let req = Request::builder()
-            .on_chip("/dev/gpiochip0")
+            .on_chip(chip)
             .with_line(offset)
             .as_output(value)
             .as_active_low()
@@ -204,20 +223,24 @@ mod platform {
         Channel::ALL,
     ];
 
-    pub async fn watch_inputs(_config: &TelisGpioOptions) -> Result<Channel> {
+    pub async fn watch_inputs(_chip: &str, _config: &TelisGpioOptions) -> Result<Channel> {
         tokio::time::sleep(Duration::from_millis(60)).await;
         let idx = LED_INDEX.fetch_add(1, Ordering::Relaxed) % LEDS.len() as u8;
         Ok(LEDS[idx as usize])
     }
 
-    pub async fn trigger_output(output: TelisButton, config: &TelisGpioOptions) -> Result<()> {
+    pub async fn trigger_output(
+        _chip: &str,
+        output: TelisButton,
+        config: &TelisGpioOptions,
+    ) -> Result<()> {
         tracing::debug!("Fake triggering Telis button: {:?}", output);
         let _ = button_gpio(output, config);
         tokio::time::sleep(Duration::from_millis(60)).await;
         Ok(())
     }
 
-    pub async fn trigger_output_gpio(gpio: u8, duration: Duration) -> Result<()> {
+    pub async fn trigger_output_gpio(_chip: &str, gpio: u8, duration: Duration) -> Result<()> {
         tracing::debug!("Fake triggering GPIO{gpio} for {:?}", duration);
         tokio::time::sleep(duration).await;
         Ok(())

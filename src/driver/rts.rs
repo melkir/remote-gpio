@@ -13,6 +13,8 @@ use crate::rts::pigpio::PigpioClient;
 use crate::rts::state::RtsStateStore;
 use crate::rts::waveform;
 
+pub(crate) const PIGPIOD_ADDR: &str = "127.0.0.1:8888";
+
 #[derive(Debug)]
 struct Hardware {
     radio: Cc1101<Spi>,
@@ -36,13 +38,14 @@ pub(crate) struct RtsDriver {
 
 impl RtsDriver {
     pub(crate) async fn new(options: RtsOptions) -> Result<Self> {
-        if options.gdo0_gpio > MAX_BCM_GPIO {
+        let gdo0_gpio = options.gdo0_gpio();
+        if gdo0_gpio > MAX_BCM_GPIO {
             bail!(
                 "RTS GDO0 GPIO {} is out of BCM range (0..={MAX_BCM_GPIO})",
-                options.gdo0_gpio
+                gdo0_gpio
             );
         }
-        require_loopback(&options.pigpiod_addr)?;
+        require_loopback(PIGPIOD_ADDR)?;
         let state = RtsStateStore::load_or_init_default()?;
         let selected_channel = state.selected_channel();
         let (sender, selected_rx) = watch::channel(selected_channel);
@@ -135,7 +138,8 @@ impl RtsDriver {
         };
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
-        let pulses = waveform::build(frame, self.options.gdo0_gpio);
+        let gdo0_gpio = self.options.gdo0_gpio();
+        let pulses = waveform::build(frame, gdo0_gpio);
         let pulse_count = pulses.len();
         let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
         tracing::debug!(
@@ -144,7 +148,7 @@ impl RtsDriver {
             rolling_code,
             remote_id,
             frame = %hex::encode(frame.bytes()),
-            gpio = self.options.gdo0_gpio,
+            gpio = gdo0_gpio,
             pulse_count,
             total_duration_us,
             "rts waveform prepared"
@@ -214,10 +218,11 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
         radio
             .configure_ook_433_42()
             .context("configuring CC1101 for 433.42 MHz async OOK")?;
-        let mut pigpio = PigpioClient::connect(&options.pigpiod_addr)
-            .with_context(|| format!("connecting to pigpiod at {}", options.pigpiod_addr))?;
-        pigpio.set_output(options.gdo0_gpio)?;
-        pigpio.write_level(options.gdo0_gpio, false)?;
+        let mut pigpio = PigpioClient::connect(PIGPIOD_ADDR)
+            .with_context(|| format!("connecting to pigpiod at {PIGPIOD_ADDR}"))?;
+        let gdo0_gpio = options.gdo0_gpio();
+        pigpio.set_output(gdo0_gpio)?;
+        pigpio.write_level(gdo0_gpio, false)?;
         pigpio.wave_clear()?;
         Ok(Arc::new(PigpioTransmitter {
             hardware: Arc::new(StdMutex::new(Hardware { radio, pigpio })),
@@ -344,16 +349,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join(crate::rts::state::STATE_FILE);
         let transmitter = Arc::new(RecordingTransmitter::default());
-        let driver = RtsDriver::new_for_test(
-            RtsOptions {
-                gdo0_gpio: 18,
-                ..RtsOptions::default()
-            },
-            &state_path,
-            transmitter.clone(),
-        )
-        .await
-        .unwrap();
+        let driver =
+            RtsDriver::new_for_test(RtsOptions::default(), &state_path, transmitter.clone())
+                .await
+                .unwrap();
 
         driver.execute_on(Channel::L3, Command::Up).await.unwrap();
 

@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 use crate::driver::{DriverConfig, DriverKind, RtsOptions, TelisOptions};
-use crate::gpio::MAX_BCM_GPIO;
+use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 
 pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 
@@ -12,6 +12,7 @@ pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 pub struct AppConfig {
     pub driver: DriverKind,
     pub homekit: bool,
+    pub gpio: GpioOptions,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
 }
@@ -21,6 +22,7 @@ impl Default for AppConfig {
         Self {
             driver: DriverKind::default_for_target(),
             homekit: false,
+            gpio: GpioOptions::default(),
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }
@@ -31,6 +33,7 @@ impl AppConfig {
     pub fn driver_config(&self) -> DriverConfig {
         DriverConfig {
             kind: self.driver,
+            gpio: self.gpio.clone(),
             rts: self.rts.clone(),
             telis: self.telis.clone(),
         }
@@ -73,8 +76,8 @@ pub fn to_toml(config: &AppConfig) -> Result<String> {
 }
 
 pub fn validate(config: &AppConfig) -> Result<()> {
-    if config.rts.gdo0_gpio > MAX_BCM_GPIO {
-        bail!("rts.gdo0_gpio must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
+    if config.rts.gdo0_gpio() > MAX_BCM_GPIO {
+        bail!("rts.gpio.gdo0 must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
     }
     for (name, gpio) in [
         ("telis.gpio.up", config.telis.gpio.up),
@@ -118,5 +121,24 @@ homekit = false
         )
         .unwrap();
         assert!(!config.homekit);
+    }
+
+    #[test]
+    fn parses_nested_rts_gpio_and_global_gpio_chip() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "rts"
+
+[gpio]
+chip = "/dev/gpiochip1"
+
+[rts.gpio]
+gdo0 = 24
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.gpio.chip, "/dev/gpiochip1");
+        assert_eq!(config.rts.gpio.gdo0, 24);
     }
 }

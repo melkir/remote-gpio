@@ -6,7 +6,7 @@ use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
 use crate::driver::{SelectedChannelRx, TelisOptions};
-use crate::gpio::{Channel, TelisButton};
+use crate::gpio::{Channel, GpioOptions, TelisButton};
 use crate::remote::Command;
 
 const MAX_SELECT_CYCLES: usize = 8;
@@ -23,9 +23,9 @@ pub(crate) struct TelisDriver {
 }
 
 impl TelisDriver {
-    pub(crate) async fn new(options: TelisOptions) -> Result<Self> {
+    pub(crate) async fn new(gpio: GpioOptions, options: TelisOptions) -> Result<Self> {
         let prog_gpio = options.gpio.prog;
-        let transport = Arc::new(GpioTelisTransport { options });
+        let transport = Arc::new(GpioTelisTransport { gpio, options });
         Self::with_transport(transport, prog_gpio).await
     }
 
@@ -138,30 +138,36 @@ trait TelisTransport: std::fmt::Debug + Send + Sync + 'static {
 
 #[derive(Debug)]
 struct GpioTelisTransport {
+    gpio: GpioOptions,
     options: TelisOptions,
 }
 
 impl TelisTransport for GpioTelisTransport {
     fn press(&self, button: TelisButton) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move { crate::gpio::trigger_output(button, &self.options.gpio).await })
+        Box::pin(async move {
+            crate::gpio::trigger_output(&self.gpio.chip, button, &self.options.gpio).await
+        })
     }
 
     fn press_gpio(&self, gpio: u8, duration: Duration) -> BoxFuture<'_, Result<()>> {
-        Box::pin(async move { crate::gpio::trigger_output_gpio(gpio, duration).await })
+        Box::pin(
+            async move { crate::gpio::trigger_output_gpio(&self.gpio.chip, gpio, duration).await },
+        )
     }
 
     fn select(&self) -> BoxFuture<'_, Result<Channel>> {
         Box::pin(async move {
+            let chip = self.gpio.chip.clone();
             let options = self.options.clone();
             tokio::spawn(async move {
                 if let Err(e) =
-                    crate::gpio::trigger_output(TelisButton::Select, &options.gpio).await
+                    crate::gpio::trigger_output(&chip, TelisButton::Select, &options.gpio).await
                 {
                     tracing::error!("failed to trigger Telis select button: {e}");
                 }
             });
 
-            crate::gpio::watch_inputs(&self.options.gpio).await
+            crate::gpio::watch_inputs(&self.gpio.chip, &self.options.gpio).await
         })
     }
 }

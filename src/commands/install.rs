@@ -15,10 +15,17 @@ const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
 const PIGPIOD_OVERRIDE_PATH: &str = "/etc/systemd/system/pigpiod.service.d/somfy-localhost.conf";
 const PIGPIOD_OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/pigpiod -l\n";
 
-pub fn render_unit(service_user: &str, exec_start: &str) -> String {
+pub fn render_unit(
+    service_user: &str,
+    exec_start: &str,
+    gpio_chip: &str,
+    spi_device: &str,
+) -> String {
     UNIT_TEMPLATE
         .replace("{{SERVICE_USER}}", service_user)
         .replace("{{EXEC_START}}", exec_start)
+        .replace("{{GPIO_CHIP}}", gpio_chip)
+        .replace("{{SPI_DEVICE}}", spi_device)
 }
 
 pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> Result<()> {
@@ -57,6 +64,8 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
             BIN_PATH,
             resolved_config.path.display()
         ),
+        &resolved_config.config.gpio.chip,
+        &resolved_config.config.rts.spi_device,
     );
 
     let unit_path = Path::new(UNIT_PATH);
@@ -232,14 +241,20 @@ mod tests {
         let out = render_unit(
             "pi",
             "/usr/local/bin/somfy --config /etc/somfy/config.toml serve",
+            "/dev/gpiochip1",
+            "/dev/spidev1.0",
         );
         assert!(out.contains("User=pi"));
         assert!(out.contains("Group=gpio"));
         assert!(
             out.contains("ExecStart=/usr/local/bin/somfy --config /etc/somfy/config.toml serve")
         );
+        assert!(out.contains("DeviceAllow=/dev/gpiochip1 rw"));
+        assert!(out.contains("DeviceAllow=/dev/spidev1.0 rw"));
         assert!(!out.contains("{{SERVICE_USER}}"));
         assert!(!out.contains("{{EXEC_START}}"));
+        assert!(!out.contains("{{GPIO_CHIP}}"));
+        assert!(!out.contains("{{SPI_DEVICE}}"));
     }
 
     #[test]

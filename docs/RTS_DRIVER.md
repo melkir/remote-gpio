@@ -74,7 +74,7 @@ Manchester output:
 - Bit `1`: low for one half-symbol, then high for one half-symbol.
 - Bit `0`: high for one half-symbol, then low for one half-symbol.
 
-Idle state is low. For pigpio pulses the GPIO mask is `1 << rts.gdo0_gpio`.
+Idle state is low. For pigpio pulses the GPIO mask is `1 << rts.gpio.gdo0`.
 
 ## Rolling Codes & State
 
@@ -118,7 +118,9 @@ The file is rewritten via tmp + atomic rename + fsync, mode `0600`, owned by the
 
 `pigpiod` owns the GDO0 timing because RTS uses 640 µs half-symbols while the same process serves HTTP/SSE/WS/HomeKit. Doing this from Rust async sleeps is not reliable enough.
 
-The driver speaks the pigpiod socket protocol directly (no `libpigpio` linkage). Localhost-only — both `RtsDriver::new` and the doctor probe reject non-loopback `pigpiod_addr` (pigpiod is unauthenticated).
+The driver speaks the pigpiod socket protocol directly (no `libpigpio` linkage).
+The endpoint is fixed to `127.0.0.1:8888`; pigpiod is unauthenticated and must
+stay loopback-only.
 
 ### Commands used
 

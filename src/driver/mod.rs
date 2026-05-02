@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use tokio::sync::watch::Receiver;
 
-use crate::gpio::Channel;
+use crate::gpio::{Channel, GpioOptions};
 use crate::remote::Command;
 
 mod fake;
@@ -12,8 +12,8 @@ mod rts;
 mod telis;
 
 use fake::FakeDriver;
-pub(crate) use rts::require_loopback as require_pigpiod_loopback;
 use rts::RtsDriver;
+pub(crate) use rts::PIGPIOD_ADDR;
 use telis::TelisDriver;
 
 pub type SelectedChannelRx = Receiver<Channel>;
@@ -55,20 +55,36 @@ impl fmt::Display for DriverKind {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct RtsOptions {
     pub spi_device: String,
-    pub gdo0_gpio: u8,
-    pub pigpiod_addr: String,
+    pub gpio: RtsGpioOptions,
 }
 
 impl Default for RtsOptions {
     fn default() -> Self {
         Self {
             spi_device: "/dev/spidev0.0".to_string(),
-            gdo0_gpio: 18,
-            pigpiod_addr: "127.0.0.1:8888".to_string(),
+            gpio: RtsGpioOptions::default(),
         }
+    }
+}
+
+impl RtsOptions {
+    pub fn gdo0_gpio(&self) -> u8 {
+        self.gpio.gdo0
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RtsGpioOptions {
+    pub gdo0: u8,
+}
+
+impl Default for RtsGpioOptions {
+    fn default() -> Self {
+        Self { gdo0: 18 }
     }
 }
 
@@ -112,6 +128,7 @@ impl Default for TelisGpioOptions {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DriverConfig {
     pub kind: DriverKind,
+    pub gpio: GpioOptions,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
 }
@@ -121,6 +138,7 @@ impl DriverConfig {
     pub(crate) fn fake() -> Self {
         Self {
             kind: DriverKind::Fake,
+            gpio: GpioOptions::default(),
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
         }
@@ -150,7 +168,9 @@ impl CommandRouter {
     pub async fn new(config: DriverConfig) -> Result<Self> {
         let executor = match config.kind {
             DriverKind::Fake => DriverExecutor::Fake(FakeDriver::new(Channel::L1)),
-            DriverKind::Telis => DriverExecutor::Telis(TelisDriver::new(config.telis).await?),
+            DriverKind::Telis => {
+                DriverExecutor::Telis(TelisDriver::new(config.gpio, config.telis).await?)
+            }
             DriverKind::Rts => DriverExecutor::Rts(Box::new(RtsDriver::new(config.rts).await?)),
         };
 
@@ -252,10 +272,7 @@ mod tests {
         let events = Arc::new(StdMutex::new(Vec::new()));
         let state_path = dir.path().join(crate::rts::state::STATE_FILE);
         let rts_driver = rts::RtsDriver::new_for_test(
-            RtsOptions {
-                gdo0_gpio: 18,
-                ..RtsOptions::default()
-            },
+            RtsOptions::default(),
             &state_path,
             Arc::new(RecordingTransmitter {
                 events: events.clone(),

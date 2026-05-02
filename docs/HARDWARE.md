@@ -52,9 +52,9 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
 Outputs are driven as active-low pulses. The code asserts the line for ~60ms, then releases — mimicking a button tap.
 
 ```rust
-pub async fn trigger_output(output: Output) -> Result<()> {
+pub async fn trigger_output(chip: &str, output: Output) -> Result<()> {
     let req = Request::builder()
-        .on_chip("/dev/gpiochip0")
+        .on_chip(chip)
         .with_line(output as u32)
         .as_output(Value::Active)
         .as_active_low()
@@ -136,8 +136,12 @@ driver = "rts"
 
 [rts]
 spi_device = "/dev/spidev0.0"
-gdo0_gpio = 18
-pigpiod_addr = "127.0.0.1:8888"
+
+[rts.gpio]
+gdo0 = 18
+
+[gpio]
+chip = "/dev/gpiochip0"
 
 [telis.gpio]
 up = 26
@@ -151,8 +155,9 @@ led4 = 12
 # prog = 5
 ```
 
-`somfy doctor` validates SPI access, GDO0 BCM range, pigpiod reachability,
-pigpiod localhost-only mode, and `rts.json` schema.
+`somfy doctor` validates SPI access, GDO0 BCM range, local pigpiod
+reachability, and `rts.json` schema. The pigpiod endpoint is fixed to
+`127.0.0.1:8888`; pigpiod is unauthenticated and must stay loopback-only.
 
 ### Pairing
 
