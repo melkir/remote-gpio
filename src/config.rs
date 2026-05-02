@@ -76,7 +76,7 @@ pub fn to_toml(config: &AppConfig) -> Result<String> {
 }
 
 pub fn validate(config: &AppConfig) -> Result<()> {
-    if config.rts.gdo0_gpio() > MAX_BCM_GPIO {
+    if config.rts.gpio.gdo0 > MAX_BCM_GPIO {
         bail!("rts.gpio.gdo0 must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
     }
     for (name, gpio) in [

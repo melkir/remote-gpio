@@ -70,12 +70,6 @@ impl Default for RtsOptions {
     }
 }
 
-impl RtsOptions {
-    pub fn gdo0_gpio(&self) -> u8 {
-        self.gpio.gdo0
-    }
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct RtsGpioOptions {

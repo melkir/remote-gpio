@@ -38,11 +38,10 @@ pub(crate) struct RtsDriver {
 
 impl RtsDriver {
     pub(crate) async fn new(options: RtsOptions) -> Result<Self> {
-        let gdo0_gpio = options.gdo0_gpio();
-        if gdo0_gpio > MAX_BCM_GPIO {
+        if options.gpio.gdo0 > MAX_BCM_GPIO {
             bail!(
                 "RTS GDO0 GPIO {} is out of BCM range (0..={MAX_BCM_GPIO})",
-                gdo0_gpio
+                options.gpio.gdo0
             );
         }
         require_loopback(PIGPIOD_ADDR)?;
@@ -138,8 +137,7 @@ impl RtsDriver {
         };
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
-        let gdo0_gpio = self.options.gdo0_gpio();
-        let pulses = waveform::build(frame, gdo0_gpio);
+        let pulses = waveform::build(frame, self.options.gpio.gdo0);
         let pulse_count = pulses.len();
         let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
         tracing::debug!(
@@ -148,7 +146,7 @@ impl RtsDriver {
             rolling_code,
             remote_id,
             frame = %hex::encode(frame.bytes()),
-            gpio = gdo0_gpio,
+            gpio = self.options.gpio.gdo0,
             pulse_count,
             total_duration_us,
             "rts waveform prepared"
@@ -220,9 +218,8 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
             .context("configuring CC1101 for 433.42 MHz async OOK")?;
         let mut pigpio = PigpioClient::connect(PIGPIOD_ADDR)
             .with_context(|| format!("connecting to pigpiod at {PIGPIOD_ADDR}"))?;
-        let gdo0_gpio = options.gdo0_gpio();
-        pigpio.set_output(gdo0_gpio)?;
-        pigpio.write_level(gdo0_gpio, false)?;
+        pigpio.set_output(options.gpio.gdo0)?;
+        pigpio.write_level(options.gpio.gdo0, false)?;
         pigpio.wave_clear()?;
         Ok(Arc::new(PigpioTransmitter {
             hardware: Arc::new(StdMutex::new(Hardware { radio, pigpio })),

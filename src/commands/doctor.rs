@@ -456,13 +456,12 @@ fn rts_checks(options: &RtsOptions) -> Vec<Check> {
         },
     };
 
-    let gdo0_gpio = options.gdo0_gpio();
-    let gdo0_check = if gdo0_gpio <= MAX_BCM_GPIO {
+    let gdo0_check = if options.gpio.gdo0 <= MAX_BCM_GPIO {
         Check {
             id: "rts_gdo0_gpio",
             label: "RTS GDO0",
             status: Status::Ok,
-            detail: Some(format!("BCM{}", gdo0_gpio)),
+            detail: Some(format!("BCM{}", options.gpio.gdo0)),
         }
     } else {
         Check {
@@ -471,7 +470,7 @@ fn rts_checks(options: &RtsOptions) -> Vec<Check> {
             status: Status::Blocking,
             detail: Some(format!(
                 "BCM{} out of range (0..={MAX_BCM_GPIO})",
-                gdo0_gpio
+                options.gpio.gdo0
             )),
         }
     };
