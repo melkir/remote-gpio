@@ -14,6 +14,14 @@ use crate::rts::state::RtsStateStore;
 use crate::rts::waveform;
 
 pub(crate) const PIGPIOD_ADDR: &str = "127.0.0.1:8888";
+const PIGPIOD_ADDR_IPV6: &str = "[::1]:8888";
+
+pub(crate) fn pigpiod_addrs() -> [SocketAddr; 2] {
+    [
+        PIGPIOD_ADDR.parse().unwrap(),
+        PIGPIOD_ADDR_IPV6.parse().unwrap(),
+    ]
+}
 
 #[derive(Debug)]
 struct Hardware {
@@ -216,7 +224,7 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
         radio
             .configure_ook_433_42()
             .context("configuring CC1101 for 433.42 MHz async OOK")?;
-        let mut pigpio = PigpioClient::connect(PIGPIOD_ADDR)
+        let mut pigpio = PigpioClient::connect(pigpiod_addrs().as_slice())
             .with_context(|| format!("connecting to pigpiod at {PIGPIOD_ADDR}"))?;
         pigpio.set_output(options.gpio.gdo0)?;
         pigpio.write_level(options.gpio.gdo0, false)?;

@@ -13,7 +13,7 @@ mod telis;
 
 use fake::FakeDriver;
 use rts::RtsDriver;
-pub(crate) use rts::PIGPIOD_ADDR;
+pub(crate) use rts::{pigpiod_addrs, PIGPIOD_ADDR};
 use telis::TelisDriver;
 
 pub type SelectedChannelRx = Receiver<Channel>;

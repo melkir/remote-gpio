@@ -4,7 +4,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use crate::config::ResolvedConfig;
-use crate::driver::{DriverKind, RtsOptions, PIGPIOD_ADDR};
+use crate::driver::{pigpiod_addrs, DriverKind, RtsOptions, PIGPIOD_ADDR};
 use crate::gpio::GpioOptions;
 use crate::homekit::config;
 use crate::systemd;
@@ -475,22 +475,26 @@ fn rts_checks(options: &RtsOptions) -> Vec<Check> {
         }
     };
 
-    let pigpiod_check = match std::net::TcpStream::connect_timeout(
-        &PIGPIOD_ADDR.parse().unwrap(),
-        Duration::from_millis(500),
-    ) {
-        Ok(_) => Check {
-            id: "pigpiod",
-            label: "pigpiod",
-            status: Status::Ok,
-            detail: Some(PIGPIOD_ADDR.to_string()),
-        },
-        Err(e) => Check {
-            id: "pigpiod",
-            label: "pigpiod",
-            status: Status::Blocking,
-            detail: Some(format!("{PIGPIOD_ADDR}: {e}")),
-        },
+    let pigpiod_check = {
+        let connected = pigpiod_addrs().into_iter().find_map(|addr| {
+            std::net::TcpStream::connect_timeout(&addr, Duration::from_millis(500))
+                .ok()
+                .map(|_| addr.to_string())
+        });
+        match connected {
+            Some(addr) => Check {
+                id: "pigpiod",
+                label: "pigpiod",
+                status: Status::Ok,
+                detail: Some(addr),
+            },
+            None => Check {
+                id: "pigpiod",
+                label: "pigpiod",
+                status: Status::Blocking,
+                detail: Some(format!("{PIGPIOD_ADDR}: Connection refused")),
+            },
+        }
     };
 
     let pigpiod_local_check = Check {
