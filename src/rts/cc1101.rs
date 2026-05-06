@@ -83,7 +83,7 @@ impl<S: SpiDevice> Cc1101<S> {
         self.write_register(REG_TEST2, 0x81)?;
         self.write_register(REG_TEST1, 0x35)?;
         self.write_register(REG_TEST0, 0x09)?;
-        self.write_burst(REG_PATABLE, &[0xC0])?;
+        self.write_burst(REG_PATABLE, &[0x00, 0xC6])?;
         self.idle()
     }
 
@@ -137,12 +137,14 @@ mod tests {
         assert_eq!(writes[0], vec![STROBE_SRES]);
         assert!(writes.contains(&vec![REG_PKTCTRL0, 0x30]));
         assert!(writes.contains(&vec![REG_MDMCFG2, 0x30]));
+        assert!(writes.contains(&vec![REG_FREND0, 0x11]));
         assert!(writes.contains(&vec![
             REG_FREQ2 | WRITE_BURST,
             FREQ_433_42_26MHZ[0],
             FREQ_433_42_26MHZ[1],
             FREQ_433_42_26MHZ[2],
         ]));
+        assert!(writes.contains(&vec![REG_PATABLE | WRITE_BURST, 0x00, 0xC6]));
         assert_eq!(writes.last().unwrap(), &vec![STROBE_SIDLE]);
     }
 
