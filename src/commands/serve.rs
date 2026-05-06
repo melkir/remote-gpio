@@ -8,7 +8,7 @@ use crate::remote::RemoteControl;
 use crate::server::{serve, AppState};
 
 pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
-    let report = doctor::collect(&resolved_config, 2000).await;
+    let report = doctor::collect(&resolved_config, 0).await;
     report.print_summary();
     if report.has_blocking_failure() {
         std::process::exit(1);
