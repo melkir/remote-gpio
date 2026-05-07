@@ -320,7 +320,9 @@ mod tests {
             remote_control: remote_control.clone(),
         };
 
-        dispatch(&state, "up", Some(Channel::L3), false).await.unwrap();
+        dispatch(&state, "up", Some(Channel::L3), false)
+            .await
+            .unwrap();
 
         assert_eq!(remote_control.current_selection(), Channel::L3);
         assert_eq!(

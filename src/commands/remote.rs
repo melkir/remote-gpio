@@ -28,11 +28,7 @@ struct CommandRequest {
     long: bool,
 }
 
-async fn post_command(
-    command: &'static str,
-    channel: Option<Channel>,
-    long: bool,
-) -> Result<()> {
+async fn post_command(command: &'static str, channel: Option<Channel>, long: bool) -> Result<()> {
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{SERVICE_BASE_URL}/command"))

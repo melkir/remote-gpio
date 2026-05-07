@@ -43,11 +43,7 @@ impl FakeDriver {
                 self.sender.send(channel)?;
                 self.transport.record_selection(channel).await;
             }
-            Command::Up
-            | Command::Down
-            | Command::Stop
-            | Command::Prog
-            | Command::ProgLong => {
+            Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
                 self.transport.send(target, command).await?;
             }
         }
