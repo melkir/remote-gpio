@@ -175,6 +175,7 @@ impl RtsDriver {
         tracing::debug!(
             %channel,
             command = ?command,
+            long,
             rolling_code,
             remote_id,
             frame = %hex::encode(frame.bytes()),
@@ -248,7 +249,16 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
         radio
             .configure_ook_433_42()
             .context("configuring CC1101 for 433.42 MHz async OOK")?;
+        tracing::info!(
+            spi_device = %options.spi_device,
+            "CC1101 configured for 433.42 MHz async OOK"
+        );
         let pigpio = connect_and_init_pigpio(options.gpio.gdo0)?;
+        tracing::info!(
+            address = PIGPIOD_ADDR,
+            gdo0 = options.gpio.gdo0,
+            "pigpiod connected and GDO0 initialized"
+        );
         Ok(Arc::new(PigpioTransmitter {
             hardware: Arc::new(StdMutex::new(Hardware {
                 radio,
@@ -313,6 +323,7 @@ fn try_transmit(hw: &mut Hardware, pulses: &[waveform::GpioPulse]) -> Result<()>
     tracing::debug!(wave_id, ?total_duration, "pigpio wave created");
 
     hw.radio.tx()?;
+    tracing::debug!("CC1101 strobed to TX");
     let tx_result = (|| -> Result<()> {
         hw.pigpio.wave_tx(wave_id)?;
         tracing::debug!(wave_id, "pigpio wave transmit started");
@@ -333,6 +344,9 @@ fn try_transmit(hw: &mut Hardware, pulses: &[waveform::GpioPulse]) -> Result<()>
     }
     let delete_result = hw.pigpio.wave_delete(wave_id);
     let idle_result = hw.radio.idle();
+    if idle_result.is_ok() {
+        tracing::debug!("CC1101 strobed to IDLE");
+    }
 
     tx_result?;
     delete_result?;
