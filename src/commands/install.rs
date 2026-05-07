@@ -32,6 +32,18 @@ pub fn render_unit(
 }
 
 pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> Result<()> {
+    let service_user = refresh(user_override, resolved_config)?;
+    systemd::systemctl(&["restart", "--no-block", "somfy"])?;
+    println!(
+        "somfy installed as {service_user}, service enabled and starting (check `somfy doctor`)"
+    );
+    Ok(())
+}
+
+pub(crate) fn refresh(
+    user_override: Option<String>,
+    resolved_config: &ResolvedConfig,
+) -> Result<String> {
     require_root()?;
 
     let service_user = resolve_service_user(user_override)?;
@@ -94,11 +106,7 @@ pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> R
 
     prepare_state_dir(&service_user_info)?;
     systemd::systemctl(&["enable", "somfy"])?;
-    systemd::systemctl(&["restart", "--no-block", "somfy"])?;
-    println!(
-        "somfy installed as {service_user}, service enabled and starting (check `somfy doctor`)"
-    );
-    Ok(())
+    Ok(service_user)
 }
 
 pub(crate) fn prepare_rts_prereqs() -> Result<()> {
