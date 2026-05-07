@@ -145,11 +145,7 @@ impl RtsDriver {
         };
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
-        let pulses = if matches!(command, RtsCommand::Prog) {
-            waveform::build_prog(frame, self.options.gpio.gdo0)
-        } else {
-            waveform::build(frame, self.options.gpio.gdo0)
-        };
+        let pulses = waveform::build(frame, self.options.gpio.gdo0);
         let pulse_count = pulses.len();
         let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
         tracing::debug!(

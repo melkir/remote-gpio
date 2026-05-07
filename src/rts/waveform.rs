@@ -9,7 +9,6 @@ pub const SOFTWARE_SYNC_LOW_US: u32 = 1_550;
 pub const MANCHESTER_HALF_SYMBOL_US: u32 = 640;
 pub const INTER_FRAME_GAP_US: u32 = 30_415;
 pub const FRAME_COUNT: usize = 4;
-pub const PROG_FRAME_COUNT: usize = 20;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GpioPulse {
@@ -20,10 +19,6 @@ pub struct GpioPulse {
 
 pub fn build(frame: RtsFrame, gpio: u8) -> Vec<GpioPulse> {
     build_n(frame, gpio, FRAME_COUNT)
-}
-
-pub fn build_prog(frame: RtsFrame, gpio: u8) -> Vec<GpioPulse> {
-    build_n(frame, gpio, PROG_FRAME_COUNT)
 }
 
 fn build_n(frame: RtsFrame, gpio: u8, frame_count: usize) -> Vec<GpioPulse> {
