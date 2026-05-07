@@ -104,12 +104,12 @@ A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
 
 ### Software path
 
-The Pi drives the CC1101 in async serial OOK mode and uses `pigpiod` waveforms to clock the Somfy pulse train onto GDO0. Each press emits four frames (one initial + three repeats), Manchester-encoded with 640 µs half-symbols.
+The Pi drives the CC1101 in async serial OOK mode and uses `pigpiod` waveforms to clock the Somfy pulse train onto GDO0. Each press emits four frames (one initial + three repeats), Manchester-encoded with 640 µs half-symbols. `Prog --long` extends the burst to 20 frames so the motor enters pair-listen when the Pi is the master remote.
 
 ```
 RtsDriver::transmit(channel, command)
   -> reserve rolling code (atomic write to rts.json on block boundaries)
-  -> encode 7-byte RTS frame (key, command/checksum, rolling code BE, remote ID LE)
+  -> encode 7-byte RTS frame (key, command/checksum, rolling code BE, remote ID BE)
   -> obfuscate (XOR cascade)
   -> build pigpio gpioPulse_t list
   -> CC1101 SRES + STX
@@ -161,21 +161,30 @@ reachability, and `rts.json` schema. The pigpiod endpoint is fixed to
 
 ### Pairing
 
-Each channel is paired independently. With the motor in programming mode (already-paired remote, or motor's prog button):
+Each channel is paired independently. Two flows depending on whether you have an existing real Somfy remote.
+
+**Adding the Pi as a new remote (recommended).** Long-press the PROG button on an already-paired remote until the motor jogs (~5 s). Then within 2 minutes:
 
 ```bash
 somfy remote prog L1
 somfy remote up L1   # confirm direction
 ```
 
-`somfy remote prog <channel>` sends the RTS Prog frame for that virtual channel.
-Run it again to remove that virtual remote from the motor. The command does not
-press a wired Telis Prog button; put the motor in programming mode with an
-already-paired remote or the motor's physical Prog control before sending it.
+The short 4-frame `prog` is enough — the motor is already in pair-listen.
+
+**Pi as the only / master remote.** When you do not have another paired remote, the Pi has to put the motor into pair-listen itself. Use `--long`, which extends the burst to 20 frames (above the empirical ~14-frame floor receivers need):
 
 ```bash
-somfy remote prog L1
+somfy remote prog L1 --long
+somfy remote up L1   # confirm direction
 ```
+
+The motor jogs to acknowledge it has registered the channel. Run the same command again to unregister.
+
+`somfy remote prog <channel>` sends the RTS Prog frame for that virtual channel.
+The command does not press a wired Telis Prog button; without `--long` the motor
+must already be in programming mode (already-paired remote or motor's physical
+Prog control).
 
 `ALL` is a separate virtual remote — pair it with every motor that should react to all-channel commands.
 

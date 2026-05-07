@@ -19,6 +19,7 @@ pub enum Command {
     Stop,
     Select,
     Prog,
+    ProgLong,
 }
 
 impl FromStr for Command {
@@ -30,6 +31,7 @@ impl FromStr for Command {
             "stop" => Ok(Command::Stop),
             "select" => Ok(Command::Select),
             "prog" => Ok(Command::Prog),
+            "prog_long" => Ok(Command::ProgLong),
             _ => Err(anyhow::anyhow!("Invalid command: {}", s)),
         }
     }

@@ -90,7 +90,13 @@ pub enum RemoteCommand {
     /// Select a channel
     Select { channel: Channel },
     /// Send the programming command for a channel
-    Prog { channel: Channel },
+    Prog {
+        channel: Channel,
+        /// Send a long-press burst (~20 frames). Use this when the Pi is the
+        /// master remote and needs to put the motor into pair-listen mode.
+        #[arg(long)]
+        long: bool,
+    },
     /// Print current selected channel
     Status,
     /// Watch selected channel changes

@@ -11,6 +11,7 @@ use crate::remote::Command;
 
 const MAX_SELECT_CYCLES: usize = 8;
 const PROG_PRESS: Duration = Duration::from_millis(2500);
+const PROG_LONG_PRESS: Duration = Duration::from_millis(13_000);
 const RTS_PROG_DELAY: Duration = Duration::from_millis(700);
 
 #[derive(Debug)]
@@ -54,7 +55,8 @@ impl TelisDriver {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::Stop => self.transport.press(TelisButton::Stop).await,
-            Command::Prog => self.press_prog(self.selected_channel()).await,
+            Command::Prog => self.press_prog(self.selected_channel(), false).await,
+            Command::ProgLong => self.press_prog(self.selected_channel(), true).await,
             Command::Select => {
                 if channel.is_none() {
                     self.select_once(true).await.map(|_| ())
@@ -73,7 +75,8 @@ impl TelisDriver {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::Stop => self.transport.press(TelisButton::Stop).await,
-            Command::Prog => self.press_prog(channel).await,
+            Command::Prog => self.press_prog(channel, false).await,
+            Command::ProgLong => self.press_prog(channel, true).await,
             Command::Select => Ok(()),
         }
     }
@@ -118,12 +121,13 @@ impl TelisDriver {
         Ok(())
     }
 
-    async fn press_prog(&self, channel: Channel) -> Result<()> {
+    async fn press_prog(&self, channel: Channel, long: bool) -> Result<()> {
         let prog_gpio = self
             .prog_gpio
             .ok_or_else(|| anyhow::anyhow!("telis.gpio.prog is required for prog"))?;
-        tracing::info!(%channel, prog_gpio, "pressing Telis Prog");
-        self.transport.press_gpio(prog_gpio, PROG_PRESS).await?;
+        let duration = if long { PROG_LONG_PRESS } else { PROG_PRESS };
+        tracing::info!(%channel, prog_gpio, ?duration, long, "pressing Telis Prog");
+        self.transport.press_gpio(prog_gpio, duration).await?;
         tokio::time::sleep(RTS_PROG_DELAY).await;
         tracing::info!(%channel, prog_gpio, "Telis Prog press complete");
         Ok(())

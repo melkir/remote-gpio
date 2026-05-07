@@ -10,16 +10,16 @@ For wiring, bring-up, and pairing flow, see [HARDWARE.md](HARDWARE.md#cc1101-rts
 - Modulation: ASK / OOK.
 - Encoding: Manchester. Rising edge = `1`, falling edge = `0`.
 - Payload: 56 bits, MSB first.
-- Per press: 4 total frames (1 initial + 3 repeats). The constant is fixed in `src/rts/waveform.rs`.
+- Per press: 4 total frames (1 initial + 3 repeats). `Prog --long` sends 20 frames (1 initial + 19 repeats) so the motor enters pair-listen when the Pi is the master remote. Both constants are fixed in `src/rts/waveform.rs`.
 
 ## Frame Layout (7 bytes, unobfuscated)
 
 | Byte | Meaning                                       | Notes                                                                          |
 | ---: | --------------------------------------------- | ------------------------------------------------------------------------------ |
-|    0 | Key byte                                      | `0xA0` works for the motors tested. Lower nibble can vary by motor generation. |
+|    0 | Key byte                                      | `0xA7` (matches Pi-Somfy / Telis 1 emitters). Upper nibble must be `0xA`; lower nibble varies by emitter. |
 |    1 | Command (high nibble) + checksum (low nibble) | Command is `rts_code << 4`.                                                    |
 | 2..3 | Rolling code                                  | Big-endian `u16`.                                                              |
-| 4..6 | Remote address                                | Little-endian 24-bit ID.                                                       |
+| 4..6 | Remote address                                | Big-endian 24-bit ID (frame[4] = MSB, frame[6] = LSB).                          |
 
 ### Command codes
 
@@ -172,7 +172,7 @@ Always attempt `WVDEL` if `WVCRE` returned a wave id, even after a failed `WVTX`
 RtsDriver::transmit(channel, command)
   → lock transmitter mutex
   → load channel state, reserve rolling-code block if needed
-  → encode 7-byte RTS frame (key, cmd|checksum, rolling code BE, remote ID LE)
+  → encode 7-byte RTS frame (key, cmd|checksum, rolling code BE, remote ID BE)
   → obfuscate (XOR cascade)
   → build pigpio pulse list
   → CC1101 SRES + STX

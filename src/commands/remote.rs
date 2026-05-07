@@ -9,11 +9,11 @@ const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
 
 pub async fn run(command: RemoteCommand) -> Result<()> {
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel).await,
-        RemoteCommand::Down { channel } => post_command("down", channel).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel).await,
-        RemoteCommand::Select { channel } => post_command("select", Some(channel)).await,
-        RemoteCommand::Prog { channel } => post_command("prog", Some(channel)).await,
+        RemoteCommand::Up { channel } => post_command("up", channel, false).await,
+        RemoteCommand::Down { channel } => post_command("down", channel, false).await,
+        RemoteCommand::Stop { channel } => post_command("stop", channel, false).await,
+        RemoteCommand::Select { channel } => post_command("select", Some(channel), false).await,
+        RemoteCommand::Prog { channel, long } => post_command("prog", Some(channel), long).await,
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,
     }
@@ -24,13 +24,23 @@ struct CommandRequest {
     command: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<Channel>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    long: bool,
 }
 
-async fn post_command(command: &'static str, channel: Option<Channel>) -> Result<()> {
+async fn post_command(
+    command: &'static str,
+    channel: Option<Channel>,
+    long: bool,
+) -> Result<()> {
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{SERVICE_BASE_URL}/command"))
-        .json(&CommandRequest { command, channel })
+        .json(&CommandRequest {
+            command,
+            channel,
+            long,
+        })
         .send()
         .await
         .context("connecting to somfy service at 127.0.0.1:5002")?;

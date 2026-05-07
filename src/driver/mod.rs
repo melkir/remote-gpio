@@ -217,7 +217,7 @@ pub fn infer_position(command: Command) -> Option<u8> {
     match command {
         Command::Up => Some(100),
         Command::Down => Some(0),
-        Command::Stop | Command::Select | Command::Prog => None,
+        Command::Stop | Command::Select | Command::Prog | Command::ProgLong => None,
     }
 }
 

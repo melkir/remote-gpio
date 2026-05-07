@@ -3,7 +3,7 @@ use anyhow::{bail, Result};
 use crate::remote::Command;
 
 pub const FRAME_LEN: usize = 7;
-pub const DEFAULT_KEY: u8 = 0xA0;
+pub const DEFAULT_KEY: u8 = 0xA7;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum RtsCommand {
@@ -32,7 +32,7 @@ impl TryFrom<Command> for RtsCommand {
             Command::Stop => Ok(Self::Stop),
             Command::Up => Ok(Self::Up),
             Command::Down => Ok(Self::Down),
-            Command::Prog => Ok(Self::Prog),
+            Command::Prog | Command::ProgLong => Ok(Self::Prog),
             Command::Select => bail!("select is not an RTS radio command"),
         }
     }
@@ -54,9 +54,9 @@ impl RtsFrame {
             command.code() << 4,
             (rolling_code >> 8) as u8,
             rolling_code as u8,
-            remote_id as u8,
-            (remote_id >> 8) as u8,
             (remote_id >> 16) as u8,
+            (remote_id >> 8) as u8,
+            remote_id as u8,
         ];
         bytes[1] |= checksum(bytes);
         obfuscate(&mut bytes);
@@ -97,21 +97,21 @@ mod tests {
 
     #[test]
     fn calculates_checksum_from_unobfuscated_nibbles() {
-        let bytes = [0xA0, 0x20, 0x00, 0xA7, 0x56, 0x34, 0x12];
-        assert_eq!(checksum(bytes), 0x2);
+        let bytes = [0xA7, 0x20, 0x00, 0xA7, 0x12, 0x34, 0x56];
+        assert_eq!(checksum(bytes), 0x5);
     }
 
     #[test]
     fn obfuscates_in_place_using_previous_obfuscated_byte() {
-        let mut bytes = [0xA0, 0x22, 0x00, 0xA7, 0x56, 0x34, 0x12];
+        let mut bytes = [0xA7, 0x25, 0x00, 0xA7, 0x12, 0x34, 0x56];
         obfuscate(&mut bytes);
-        assert_eq!(bytes, [0xA0, 0x82, 0x82, 0x25, 0x73, 0x47, 0x55]);
+        assert_eq!(bytes, [0xA7, 0x82, 0x82, 0x25, 0x37, 0x03, 0x55]);
     }
 
     #[test]
     fn encodes_frame_byte_order_checksum_and_obfuscation() {
         let frame = RtsFrame::encode(RtsCommand::Up, 0x00A7, 0x123456).unwrap();
-        assert_eq!(frame.bytes(), [0xA0, 0x82, 0x82, 0x25, 0x73, 0x47, 0x55]);
+        assert_eq!(frame.bytes(), [0xA7, 0x82, 0x82, 0x25, 0x37, 0x03, 0x55]);
     }
 
     #[test]

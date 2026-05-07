@@ -5,10 +5,11 @@ pub const WAKEUP_LOW_US: u32 = 89_565;
 pub const HARDWARE_SYNC_HIGH_US: u32 = 2_560;
 pub const HARDWARE_SYNC_LOW_US: u32 = 2_560;
 pub const SOFTWARE_SYNC_HIGH_US: u32 = 4_550;
-pub const SOFTWARE_SYNC_LOW_US: u32 = 1_550;
+pub const SOFTWARE_SYNC_LOW_US: u32 = 640;
 pub const MANCHESTER_HALF_SYMBOL_US: u32 = 640;
 pub const INTER_FRAME_GAP_US: u32 = 30_415;
 pub const FRAME_COUNT: usize = 4;
+pub const FRAME_COUNT_LONG: usize = 20;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GpioPulse {
@@ -19,6 +20,10 @@ pub struct GpioPulse {
 
 pub fn build(frame: RtsFrame, gpio: u8) -> Vec<GpioPulse> {
     build_n(frame, gpio, FRAME_COUNT)
+}
+
+pub fn build_long(frame: RtsFrame, gpio: u8) -> Vec<GpioPulse> {
+    build_n(frame, gpio, FRAME_COUNT_LONG)
 }
 
 fn build_n(frame: RtsFrame, gpio: u8, frame_count: usize) -> Vec<GpioPulse> {
@@ -191,7 +196,19 @@ mod tests {
         let pulses = build(test_frame(), GPIO);
 
         assert_eq!(pulses.len(), 508);
-        assert_eq!(total_duration(&pulses), 649_520);
+        assert_eq!(total_duration(&pulses), 645_880);
+    }
+
+    #[test]
+    fn long_burst_uses_extended_frame_count() {
+        let pulses = build_long(test_frame(), GPIO);
+
+        let first_frame_pulses = first_frame_pulse_count();
+        let repeat_frame_pulses = 7 * 2 + 2 + (FRAME_LEN * 8 * 2) + 1;
+        assert_eq!(
+            pulses.len(),
+            first_frame_pulses + repeat_frame_pulses * (FRAME_COUNT_LONG - 1)
+        );
     }
 
     fn first_frame_pulse_count() -> usize {

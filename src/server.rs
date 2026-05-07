@@ -32,6 +32,8 @@ pub struct AppState {
 struct CommandRequest {
     command: String,
     channel: Option<Channel>,
+    #[serde(default)]
+    long: bool,
 }
 
 /// WebSocket query parameters
@@ -100,15 +102,24 @@ async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
-    let CommandRequest { command, channel } = payload;
-    match dispatch(&state, &command, channel).await {
+    let CommandRequest {
+        command,
+        channel,
+        long,
+    } = payload;
+    match dispatch(&state, &command, channel, long).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
-async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> Result<(), String> {
-    let (cmd, channel) = validate_command_request(command, channel)?;
+async fn dispatch(
+    state: &AppState,
+    command: &str,
+    channel: Option<Channel>,
+    long: bool,
+) -> Result<(), String> {
+    let (cmd, channel) = validate_command_request(command, channel, long)?;
     tracing::info!(command = ?cmd, channel = ?channel, "remote command received");
     if cmd == Command::Select {
         state
@@ -139,11 +150,19 @@ async fn dispatch(state: &AppState, command: &str, channel: Option<Channel>) -> 
 fn validate_command_request(
     command: &str,
     channel: Option<Channel>,
+    long: bool,
 ) -> Result<(Command, Option<Channel>), String> {
-    let cmd = Command::from_str(command).map_err(|e| e.to_string())?;
+    let mut cmd = Command::from_str(command).map_err(|e| e.to_string())?;
+    if long {
+        match cmd {
+            Command::Prog => cmd = Command::ProgLong,
+            Command::ProgLong => {}
+            _ => return Err("`long` is only valid with prog".to_string()),
+        }
+    }
     match (cmd, channel) {
-        (Command::Prog, Some(channel)) => Ok((cmd, Some(channel))),
-        (Command::Prog, None) => Err("prog requires a channel".to_string()),
+        (Command::Prog | Command::ProgLong, Some(channel)) => Ok((cmd, Some(channel))),
+        (Command::Prog | Command::ProgLong, None) => Err("prog requires a channel".to_string()),
         (Command::Select, channel) => Ok((cmd, channel)),
         (Command::Up | Command::Down | Command::Stop, channel) => Ok((cmd, channel)),
     }
@@ -197,12 +216,12 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<CommandRequest>(&text) {
-                            Ok(CommandRequest { command, channel }) => {
+                            Ok(CommandRequest { command, channel, long }) => {
                                 // Spawn command processing so LED updates aren't blocked
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
-                                    match dispatch(&state, &command, channel).await {
+                                    match dispatch(&state, &command, channel, long).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)
                                         }
@@ -241,7 +260,7 @@ mod tests {
     #[test]
     fn validate_accepts_select_with_channel() {
         assert_eq!(
-            validate_command_request("select", Some(Channel::L2)).unwrap(),
+            validate_command_request("select", Some(Channel::L2), false).unwrap(),
             (Command::Select, Some(Channel::L2))
         );
     }
@@ -249,7 +268,7 @@ mod tests {
     #[test]
     fn validate_accepts_select_without_channel() {
         assert_eq!(
-            validate_command_request("select", None).unwrap(),
+            validate_command_request("select", None, false).unwrap(),
             (Command::Select, None)
         );
     }
@@ -257,23 +276,37 @@ mod tests {
     #[test]
     fn validate_accepts_directional_channel() {
         assert_eq!(
-            validate_command_request("up", Some(Channel::L1)).unwrap(),
+            validate_command_request("up", Some(Channel::L1), false).unwrap(),
             (Command::Up, Some(Channel::L1))
         );
     }
 
     #[test]
     fn validate_rejects_prog_without_channel() {
-        let err = validate_command_request("prog", None).unwrap_err();
+        let err = validate_command_request("prog", None, false).unwrap_err();
         assert!(err.contains("requires a channel"));
     }
 
     #[test]
     fn validate_accepts_prog_with_channel() {
         assert_eq!(
-            validate_command_request("prog", Some(Channel::L1)).unwrap(),
+            validate_command_request("prog", Some(Channel::L1), false).unwrap(),
             (Command::Prog, Some(Channel::L1))
         );
+    }
+
+    #[test]
+    fn validate_promotes_prog_with_long_to_prog_long() {
+        assert_eq!(
+            validate_command_request("prog", Some(Channel::L1), true).unwrap(),
+            (Command::ProgLong, Some(Channel::L1))
+        );
+    }
+
+    #[test]
+    fn validate_rejects_long_on_non_prog_commands() {
+        let err = validate_command_request("up", Some(Channel::L1), true).unwrap_err();
+        assert!(err.contains("only valid with prog"));
     }
 
     #[tokio::test]
@@ -287,7 +320,7 @@ mod tests {
             remote_control: remote_control.clone(),
         };
 
-        dispatch(&state, "up", Some(Channel::L3)).await.unwrap();
+        dispatch(&state, "up", Some(Channel::L3), false).await.unwrap();
 
         assert_eq!(remote_control.current_selection(), Channel::L3);
         assert_eq!(

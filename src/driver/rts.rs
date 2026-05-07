@@ -107,7 +107,7 @@ impl RtsDriver {
                 let channel = channel.unwrap_or_else(|| next_channel(self.selected_channel()));
                 self.set_selected_channel(channel).await
             }
-            Command::Up | Command::Down | Command::Stop | Command::Prog => {
+            Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
                 let channel = self.selected_channel();
                 self.execute_on(channel, command).await
             }
@@ -116,7 +116,8 @@ impl RtsDriver {
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let rts_command = RtsCommand::try_from(command)?;
-        self.transmit(channel, rts_command).await
+        let long = matches!(command, Command::ProgLong);
+        self.transmit(channel, rts_command, long).await
     }
 
     pub(crate) fn selected_channel(&self) -> Channel {
@@ -136,7 +137,7 @@ impl RtsDriver {
         Ok(())
     }
 
-    async fn transmit(&self, channel: Channel, command: RtsCommand) -> Result<()> {
+    async fn transmit(&self, channel: Channel, command: RtsCommand, long: bool) -> Result<()> {
         let (rolling_code, remote_id) = {
             let mut state = self.state.lock().await;
             let rolling_code = state.reserve_rolling_code(channel)?;
@@ -145,7 +146,11 @@ impl RtsDriver {
         };
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
-        let pulses = waveform::build(frame, self.options.gpio.gdo0);
+        let pulses = if long {
+            waveform::build_long(frame, self.options.gpio.gdo0)
+        } else {
+            waveform::build(frame, self.options.gpio.gdo0)
+        };
         let pulse_count = pulses.len();
         let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
         tracing::debug!(
