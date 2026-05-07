@@ -1,8 +1,11 @@
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 use crate::rts::waveform::GpioPulse;
+
+const SOCKET_TIMEOUT: Duration = Duration::from_secs(5);
 
 const CMD_MODES: u32 = 0;
 const CMD_WRITE: u32 = 4;
@@ -24,7 +27,19 @@ pub struct PigpioClient<S> {
 
 impl PigpioClient<TcpStream> {
     pub fn connect(addr: impl ToSocketAddrs) -> Result<Self> {
-        Ok(Self::new(TcpStream::connect(addr)?))
+        let stream = TcpStream::connect(addr).context("connecting to pigpiod")?;
+        // Each command is a 16-byte write followed by a read; Nagle would add up
+        // to ~40ms of artificial delay per round-trip.
+        stream
+            .set_nodelay(true)
+            .context("enabling TCP_NODELAY on pigpiod socket")?;
+        stream
+            .set_read_timeout(Some(SOCKET_TIMEOUT))
+            .context("setting pigpiod read timeout")?;
+        stream
+            .set_write_timeout(Some(SOCKET_TIMEOUT))
+            .context("setting pigpiod write timeout")?;
+        Ok(Self::new(stream))
     }
 }
 

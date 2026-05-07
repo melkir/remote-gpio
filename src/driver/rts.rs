@@ -287,6 +287,12 @@ fn transmit_blocking(
         tracing::debug!(wave_id, "pigpio wave transmit completed");
         Ok(())
     })();
+    if tx_result.is_err() {
+        // Stop any DMA still streaming before freeing the wave.
+        if let Err(err) = hw.pigpio.wave_halt() {
+            tracing::warn!(wave_id, %err, "pigpio wave halt failed during error cleanup");
+        }
+    }
     let delete_result = hw.pigpio.wave_delete(wave_id);
     let idle_result = hw.radio.idle();
 
