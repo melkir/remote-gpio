@@ -100,11 +100,75 @@ impl<S: Read + Write> PigpioClient<S> {
 
         let mut response = [0u8; 16];
         self.stream.read_exact(&mut response)?;
+        if response[0..12] != request[0..12] {
+            let echoed_cmd = u32::from_le_bytes(response[0..4].try_into().expect("fixed slice"));
+            bail!(
+                "pigpiod reply did not match request: sent {} ({}), got command field {} ({})",
+                command_name(command),
+                command,
+                command_name(echoed_cmd),
+                echoed_cmd,
+            );
+        }
         let result = i32::from_le_bytes(response[12..16].try_into().expect("fixed slice length"));
         if result < 0 {
-            bail!("pigpiod command {command} failed with status {result}");
+            let (name, description) = pi_error(result);
+            bail!(
+                "pigpiod {} ({}) failed: {} ({}) {}",
+                command_name(command),
+                command,
+                name,
+                result,
+                description,
+            );
         }
         Ok(result)
+    }
+}
+
+fn command_name(command: u32) -> &'static str {
+    match command {
+        CMD_MODES => "MODES",
+        CMD_WRITE => "WRITE",
+        CMD_WVCLR => "WVCLR",
+        CMD_WVAG => "WVAG",
+        CMD_WVBSY => "WVBSY",
+        CMD_WVHLT => "WVHLT",
+        CMD_WVCRE => "WVCRE",
+        CMD_WVDEL => "WVDEL",
+        CMD_WVTX => "WVTX",
+        CMD_WVNEW => "WVNEW",
+        _ => "UNKNOWN",
+    }
+}
+
+// pigpiod error codes derived from pigpio.h (Unlicense / public domain).
+// Restricted to codes that GPIO mode/write and waveform commands can return.
+fn pi_error(code: i32) -> (&'static str, &'static str) {
+    match code {
+        -1 => ("PI_INIT_FAILED", "gpioInitialise failed"),
+        -2 => ("PI_BAD_USER_GPIO", "GPIO not 0-31"),
+        -3 => ("PI_BAD_GPIO", "GPIO not 0-53"),
+        -4 => ("PI_BAD_MODE", "mode not 0-7"),
+        -5 => ("PI_BAD_LEVEL", "level not 0-1"),
+        -31 => (
+            "PI_NOT_INITIALISED",
+            "function called before gpioInitialise",
+        ),
+        -33 => ("PI_BAD_WAVE_MODE", "waveform mode not 0-3"),
+        -36 => ("PI_TOO_MANY_PULSES", "waveform has too many pulses"),
+        -37 => ("PI_TOO_MANY_CHARS", "waveform has too many chars"),
+        -41 => ("PI_NOT_PERMITTED", "GPIO operation not permitted"),
+        -42 => ("PI_SOME_PERMITTED", "one or more GPIO not permitted"),
+        -58 => ("PI_NO_MEMORY", "can't allocate temporary memory"),
+        -66 => ("PI_BAD_WAVE_ID", "non existent wave id"),
+        -67 => ("PI_TOO_MANY_CBS", "no more CBs for waveform"),
+        -68 => ("PI_TOO_MANY_OOL", "no more OOL for waveform"),
+        -69 => ("PI_EMPTY_WAVEFORM", "attempt to create an empty waveform"),
+        -70 => ("PI_NO_WAVEFORM_ID", "no more waveforms"),
+        -88 => ("PI_UNKNOWN_COMMAND", "unknown command"),
+        -103 => ("PI_MSG_TOOBIG", "socket/pipe message too big"),
+        _ => ("PI_UNKNOWN", "unrecognised pigpiod error code"),
     }
 }
 
@@ -117,23 +181,55 @@ mod tests {
     #[derive(Debug, Default)]
     struct FakeStream {
         written: Vec<u8>,
-        responses: VecDeque<[u8; 16]>,
+        results: VecDeque<i32>,
+        parse_cursor: usize,
+        pending_response: Option<[u8; 16]>,
+        force_mismatch: bool,
     }
 
     impl FakeStream {
-        fn with_responses(results: &[i32]) -> Self {
+        fn with_results(results: &[i32]) -> Self {
             Self {
-                written: Vec::new(),
-                responses: results.iter().map(|result| response(*result)).collect(),
+                results: results.iter().copied().collect(),
+                ..Self::default()
             }
+        }
+
+        fn with_mismatch(result: i32) -> Self {
+            Self {
+                results: VecDeque::from([result]),
+                force_mismatch: true,
+                ..Self::default()
+            }
+        }
+
+        fn parse_next_request(&mut self) {
+            assert!(self.pending_response.is_none());
+            assert!(self.parse_cursor + 16 <= self.written.len());
+            let header = &self.written[self.parse_cursor..self.parse_cursor + 16];
+            let ext_len = u32::from_le_bytes(header[12..16].try_into().unwrap()) as usize;
+            let mut response = [0u8; 16];
+            response[0..12].copy_from_slice(&header[0..12]);
+            if self.force_mismatch {
+                // Flip the echoed command word.
+                response[0] ^= 0xff;
+            }
+            let result = self.results.pop_front().expect("result for command");
+            response[12..16].copy_from_slice(&result.to_le_bytes());
+            self.pending_response = Some(response);
+            self.parse_cursor += 16 + ext_len;
         }
     }
 
     impl Read for FakeStream {
         fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-            let Some(response) = self.responses.pop_front() else {
-                return Ok(0);
-            };
+            if self.pending_response.is_none() {
+                if self.parse_cursor + 16 > self.written.len() || self.results.is_empty() {
+                    return Ok(0);
+                }
+                self.parse_next_request();
+            }
+            let response = self.pending_response.take().unwrap();
             buf[..response.len()].copy_from_slice(&response);
             Ok(response.len())
         }
@@ -152,7 +248,7 @@ mod tests {
 
     #[test]
     fn encodes_mode_write_and_wave_lifecycle_commands() {
-        let stream = FakeStream::with_responses(&[0, 0, 0, 0, 3, 0, 1, 0, 0]);
+        let stream = FakeStream::with_results(&[0, 0, 0, 0, 3, 0, 1, 0, 0]);
         let mut client = PigpioClient::new(stream);
 
         client.set_output(18).unwrap();
@@ -182,7 +278,7 @@ mod tests {
 
     #[test]
     fn encodes_wave_add_generic_extension() {
-        let stream = FakeStream::with_responses(&[0]);
+        let stream = FakeStream::with_results(&[0]);
         let mut client = PigpioClient::new(stream);
 
         client
@@ -213,18 +309,41 @@ mod tests {
     }
 
     #[test]
-    fn maps_negative_pigpio_result_to_error() {
-        let stream = FakeStream::with_responses(&[-2]);
+    fn negative_pigpiod_result_surfaces_pi_error_name() {
+        let stream = FakeStream::with_results(&[-36]);
+        let mut client = PigpioClient::new(stream);
+
+        let err = client
+            .wave_add_generic(&[GpioPulse {
+                gpio_on: 1,
+                gpio_off: 0,
+                us_delay: 640,
+            }])
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("WVAG"), "{message}");
+        assert!(message.contains("PI_TOO_MANY_PULSES"), "{message}");
+        assert!(message.contains("-36"), "{message}");
+    }
+
+    #[test]
+    fn unknown_negative_result_falls_back_to_pi_unknown() {
+        let stream = FakeStream::with_results(&[-9999]);
         let mut client = PigpioClient::new(stream);
 
         let err = client.wave_clear().unwrap_err();
-        assert!(err.to_string().contains("failed with status -2"));
+        assert!(err.to_string().contains("PI_UNKNOWN"), "{err}");
     }
 
-    fn response(result: i32) -> [u8; 16] {
-        let mut response = [0u8; 16];
-        response[12..16].copy_from_slice(&result.to_le_bytes());
-        response
+    #[test]
+    fn detects_reply_command_mismatch() {
+        let stream = FakeStream::with_mismatch(0);
+        let mut client = PigpioClient::new(stream);
+
+        let err = client.wave_clear().unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("did not match request"), "{message}");
+        assert!(message.contains("WVCLR"), "{message}");
     }
 
     fn u32_at(bytes: &[u8], offset: usize) -> u32 {
