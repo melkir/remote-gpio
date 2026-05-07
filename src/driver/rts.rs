@@ -1,6 +1,7 @@
 use anyhow::{bail, Context, Result};
 use std::net::{IpAddr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex as StdMutex};
+use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
@@ -27,6 +28,24 @@ pub(crate) fn pigpiod_addrs() -> [SocketAddr; 2] {
 struct Hardware {
     radio: Cc1101<Spi>,
     pigpio: PigpioClient<TcpStream>,
+    gdo0: u8,
+}
+
+impl Hardware {
+    fn reconnect_pigpio(&mut self) -> Result<()> {
+        // Drop the dead socket before opening a new one so we don't briefly hold two.
+        self.pigpio = connect_and_init_pigpio(self.gdo0)?;
+        Ok(())
+    }
+}
+
+fn connect_and_init_pigpio(gdo0: u8) -> Result<PigpioClient<TcpStream>> {
+    let mut pigpio = PigpioClient::connect(pigpiod_addrs().as_slice())
+        .with_context(|| format!("connecting to pigpiod at {PIGPIOD_ADDR}"))?;
+    pigpio.set_output(gdo0)?;
+    pigpio.write_level(gdo0, false)?;
+    pigpio.wave_clear()?;
+    Ok(pigpio)
 }
 
 #[cfg(target_os = "linux")]
@@ -229,13 +248,13 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
         radio
             .configure_ook_433_42()
             .context("configuring CC1101 for 433.42 MHz async OOK")?;
-        let mut pigpio = PigpioClient::connect(pigpiod_addrs().as_slice())
-            .with_context(|| format!("connecting to pigpiod at {PIGPIOD_ADDR}"))?;
-        pigpio.set_output(options.gpio.gdo0)?;
-        pigpio.write_level(options.gpio.gdo0, false)?;
-        pigpio.wave_clear()?;
+        let pigpio = connect_and_init_pigpio(options.gpio.gdo0)?;
         Ok(Arc::new(PigpioTransmitter {
-            hardware: Arc::new(StdMutex::new(Hardware { radio, pigpio })),
+            hardware: Arc::new(StdMutex::new(Hardware {
+                radio,
+                pigpio,
+                gdo0: options.gpio.gdo0,
+            })),
         }))
     })
     .await
@@ -272,17 +291,36 @@ fn transmit_blocking(
     pulses: Vec<waveform::GpioPulse>,
 ) -> Result<()> {
     let mut hw = hardware.lock().expect("RTS hardware mutex poisoned");
+    match try_transmit(&mut hw, &pulses) {
+        Err(err) if is_pigpio_io_error(&err) => {
+            tracing::warn!(error = %err, "pigpiod io error; reconnecting and retrying once");
+            hw.reconnect_pigpio()
+                .context("reconnecting to pigpiod after io error")?;
+            try_transmit(&mut hw, &pulses)
+        }
+        other => other,
+    }
+}
+
+fn try_transmit(hw: &mut Hardware, pulses: &[waveform::GpioPulse]) -> Result<()> {
     hw.pigpio.wave_new()?;
-    hw.pigpio.wave_add_generic(&pulses)?;
+    hw.pigpio.wave_add_generic(pulses)?;
     let wave_id = hw.pigpio.wave_create()?;
-    tracing::debug!(wave_id, "pigpio wave created");
+    let total_duration: Duration = pulses
+        .iter()
+        .map(|pulse| Duration::from_micros(pulse.us_delay as u64))
+        .sum();
+    tracing::debug!(wave_id, ?total_duration, "pigpio wave created");
 
     hw.radio.tx()?;
     let tx_result = (|| -> Result<()> {
         hw.pigpio.wave_tx(wave_id)?;
         tracing::debug!(wave_id, "pigpio wave transmit started");
+        // The waveform runs autonomously on the DMA engine; sleep through the
+        // bulk of it instead of polling WVBSY every 10ms, then poll the tail.
+        std::thread::sleep(total_duration.saturating_sub(Duration::from_millis(20)));
         while hw.pigpio.wave_busy()? {
-            std::thread::sleep(std::time::Duration::from_millis(10));
+            std::thread::sleep(Duration::from_millis(5));
         }
         tracing::debug!(wave_id, "pigpio wave transmit completed");
         Ok(())
@@ -300,6 +338,22 @@ fn transmit_blocking(
     delete_result?;
     idle_result?;
     Ok(())
+}
+
+fn is_pigpio_io_error(err: &anyhow::Error) -> bool {
+    err.chain().any(|cause| {
+        cause.downcast_ref::<std::io::Error>().is_some_and(|io| {
+            matches!(
+                io.kind(),
+                std::io::ErrorKind::BrokenPipe
+                    | std::io::ErrorKind::ConnectionReset
+                    | std::io::ErrorKind::ConnectionAborted
+                    | std::io::ErrorKind::UnexpectedEof
+                    | std::io::ErrorKind::TimedOut
+                    | std::io::ErrorKind::WouldBlock
+            )
+        })
+    })
 }
 
 pub(crate) fn require_loopback(addr: &str) -> Result<()> {

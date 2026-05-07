@@ -113,6 +113,10 @@ impl<S: Read + Write> PigpioClient<S> {
         request.extend_from_slice(extension);
         self.stream.write_all(&request)?;
 
+        // pigpiod replies with a 16-byte header. Some commands (SPI/I²C reads,
+        // BSPIX, etc.) follow that with `result` extension bytes; none of the
+        // commands we issue do, so a fixed 16-byte read is correct. Adding any
+        // extension-returning command requires draining those bytes here.
         let mut response = [0u8; 16];
         self.stream.read_exact(&mut response)?;
         if response[0..12] != request[0..12] {
