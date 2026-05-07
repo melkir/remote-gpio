@@ -64,6 +64,7 @@ impl<S: SpiDevice> Cc1101<S> {
 
     pub fn configure_ook_433_42(&mut self) -> Result<()> {
         self.strobe(STROBE_SRES)?;
+        std::thread::sleep(std::time::Duration::from_millis(1));
         self.write_register(REG_IOCFG0, 0x0D)?;
         self.write_register(REG_PKTCTRL0, 0x30)?;
         self.write_burst(REG_FREQ2, &FREQ_433_42_26MHZ)?;
