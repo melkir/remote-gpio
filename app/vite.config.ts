@@ -29,6 +29,9 @@ export default defineConfig({
     VitePWA({
       registerType: 'autoUpdate',
       useCredentials: true,
+      workbox: {
+        navigateFallbackDenylist: [/^\/events/, /^\/ws/, /^\/command/, /^\/channel/],
+      },
       manifest: {
         theme_color: '#0F172A',
         background_color: '#030711',

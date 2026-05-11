@@ -12,6 +12,7 @@ const DOWN_AFTER_MS = 30_000;
 type Options = {
   onSelection?: (selection: string) => void;
   onError?: (event: Event) => void;
+  onClosed?: () => void;
 };
 
 export function useSelectionEvents(url: string, options: Options = {}) {
@@ -46,6 +47,7 @@ export function useSelectionEvents(url: string, options: Options = {}) {
       if (es.readyState === EventSource.CLOSED) {
         clearDown();
         readyState.value = ReadyState.CLOSED;
+        optsRef.current.onClosed?.();
       } else {
         readyState.value = ReadyState.CONNECTING;
         if (downTimer === null) {

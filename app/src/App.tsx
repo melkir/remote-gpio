@@ -1,5 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { ReadyState, useSelectionEvents } from '@/hooks/use-selection-events';
+import { handleAuthFailure, isLikelyAuthFailure } from '@/lib/auth';
 import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
@@ -11,18 +12,27 @@ export function App() {
   const { triggerHaptic: shortHaptic } = useHaptic(100);
   const { triggerHaptic: longHaptic } = useHaptic(200);
   const send = useCallback(async (payload: { command: string; channel?: string }) => {
-    const response = await fetch('/command', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify(payload),
-    });
+    try {
+      const response = await fetch('/command', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
 
-    if (!response.ok) {
-      console.warn('[Command] Request failed:', await response.text());
+      if (!response.ok) {
+        console.warn('[Command] Request failed:', await response.text());
+      }
+    } catch (error) {
+      if (isLikelyAuthFailure(error)) {
+        handleAuthFailure();
+        return;
+      }
+      throw error;
     }
   }, []);
   const { readyState } = useSelectionEvents('/events', {
     onSelection: setActiveLed,
+    onClosed: handleAuthFailure,
   });
 
   useEffect(() => {
@@ -42,9 +52,12 @@ export function App() {
           }
         }
       } catch (error) {
-        if (!controller.signal.aborted) {
-          console.warn('[Selection] Snapshot request failed:', error);
+        if (controller.signal.aborted) return;
+        if (isLikelyAuthFailure(error)) {
+          handleAuthFailure();
+          return;
         }
+        console.warn('[Selection] Snapshot request failed:', error);
       }
     }
 
