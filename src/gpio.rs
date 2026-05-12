@@ -109,7 +109,6 @@ mod platform {
     use gpiocdev::tokio::AsyncRequest;
     use gpiocdev::{line::Value, Request};
     use std::time::Duration;
-    use std::time::Instant;
 
     /// Monitors GPIO inputs for LED selection changes
     /// Returns the selected LED input or ALL if multiple inputs are detected
@@ -133,7 +132,6 @@ mod platform {
         let areq = AsyncRequest::new(req);
         let mut events = areq.edge_events();
 
-        let start_time = Instant::now();
         let timeout_duration = Duration::from_millis(300);
         let mut last_event = None;
         let mut event_count = 0;
@@ -142,19 +140,30 @@ mod platform {
         // When all LEDs are lit (Channel::ALL), every input toggles, producing many edges.
         const ALL_EVENTS_THRESHOLD: u32 = 16;
 
-        // Collect events within the timeout period
-        while event_count < ALL_EVENTS_THRESHOLD && start_time.elapsed() < timeout_duration {
-            if let Some(Ok(event)) = events.next().await {
-                last_event = Some(event.offset);
-                event_count += 1;
-            } else {
+        let deadline = tokio::time::Instant::now() + timeout_duration;
+
+        // Collect events within the timeout period.
+        while event_count < ALL_EVENTS_THRESHOLD {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
                 break;
+            }
+            match tokio::time::timeout_at(deadline, events.next()).await {
+                Ok(Some(Ok(event))) => {
+                    last_event = Some(event.offset);
+                    event_count += 1;
+                }
+                Ok(Some(Err(err))) => return Err(err).context("reading GPIO edge event"),
+                Ok(None) => break,
+                Err(_) => break,
             }
         }
 
         // Return ALL if multiple events detected, otherwise return the last event
         if event_count < ALL_EVENTS_THRESHOLD {
-            channel_from_gpio(last_event.unwrap(), config)
+            let gpio = last_event
+                .ok_or_else(|| anyhow::anyhow!("Timed out waiting for Telis LED GPIO edge"))?;
+            channel_from_gpio(gpio, config)
         } else {
             Ok(Channel::ALL)
         }

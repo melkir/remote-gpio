@@ -16,6 +16,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
 
     let remote_control =
         Arc::new(RemoteControl::with_driver(resolved_config.config.driver_config()).await?);
+    let bind = resolved_config.config.server.bind.clone();
     let shared_state = Arc::new(AppState {
         remote_control: remote_control.clone(),
     });
@@ -36,7 +37,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
     };
 
     tokio::select! {
-        res = serve(shared_state) => res,
+        res = serve(shared_state, &bind) => res,
         sig = wait_for_shutdown() => {
             tracing::info!("received {sig}, shutting down");
             Ok(())

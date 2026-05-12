@@ -63,7 +63,7 @@ For RTS wiring, CC1101 register notes, and pairing, see [docs/HARDWARE.md](docs/
 
 ### API
 
-Server listens on `0.0.0.0:5002`.
+Server listens on `127.0.0.1:5002` by default. This is compatible with a local tunnel such as cloudflared. To expose the API directly on the LAN, set `[server].bind = "0.0.0.0:5002"` in `/etc/somfy/config.toml`.
 
 | Endpoint   | Method    | Description                                  |
 | ---------- | --------- | -------------------------------------------- |

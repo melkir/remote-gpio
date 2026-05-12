@@ -39,9 +39,9 @@ export default defineConfig({
         orientation: 'portrait',
         scope: '/',
         start_url: '/',
-        name: 'Remote Controller',
-        short_name: 'remote-controller',
-        description: 'A remote controller for your computer',
+        name: 'Somfy Remote',
+        short_name: 'Somfy',
+        description: 'Somfy blinds remote controller',
         icons: [
           { src: '/icon-192x192.png', sizes: '192x192', type: 'image/png' },
           { src: '/icon-256x256.png', sizes: '256x256', type: 'image/png' },

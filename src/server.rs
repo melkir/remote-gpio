@@ -43,9 +43,9 @@ struct WsQueryParams {
 }
 
 /// Starts the HTTP server with all routes and middleware
-pub async fn serve(shared_state: Arc<AppState>) -> Result<()> {
+pub async fn serve(shared_state: Arc<AppState>, bind: &str) -> Result<()> {
     let app = create_router(shared_state);
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:5002").await?;
+    let listener = tokio::net::TcpListener::bind(bind).await?;
     tracing::info!("Listening on http://{}", listener.local_addr()?);
 
     axum::serve(

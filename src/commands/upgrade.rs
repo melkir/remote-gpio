@@ -70,7 +70,9 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
                 .error_for_status()?
                 .text()
                 .await?;
-            parse_sha_for(&sums, ASSET_NAME)
+            Some(parse_sha_for(&sums, ASSET_NAME).ok_or_else(|| {
+                anyhow!("SHA256SUMS asset does not contain an entry for `{ASSET_NAME}`")
+            })?)
         }
         None => None,
     };
