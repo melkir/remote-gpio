@@ -1,6 +1,6 @@
 import { Button } from '@/components/ui/button';
 import { ReadyState, useSelectionEvents } from '@/hooks/use-selection-events';
-import { handleAuthFailure, isLikelyAuthFailure } from '@/lib/auth';
+import { handleAccessSessionExpiry, isAccessChallenge, isValidChannel } from '@/lib/access';
 import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
@@ -19,20 +19,21 @@ export function App() {
         body: JSON.stringify(payload),
       });
 
+      if (isAccessChallenge(response)) {
+        await handleAccessSessionExpiry();
+        return;
+      }
+
       if (!response.ok) {
         console.warn('[Command] Request failed:', await response.text());
       }
     } catch (error) {
-      if (isLikelyAuthFailure(error)) {
-        handleAuthFailure();
-        return;
-      }
-      throw error;
+      console.warn('[Command] Request failed:', error);
     }
   }, []);
   const { readyState } = useSelectionEvents('/events', {
     onSelection: setActiveLed,
-    onClosed: handleAuthFailure,
+    onClosed: handleAccessSessionExpiry,
   });
 
   useEffect(() => {
@@ -45,18 +46,21 @@ export function App() {
           signal: controller.signal,
         });
 
+        if (isAccessChallenge(response)) {
+          await handleAccessSessionExpiry();
+          return;
+        }
+
         if (response.ok) {
           const channel = (await response.text()).trim();
-          if (channel) {
+          if (isValidChannel(channel)) {
             setActiveLed(channel);
+          } else {
+            await handleAccessSessionExpiry();
           }
         }
       } catch (error) {
         if (controller.signal.aborted) return;
-        if (isLikelyAuthFailure(error)) {
-          handleAuthFailure();
-          return;
-        }
         console.warn('[Selection] Snapshot request failed:', error);
       }
     }

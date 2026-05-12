@@ -34,8 +34,8 @@ run = [
   "bun --cwd=app run format:check",
   "bun --cwd=app run lint",
   "bun --cwd=app run typecheck",
-  "cargo clippy --all-targets",
-  "cargo test",
+  "cargo clippy --all-targets -- -D warnings",
+  "cargo test --all-targets",
 ]
 
 [tasks."check:rust"]

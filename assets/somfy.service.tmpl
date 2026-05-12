@@ -18,9 +18,16 @@ StateDirectoryMode=0700
 NoNewPrivileges=true
 ProtectSystem=strict
 ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 PrivateTmp=true
+DevicePolicy=closed
 DeviceAllow={{GPIO_CHIP}} rw
 DeviceAllow={{SPI_DEVICE}} rw
+CapabilityBoundingSet=
 
 [Install]
 WantedBy=multi-user.target

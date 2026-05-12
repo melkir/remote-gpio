@@ -54,6 +54,7 @@ export function useSelectionEvents(url: string, options: Options = {}) {
           downTimer = setTimeout(() => {
             downTimer = null;
             readyState.value = ReadyState.CLOSED;
+            optsRef.current.onClosed?.();
           }, DOWN_AFTER_MS);
         }
       }

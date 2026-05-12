@@ -75,11 +75,15 @@ The driver watches input lines with edge detection, collecting up to 16 events w
 
 ```rust
 let timeout_duration = Duration::from_millis(300);
-while event_count < 16 && start_time.elapsed() < timeout_duration {
-    if let Some(Ok(event)) = events.next().await {
-        last_event = Some(event.offset);
-        event_count += 1;
-    }
+let deadline = tokio::time::Instant::now() + timeout_duration;
+while event_count < 16 {
+    match tokio::time::timeout_at(deadline, events.next()).await {
+        Ok(Some(Ok(event))) => {
+            last_event = Some(event.offset);
+            event_count += 1;
+        }
+        _ => break,
+    };
 }
 // 16+ edges in 300ms = ALL, otherwise map last edge to L1-L4
 ```
@@ -133,6 +137,11 @@ and CI-style non-Pi builds select `fake`. A config file always wins.
 
 ```toml
 driver = "rts"
+homekit = true
+
+[server]
+# Loopback by default. cloudflared can proxy this local endpoint.
+bind = "127.0.0.1:5002"
 
 [rts]
 spi_device = "/dev/spidev0.0"
