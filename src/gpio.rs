@@ -144,10 +144,6 @@ mod platform {
 
         // Collect events within the timeout period.
         while event_count < ALL_EVENTS_THRESHOLD {
-            let now = tokio::time::Instant::now();
-            if now >= deadline {
-                break;
-            }
             match tokio::time::timeout_at(deadline, events.next()).await {
                 Ok(Some(Ok(event))) => {
                     last_event = Some(event.offset);
