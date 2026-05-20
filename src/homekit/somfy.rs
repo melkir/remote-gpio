@@ -17,6 +17,11 @@ use crate::hap::runtime::{
     CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture, HapStatus,
     Subscriptions,
 };
+use crate::homekit::accessory_db::{
+    self, BlindAccessory, BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE,
+    IID_IDENTIFY, IID_MANUFACTURER, IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
+    IID_TARGET_POSITION, POSITION_STATE_STOPPED,
+};
 use crate::homekit::positions;
 use crate::remote::{Command, PositionUpdate, RemoteControl};
 
@@ -27,8 +32,6 @@ struct Blind {
     channel: Channel,
     serial: &'static str,
 }
-
-const BRIDGE_AID: u64 = 1;
 
 const BLINDS: &[Blind] = &[
     Blind {
@@ -56,22 +59,6 @@ const BLINDS: &[Blind] = &[
         serial: "somfy-L4",
     },
 ];
-
-const IID_AINFO_SERVICE: u64 = 1;
-const IID_IDENTIFY: u64 = 2;
-const IID_MANUFACTURER: u64 = 3;
-const IID_MODEL: u64 = 4;
-const IID_NAME: u64 = 5;
-const IID_SERIAL: u64 = 6;
-const IID_FIRMWARE: u64 = 7;
-const IID_WC_SERVICE: u64 = 8;
-const IID_CURRENT_POSITION: u64 = 9;
-const IID_TARGET_POSITION: u64 = 10;
-const IID_POSITION_STATE: u64 = 11;
-const IID_BRIDGE_PROTO_SERVICE: u64 = 8;
-const IID_BRIDGE_VERSION: u64 = 9;
-
-const POSITION_STATE_STOPPED: u8 = 2;
 
 #[derive(Copy, Clone, Debug)]
 struct PendingTargetWrite {
@@ -165,19 +152,7 @@ impl SomfyHapApp {
         }
         let before = positions.clone();
         positions.insert(blind.aid, snapped);
-        let snapshot = positions.clone();
-        if self.persist_positions {
-            if let Err(e) = positions::save(&snapshot) {
-                tracing::warn!("failed to persist positions: {e}");
-            }
-        }
-        drop(positions);
-
-        snapshot
-            .iter()
-            .filter(|(aid, pos)| before.get(aid) != Some(pos))
-            .flat_map(|(aid, pos)| position_events(*aid, *pos))
-            .collect()
+        self.finish_position_update(&before, &positions)
     }
 
     async fn apply_all_position_change(&self, snapped: u8) -> Vec<CharacteristicEvent> {
@@ -193,15 +168,21 @@ impl SomfyHapApp {
         for blind in BLINDS {
             positions.insert(blind.aid, snapped);
         }
-        let snapshot = positions.clone();
+        self.finish_position_update(&before, &positions)
+    }
+
+    /// Persist and diff events while `positions` is still covered by the cache mutex.
+    fn finish_position_update(
+        &self,
+        before: &HashMap<u64, u8>,
+        positions: &HashMap<u64, u8>,
+    ) -> Vec<CharacteristicEvent> {
         if self.persist_positions {
-            if let Err(e) = positions::save(&snapshot) {
+            if let Err(e) = positions::save(positions) {
                 tracing::warn!("failed to persist positions: {e}");
             }
         }
-        drop(positions);
-
-        snapshot
+        positions
             .iter()
             .filter(|(aid, pos)| before.get(aid) != Some(pos))
             .flat_map(|(aid, pos)| position_events(*aid, *pos))
@@ -501,106 +482,20 @@ fn find_blind(aid: u64) -> Option<&'static Blind> {
 }
 
 fn build_accessories(positions: &[(u64, u8)]) -> Value {
-    let mut accessories = vec![bridge_accessory()];
-    for blind in BLINDS {
-        let pos = positions
-            .iter()
-            .find(|(a, _)| *a == blind.aid)
-            .map(|(_, p)| *p)
-            .unwrap_or(100);
-        accessories.push(blind_accessory(blind, pos));
-    }
-    json!({ "accessories": accessories })
-}
-
-fn bridge_accessory() -> Value {
-    let firmware = env!("CARGO_PKG_VERSION");
-    json!({
-        "aid": BRIDGE_AID,
-        "services": [
-            {
-                "iid": IID_AINFO_SERVICE,
-                "type": "3E",
-                "characteristics": [
-                    char_string(IID_MANUFACTURER, "20", "Somfy", &["pr"]),
-                    char_string(IID_MODEL, "21", "Telis 4 Bridge", &["pr"]),
-                    char_string(IID_NAME, "23", "Somfy Bridge", &["pr"]),
-                    char_string(IID_SERIAL, "30", "somfy-bridge", &["pr"]),
-                    char_string(IID_FIRMWARE, "52", firmware, &["pr"]),
-                    char_bool_pw(IID_IDENTIFY, "14"),
-                ],
-            },
-            {
-                "iid": IID_BRIDGE_PROTO_SERVICE,
-                "type": "A2",
-                "characteristics": [
-                    char_string(IID_BRIDGE_VERSION, "37", "1.1.0", &["pr"]),
-                ],
-            }
-        ]
-    })
-}
-
-fn blind_accessory(blind: &Blind, position: u8) -> Value {
-    let firmware = env!("CARGO_PKG_VERSION");
-    json!({
-        "aid": blind.aid,
-        "services": [
-            {
-                "iid": IID_AINFO_SERVICE,
-                "type": "3E",
-                "characteristics": [
-                    char_string(IID_MANUFACTURER, "20", "Somfy", &["pr"]),
-                    char_string(IID_MODEL, "21", "Telis 4", &["pr"]),
-                    char_string(IID_NAME, "23", blind.name, &["pr"]),
-                    char_string(IID_SERIAL, "30", blind.serial, &["pr"]),
-                    char_string(IID_FIRMWARE, "52", firmware, &["pr"]),
-                    char_bool_pw(IID_IDENTIFY, "14"),
-                ],
-            },
-            {
-                "iid": IID_WC_SERVICE,
-                "type": "8C",
-                "characteristics": [
-                    char_uint8(IID_CURRENT_POSITION, "6D", position, &["pr", "ev"], 100),
-                    char_uint8(IID_TARGET_POSITION, "7C", position, &["pr", "pw", "ev"], 100),
-                    char_uint8(IID_POSITION_STATE, "72", POSITION_STATE_STOPPED, &["pr", "ev"], 2),
-                ],
-            }
-        ]
-    })
-}
-
-fn char_string(iid: u64, type_: &str, value: &str, perms: &[&str]) -> Value {
-    json!({
-        "iid": iid,
-        "type": type_,
-        "perms": perms,
-        "format": "string",
-        "value": value,
-    })
-}
-
-fn char_uint8(iid: u64, type_: &str, value: u8, perms: &[&str], max_value: u8) -> Value {
-    json!({
-        "iid": iid,
-        "type": type_,
-        "perms": perms,
-        "format": "uint8",
-        "value": value,
-        "minValue": 0,
-        "maxValue": max_value,
-        "minStep": 1,
-    })
-}
-
-fn char_bool_pw(iid: u64, type_: &str) -> Value {
-    json!({
-        "iid": iid,
-        "type": type_,
-        "perms": ["pw"],
-        "format": "bool",
-    })
+    let blinds: Vec<BlindAccessory<'_>> = BLINDS
+        .iter()
+        .map(|blind| BlindAccessory {
+            aid: blind.aid,
+            name: blind.name,
+            serial: blind.serial,
+            position: positions
+                .iter()
+                .find(|(aid, _)| *aid == blind.aid)
+                .map(|(_, pos)| *pos)
+                .unwrap_or(100),
+        })
+        .collect();
+    accessory_db::build_accessories(&blinds)
 }
 
 #[cfg(test)]
