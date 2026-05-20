@@ -111,13 +111,13 @@ impl ServiceState {
     }
 }
 
-pub fn stop_somfy_best_effort() {
+fn stop_somfy_best_effort() {
     if let Err(e) = systemd::systemctl(&["stop", "somfy"]) {
         tracing::warn!("systemctl stop reported: {e}");
     }
 }
 
-pub fn start_somfy() -> Result<()> {
+fn start_somfy() -> Result<()> {
     systemd::systemctl(&["start", "--no-block", "somfy"]).context("starting somfy")
 }
 
@@ -129,7 +129,7 @@ pub fn enable_somfy() -> Result<()> {
     systemd::systemctl(&["enable", "somfy"]).context("enabling somfy")
 }
 
-pub async fn wait_somfy_active(timeout: std::time::Duration) -> Result<()> {
+async fn wait_somfy_active(timeout: std::time::Duration) -> Result<()> {
     use std::time::Instant;
     let deadline = Instant::now() + timeout;
     loop {
@@ -147,7 +147,7 @@ pub async fn wait_somfy_active(timeout: std::time::Duration) -> Result<()> {
 }
 
 /// Move the live binary to `somfy.prev` when present.
-pub fn archive_live_binary() -> Result<()> {
+fn archive_live_binary() -> Result<()> {
     let bin_path = Path::new(BIN_PATH);
     let prev_path = Path::new(BIN_PREV);
     if bin_path.exists() {
@@ -158,16 +158,16 @@ pub fn archive_live_binary() -> Result<()> {
 }
 
 /// Atomically promote a staged binary into `BIN_PATH`.
-pub fn install_staged_binary(staged: &Path) -> Result<()> {
+fn install_staged_binary(staged: &Path) -> Result<()> {
     fs::rename(staged, BIN_PATH).context("moving new binary into place")
 }
 
-pub fn remove_prev_binary() {
+fn remove_prev_binary() {
     let _ = fs::remove_file(BIN_PREV);
 }
 
 /// Restore `somfy.prev` over the live binary when a rollback is needed.
-pub fn restore_prev_binary() -> Result<()> {
+fn restore_prev_binary() -> Result<()> {
     let bin_path = PathBuf::from(BIN_PATH);
     let prev_path = PathBuf::from(BIN_PREV);
     if prev_path.exists() {
