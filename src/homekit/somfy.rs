@@ -249,7 +249,7 @@ impl HapAccessoryApp for SomfyHapApp {
                     _ => {
                         statuses[index] = Some(CharacteristicWriteStatus::error(
                             write.id,
-                            HapStatus::InvalidValue,
+                            HapStatus::InvalidValueInRequest,
                         ));
                         continue;
                     }

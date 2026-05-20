@@ -7,6 +7,8 @@ use crate::hap::session::{EncryptedReader, EncryptedWriter, MAX_FRAME_PLAINTEXT}
 
 // --- HTTP request reading ----------------------------------------------------
 
+const MAX_HTTP_BUFFER: usize = 16 * MAX_FRAME_PLAINTEXT;
+
 pub(super) struct RawRequest {
     pub method: String,
     pub path: String,
@@ -46,12 +48,18 @@ impl HapReader {
         }
     }
 
-    pub fn upgrade(self, key: [u8; 32]) -> Self {
+    pub fn upgrade(self, key: [u8; 32]) -> Result<Self> {
         match self {
-            HapReader::Plain { inner, .. } => {
-                HapReader::Encrypted(EncryptedReader::new(inner, key))
+            HapReader::Plain { inner, buf } => {
+                if !buf.is_empty() {
+                    bail!(
+                        "cannot upgrade HAP reader with {} buffered plain bytes",
+                        buf.len()
+                    );
+                }
+                Ok(HapReader::Encrypted(EncryptedReader::new(inner, key)))
             }
-            other => other,
+            other => Ok(other),
         }
     }
 }
@@ -134,10 +142,16 @@ async fn read_request_plain(reader: &mut OwnedReadHalf, buf: &mut Vec<u8>) -> Re
         if let Some(req) = try_parse(buf)? {
             return Ok(req);
         }
+        if buf.len() >= MAX_HTTP_BUFFER {
+            bail!("plain HTTP request too large");
+        }
         let mut chunk = [0u8; 2048];
         let n = reader.read(&mut chunk).await?;
         if n == 0 {
             bail!("connection closed");
+        }
+        if buf.len() + n > MAX_HTTP_BUFFER {
+            bail!("plain HTTP request too large");
         }
         buf.extend_from_slice(&chunk[..n]);
     }
@@ -159,7 +173,7 @@ async fn read_request_encrypted(reader: &mut EncryptedReader) -> Result<RawReque
             bail!("encrypted connection closed");
         }
         // safety: prevent runaway frames
-        if reader.buffered().len() > 16 * MAX_FRAME_PLAINTEXT {
+        if reader.buffered().len() > MAX_HTTP_BUFFER {
             bail!("encrypted request too large");
         }
     }

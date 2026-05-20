@@ -75,6 +75,20 @@ where
                 )));
             }
             let ids = req.query_param("id").unwrap_or_default();
+            let ids = match parse_characteristic_ids(&ids) {
+                Ok(ids) => ids,
+                Err(status) => {
+                    let body = characteristics_body(vec![CharacteristicRead::error(
+                        CharacteristicId::new(0, 0),
+                        status,
+                    )]);
+                    return Ok(RequestOutcome::response(OutboundResponse::Body {
+                        status: StatusCode::OK,
+                        content_type: "application/hap+json",
+                        body,
+                    }));
+                }
+            };
             let body = handle_get_characteristics(ctx.app.as_ref(), &ids).await?;
             Ok(RequestOutcome::response(OutboundResponse::Body {
                 status: StatusCode::OK,
@@ -215,7 +229,7 @@ pub(super) async fn write_request_response(
                 .write_response(StatusCode::OK, "application/pairing+tlv8", &reply)
                 .await?;
             let upgraded_reader =
-                std::mem::replace(reader, HapReader::Upgrading).upgrade(keys.read);
+                std::mem::replace(reader, HapReader::Upgrading).upgrade(keys.read)?;
             let upgraded_writer =
                 std::mem::replace(writer, HapWriter::Upgrading).upgrade(keys.write);
             *reader = upgraded_reader;
@@ -251,9 +265,11 @@ pub(super) fn build_event_body(
     )
 }
 
-async fn handle_get_characteristics(app: &impl HapAccessoryApp, ids: &str) -> Result<Vec<u8>> {
-    let ids = parse_characteristic_ids(ids);
-    let values = app.read_characteristics(&ids).await?;
+async fn handle_get_characteristics(
+    app: &impl HapAccessoryApp,
+    ids: &[CharacteristicId],
+) -> Result<Vec<u8>> {
+    let values = app.read_characteristics(ids).await?;
     Ok(characteristics_body(values))
 }
 
@@ -351,14 +367,26 @@ async fn handle_put_characteristics(
     app.write_characteristics(writes, subs).await
 }
 
-fn parse_characteristic_ids(ids: &str) -> Vec<CharacteristicId> {
+fn parse_characteristic_ids(ids: &str) -> std::result::Result<Vec<CharacteristicId>, HapStatus> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
     ids.split(',')
-        .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let mut parts = pair.split('.');
-            let aid = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            let iid = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            CharacteristicId::new(aid, iid)
+            let aid = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or(HapStatus::InvalidValueInRequest)?;
+            let iid = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or(HapStatus::InvalidValueInRequest)?;
+            if parts.next().is_some() {
+                return Err(HapStatus::InvalidValueInRequest);
+            }
+            Ok(CharacteristicId::new(aid, iid))
         })
         .collect()
 }
@@ -441,9 +469,20 @@ mod tests {
 
     #[test]
     fn parses_characteristic_ids() {
-        let ids = parse_characteristic_ids("2.9,3.10");
+        let ids = parse_characteristic_ids("2.9,3.10").unwrap();
         assert_eq!(ids[0], CharacteristicId::new(2, 9));
         assert_eq!(ids[1], CharacteristicId::new(3, 10));
+    }
+
+    #[test]
+    fn malformed_characteristic_ids_return_invalid_value() {
+        for ids in ["bad", "2", "2.bad", "2.9.extra", "2.9,"] {
+            assert_eq!(
+                parse_characteristic_ids(ids),
+                Err(HapStatus::InvalidValueInRequest),
+                "{ids}"
+            );
+        }
     }
 
     #[test]
