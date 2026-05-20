@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use crate::commands::install;
 use crate::config::{self, ResolvedConfig};
+use crate::deploy::{atomic_write, restart_somfy};
 use crate::driver::DriverKind;
-use crate::systemd;
 
 pub fn path(resolved: &ResolvedConfig) {
     println!("{}", resolved.path.display());
@@ -24,14 +24,14 @@ pub fn set_driver(resolved: &ResolvedConfig, kind: DriverKind) -> Result<()> {
     next.driver = kind;
     config::validate(&next)?;
 
-    install::atomic_write(&resolved.path, &config::to_toml(&next)?)?;
-    println!("wrote {} (driver={kind})", resolved.path.display());
-
     if kind == DriverKind::Rts {
         install::prepare_rts_prereqs()?;
     }
 
-    systemd::systemctl(&["restart", "somfy"])?;
+    atomic_write(&resolved.path, &config::to_toml(&next)?)?;
+    println!("wrote {} (driver={kind})", resolved.path.display());
+
+    restart_somfy()?;
     println!("somfy restarted");
     Ok(())
 }

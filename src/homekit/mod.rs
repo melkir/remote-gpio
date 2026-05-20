@@ -9,6 +9,7 @@ use crate::hap::runtime::HapRuntime;
 use crate::hap::state::{FileHapStore, HapState};
 use crate::remote::RemoteControl;
 
+mod accessory_db;
 pub mod config;
 pub mod positions;
 pub mod somfy;

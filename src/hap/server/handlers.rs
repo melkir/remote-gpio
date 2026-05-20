@@ -1,125 +1,22 @@
-//! HAP TCP server: per-connection state machine handling pair-setup,
-//! pair-verify, and (post-verify) the encrypted accessory protocol.
-
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, Result};
 use http::StatusCode;
 use serde_json::Value;
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
-use tokio::net::TcpListener;
-use tokio::sync::broadcast;
 
-use crate::hap::pair_setup::{PairSetupSession, PersistPolicy};
-use crate::hap::pair_verify::{HandleOutcome, PairVerifySession};
+use super::state::ConnectionState;
+use super::transport::{HapReader, HapWriter, RawRequest};
+use crate::hap::pair_setup::PersistPolicy;
+use crate::hap::pair_verify::HandleOutcome;
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWrite,
     CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapRuntime, HapStatus,
     HapStore, Subscriptions,
 };
-use crate::hap::session::{EncryptedReader, EncryptedWriter, SessionKeys, MAX_FRAME_PLAINTEXT};
+use crate::hap::session::SessionKeys;
 use crate::hap::tlv::{HapError, ParsedTlv, Tag as TlvTag, Tlv};
 
-pub async fn serve<A, S>(ctx: Arc<HapRuntime<A, S>>, port: u16) -> Result<()>
-where
-    A: HapAccessoryApp,
-    S: HapStore,
-{
-    let addr: SocketAddr = ([0, 0, 0, 0], port).into();
-    let listener = TcpListener::bind(addr).await?;
-    tracing::info!("HAP server listening on {}", addr);
-
-    loop {
-        let (stream, peer) = match listener.accept().await {
-            Ok(accepted) => accepted,
-            Err(e) => {
-                tracing::warn!("hap accept failed; continuing: {e}");
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                continue;
-            }
-        };
-        let ctx = ctx.clone();
-        tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, ctx).await {
-                tracing::debug!("hap connection {} closed: {}", peer, e);
-            }
-        });
-    }
-}
-
-async fn handle_connection<A, S>(
-    stream: tokio::net::TcpStream,
-    ctx: Arc<HapRuntime<A, S>>,
-) -> Result<()>
-where
-    A: HapAccessoryApp,
-    S: HapStore,
-{
-    let (read_half, write_half) = stream.into_split();
-    let mut reader = HapReader::Plain {
-        inner: read_half,
-        buf: Vec::new(),
-    };
-    let mut writer = HapWriter::Plain(write_half);
-    let mut conn = ConnectionState::new();
-    let mut event_rx = ctx.subscribe_events();
-
-    loop {
-        tokio::select! {
-            req = reader.next_request() => {
-                let req = req?;
-                tracing::debug!("hap request: {} {}", req.method, req.path);
-                let encrypted = writer.is_encrypted();
-                let outcome = handle_request(req, &ctx, &mut conn, encrypted).await?;
-                write_request_response(outcome.response, &mut reader, &mut writer, &mut conn).await?;
-                ctx.publish_events(outcome.events);
-            }
-            evt = event_rx.recv() => {
-                match evt {
-                    Ok(changes) => {
-                        if !writer.is_encrypted() {
-                            continue;
-                        }
-                        if let Some(body) = build_event_body(&changes, &conn.subs) {
-                            writer.write_event(&body).await?;
-                        }
-                    }
-                    Err(broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!("hap event subscriber lagged by {n}");
-                    }
-                    Err(broadcast::error::RecvError::Closed) => break,
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-struct ConnectionState {
-    pair_setup: PairSetupSession,
-    pair_verify: PairVerifySession,
-    subs: Subscriptions,
-    /// The controller identifier learned from the most recent pair-verify on
-    /// this connection. Only set after the channel becomes encrypted.
-    controller_id: Option<String>,
-}
-
-impl ConnectionState {
-    fn new() -> Self {
-        Self {
-            pair_setup: PairSetupSession::new(),
-            pair_verify: PairVerifySession::new(),
-            subs: Subscriptions::default(),
-            controller_id: None,
-        }
-    }
-}
-
-struct RequestOutcome {
-    response: OutboundResponse,
-    events: Vec<CharacteristicEvent>,
+pub(super) struct RequestOutcome {
+    pub response: OutboundResponse,
+    pub events: Vec<CharacteristicEvent>,
 }
 
 impl RequestOutcome {
@@ -131,7 +28,7 @@ impl RequestOutcome {
     }
 }
 
-enum OutboundResponse {
+pub(super) enum OutboundResponse {
     Status(StatusCode),
     Body {
         status: StatusCode,
@@ -145,7 +42,7 @@ enum OutboundResponse {
     },
 }
 
-async fn handle_request<A, S>(
+pub(super) async fn handle_request<A, S>(
     req: RawRequest,
     ctx: &HapRuntime<A, S>,
     conn: &mut ConnectionState,
@@ -178,6 +75,20 @@ where
                 )));
             }
             let ids = req.query_param("id").unwrap_or_default();
+            let ids = match parse_characteristic_ids(&ids) {
+                Ok(ids) => ids,
+                Err(status) => {
+                    let body = characteristics_body(vec![CharacteristicRead::error(
+                        CharacteristicId::new(0, 0),
+                        status,
+                    )]);
+                    return Ok(RequestOutcome::response(OutboundResponse::Body {
+                        status: StatusCode::OK,
+                        content_type: "application/hap+json",
+                        body,
+                    }));
+                }
+            };
             let body = handle_get_characteristics(ctx.app.as_ref(), &ids).await?;
             Ok(RequestOutcome::response(OutboundResponse::Body {
                 status: StatusCode::OK,
@@ -296,7 +207,7 @@ where
     }
 }
 
-async fn write_request_response(
+pub(super) async fn write_request_response(
     response: OutboundResponse,
     reader: &mut HapReader,
     writer: &mut HapWriter,
@@ -318,7 +229,7 @@ async fn write_request_response(
                 .write_response(StatusCode::OK, "application/pairing+tlv8", &reply)
                 .await?;
             let upgraded_reader =
-                std::mem::replace(reader, HapReader::Upgrading).upgrade(keys.read);
+                std::mem::replace(reader, HapReader::Upgrading).upgrade(keys.read)?;
             let upgraded_writer =
                 std::mem::replace(writer, HapWriter::Upgrading).upgrade(keys.write);
             *reader = upgraded_reader;
@@ -330,7 +241,10 @@ async fn write_request_response(
     }
 }
 
-fn build_event_body(changes: &[CharacteristicEvent], subs: &Subscriptions) -> Option<Vec<u8>> {
+pub(super) fn build_event_body(
+    changes: &[CharacteristicEvent],
+    subs: &Subscriptions,
+) -> Option<Vec<u8>> {
     let mut out = Vec::new();
     for event in changes {
         if subs.contains(&event.id) {
@@ -351,9 +265,11 @@ fn build_event_body(changes: &[CharacteristicEvent], subs: &Subscriptions) -> Op
     )
 }
 
-async fn handle_get_characteristics(app: &impl HapAccessoryApp, ids: &str) -> Result<Vec<u8>> {
-    let ids = parse_characteristic_ids(ids);
-    let values = app.read_characteristics(&ids).await?;
+async fn handle_get_characteristics(
+    app: &impl HapAccessoryApp,
+    ids: &[CharacteristicId],
+) -> Result<Vec<u8>> {
+    let values = app.read_characteristics(ids).await?;
     Ok(characteristics_body(values))
 }
 
@@ -451,14 +367,26 @@ async fn handle_put_characteristics(
     app.write_characteristics(writes, subs).await
 }
 
-fn parse_characteristic_ids(ids: &str) -> Vec<CharacteristicId> {
+fn parse_characteristic_ids(ids: &str) -> std::result::Result<Vec<CharacteristicId>, HapStatus> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
     ids.split(',')
-        .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let mut parts = pair.split('.');
-            let aid = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            let iid = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-            CharacteristicId::new(aid, iid)
+            let aid = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or(HapStatus::InvalidValueInRequest)?;
+            let iid = parts
+                .next()
+                .and_then(|s| s.parse().ok())
+                .ok_or(HapStatus::InvalidValueInRequest)?;
+            if parts.next().is_some() {
+                return Err(HapStatus::InvalidValueInRequest);
+            }
+            Ok(CharacteristicId::new(aid, iid))
         })
         .collect()
 }
@@ -513,193 +441,13 @@ fn write_statuses_body(statuses: Vec<CharacteristicWriteStatus>) -> Vec<u8> {
         .into_bytes()
 }
 
-// --- HTTP request reading ----------------------------------------------------
-
-struct RawRequest {
-    method: String,
-    path: String,
-    body: Vec<u8>,
-}
-
-impl RawRequest {
-    fn path_only(&self) -> &str {
-        self.path.split('?').next().unwrap_or(&self.path)
-    }
-    fn query_param(&self, key: &str) -> Option<String> {
-        let q = self.path.split('?').nth(1)?;
-        for part in q.split('&') {
-            let mut it = part.splitn(2, '=');
-            let k = it.next()?;
-            let v = it.next().unwrap_or("");
-            if k == key {
-                return Some(v.to_string());
-            }
-        }
-        None
-    }
-}
-
-enum HapReader {
-    Plain { inner: OwnedReadHalf, buf: Vec<u8> },
-    Encrypted(EncryptedReader),
-    Upgrading,
-}
-
-impl HapReader {
-    async fn next_request(&mut self) -> Result<RawRequest> {
-        match self {
-            HapReader::Plain { inner, buf } => read_request_plain(inner, buf).await,
-            HapReader::Encrypted(r) => read_request_encrypted(r).await,
-            HapReader::Upgrading => bail!("reader temporarily unavailable during upgrade"),
-        }
-    }
-
-    fn upgrade(self, key: [u8; 32]) -> Self {
-        match self {
-            HapReader::Plain { inner, .. } => {
-                HapReader::Encrypted(EncryptedReader::new(inner, key))
-            }
-            other => other,
-        }
-    }
-}
-
-enum HapWriter {
-    Plain(OwnedWriteHalf),
-    Encrypted(EncryptedWriter),
-    Upgrading,
-}
-
-impl HapWriter {
-    fn is_encrypted(&self) -> bool {
-        matches!(self, HapWriter::Encrypted(_))
-    }
-
-    fn upgrade(self, key: [u8; 32]) -> Self {
-        match self {
-            HapWriter::Plain(w) => HapWriter::Encrypted(EncryptedWriter::new(w, key)),
-            other => other,
-        }
-    }
-
-    async fn write_response(
-        &mut self,
-        status: StatusCode,
-        content_type: &str,
-        body: &[u8],
-    ) -> Result<()> {
-        let head = format!(
-            "HTTP/1.1 {} {}\r\nContent-Type: {}\r\nContent-Length: {}\r\n\r\n",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or("Unknown"),
-            content_type,
-            body.len()
-        );
-        let mut out = Vec::with_capacity(head.len() + body.len());
-        out.extend_from_slice(head.as_bytes());
-        out.extend_from_slice(body);
-        self.write_all(&out).await
-    }
-
-    async fn write_event(&mut self, body: &[u8]) -> Result<()> {
-        let head = format!(
-            "EVENT/1.0 200 OK\r\nContent-Type: application/hap+json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        );
-        let mut out = Vec::with_capacity(head.len() + body.len());
-        out.extend_from_slice(head.as_bytes());
-        out.extend_from_slice(body);
-        self.write_all(&out).await
-    }
-
-    async fn write_status(&mut self, status: StatusCode) -> Result<()> {
-        let head = format!(
-            "HTTP/1.1 {} {}\r\nContent-Length: 0\r\n\r\n",
-            status.as_u16(),
-            status.canonical_reason().unwrap_or("Unknown")
-        );
-        self.write_all(head.as_bytes()).await
-    }
-
-    async fn write_all(&mut self, data: &[u8]) -> Result<()> {
-        match self {
-            HapWriter::Plain(w) => {
-                w.write_all(data).await?;
-                w.flush().await?;
-            }
-            HapWriter::Encrypted(w) => {
-                w.write_all(data).await?;
-                w.flush().await?;
-            }
-            HapWriter::Upgrading => bail!("writer temporarily unavailable during upgrade"),
-        }
-        Ok(())
-    }
-}
-
-async fn read_request_plain(reader: &mut OwnedReadHalf, buf: &mut Vec<u8>) -> Result<RawRequest> {
-    loop {
-        if let Some(req) = try_parse(buf)? {
-            return Ok(req);
-        }
-        let mut chunk = [0u8; 2048];
-        let n = reader.read(&mut chunk).await?;
-        if n == 0 {
-            bail!("connection closed");
-        }
-        buf.extend_from_slice(&chunk[..n]);
-    }
-}
-
-async fn read_request_encrypted(reader: &mut EncryptedReader) -> Result<RawRequest> {
-    loop {
-        // Try parse against currently buffered plaintext (clone to a Vec since
-        // try_parse mutates).
-        let mut snapshot = reader.buffered().to_vec();
-        if let Some(req) = try_parse(&mut snapshot)? {
-            let consumed = reader.buffered().len() - snapshot.len();
-            reader.consume(consumed);
-            return Ok(req);
-        }
-        // Need more bytes.
-        reader.fill(reader.buffered().len() + 1).await?;
-        if reader.buffered().is_empty() {
-            bail!("encrypted connection closed");
-        }
-        // safety: prevent runaway frames
-        if reader.buffered().len() > 16 * MAX_FRAME_PLAINTEXT {
-            bail!("encrypted request too large");
-        }
-    }
-}
-
-fn try_parse(buf: &mut Vec<u8>) -> Result<Option<RawRequest>> {
-    let mut headers = [httparse::EMPTY_HEADER; 32];
-    let mut req = httparse::Request::new(&mut headers);
-    let header_len = match req.parse(buf)? {
-        httparse::Status::Complete(n) => n,
-        httparse::Status::Partial => return Ok(None),
-    };
-    let content_length: usize = req
-        .headers
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case("content-length"))
-        .and_then(|h| std::str::from_utf8(h.value).ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
-    if buf.len() < header_len + content_length {
-        return Ok(None);
-    }
-    let method = req.method.unwrap_or("").to_string();
-    let path = req.path.unwrap_or("").to_string();
-    let body = buf[header_len..header_len + content_length].to_vec();
-    buf.drain(..header_len + content_length);
-    Ok(Some(RawRequest { method, path, body }))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::hap::runtime::{
+        CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWriteStatus,
+        HapStatus, Subscriptions,
+    };
     use serde_json::json;
 
     #[test]
@@ -713,7 +461,7 @@ mod tests {
 
         subs.insert(event.id);
         let body = build_event_body(&[event], &subs).unwrap();
-        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(parsed["characteristics"][0]["aid"], 2);
         assert_eq!(parsed["characteristics"][0]["iid"], 9);
         assert_eq!(parsed["characteristics"][0]["value"], 100);
@@ -721,11 +469,20 @@ mod tests {
 
     #[test]
     fn parses_characteristic_ids() {
-        let ids = parse_characteristic_ids("2.9,3.10,bad");
-
+        let ids = parse_characteristic_ids("2.9,3.10").unwrap();
         assert_eq!(ids[0], CharacteristicId::new(2, 9));
         assert_eq!(ids[1], CharacteristicId::new(3, 10));
-        assert_eq!(ids[2], CharacteristicId::new(0, 0));
+    }
+
+    #[test]
+    fn malformed_characteristic_ids_return_invalid_value() {
+        for ids in ["bad", "2", "2.bad", "2.9.extra", "2.9,"] {
+            assert_eq!(
+                parse_characteristic_ids(ids),
+                Err(HapStatus::InvalidValueInRequest),
+                "{ids}"
+            );
+        }
     }
 
     #[test]
@@ -734,7 +491,7 @@ mod tests {
             CharacteristicId::new(2, 99),
             HapStatus::ResourceDoesNotExist,
         )]);
-        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(parsed["characteristics"][0]["aid"], 2);
         assert_eq!(parsed["characteristics"][0]["iid"], 99);
@@ -751,7 +508,7 @@ mod tests {
             CharacteristicId::new(2, 9),
             HapStatus::ReadOnly,
         )]);
-        let parsed: Value = serde_json::from_slice(&body).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
 
         assert_eq!(parsed["characteristics"][0]["aid"], 2);
         assert_eq!(parsed["characteristics"][0]["iid"], 9);
@@ -759,16 +516,5 @@ mod tests {
             parsed["characteristics"][0]["status"],
             HapStatus::ReadOnly.code()
         );
-    }
-
-    #[test]
-    fn server_runtime_layer_does_not_import_somfy_modules() {
-        let server =
-            std::fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/src/hap/server.rs"))
-                .unwrap();
-
-        assert!(!server.contains(concat!("crate::", "gpio")));
-        assert!(!server.contains(concat!("crate::", "remote")));
-        assert!(!server.contains(concat!("crate::server::", "AppState")));
     }
 }

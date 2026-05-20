@@ -1,12 +1,18 @@
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 use std::str::FromStr;
 
 use crate::driver::TelisGpioOptions;
 
 pub const DEFAULT_GPIO_CHIP: &str = "/dev/gpiochip0";
 pub const MAX_BCM_GPIO: u8 = 31;
+
+const CHANNELS: [(Channel, &str); 4] = [
+    (Channel::L1, "L1"),
+    (Channel::L2, "L2"),
+    (Channel::L3, "L3"),
+    (Channel::L4, "L4"),
+];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -25,11 +31,36 @@ impl Default for GpioOptions {
 /// Logical remote target selected by the Telis LED row.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Channel {
-    L1 = 21,
-    L2 = 20,
-    L3 = 16,
-    L4 = 12,
+    L1,
+    L2,
+    L3,
+    L4,
     ALL,
+}
+
+impl Channel {
+    pub const INDIVIDUALS: [Channel; 4] = [Channel::L1, Channel::L2, Channel::L3, Channel::L4];
+
+    pub fn led_gpio(self, config: &TelisGpioOptions) -> u8 {
+        match self {
+            Channel::L1 => config.led1,
+            Channel::L2 => config.led2,
+            Channel::L3 => config.led3,
+            Channel::L4 => config.led4,
+            Channel::ALL => unreachable!("ALL is not represented by one Telis LED GPIO"),
+        }
+    }
+
+    /// Advance the Telis selector one step (L1 → L2 → … → ALL → L1).
+    pub fn next(self) -> Self {
+        match self {
+            Channel::L1 => Channel::L2,
+            Channel::L2 => Channel::L3,
+            Channel::L3 => Channel::L4,
+            Channel::L4 => Channel::ALL,
+            Channel::ALL => Channel::L1,
+        }
+    }
 }
 
 /// Represents the Telis button GPIO pins driven by the wired driver.
@@ -45,26 +76,12 @@ impl FromStr for Channel {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "L1" => Ok(Channel::L1),
-            "L2" => Ok(Channel::L2),
-            "L3" => Ok(Channel::L3),
-            "L4" => Ok(Channel::L4),
             "ALL" => Ok(Channel::ALL),
-            _ => Err(anyhow::anyhow!("Invalid channel value: {}", s)),
-        }
-    }
-}
-
-impl TryFrom<u32> for Channel {
-    type Error = anyhow::Error;
-
-    fn try_from(value: u32) -> Result<Self, Self::Error> {
-        match value {
-            21 => Ok(Channel::L1),
-            20 => Ok(Channel::L2),
-            16 => Ok(Channel::L3),
-            12 => Ok(Channel::L4),
-            _ => Err(anyhow::anyhow!("Invalid channel value: {}", value)),
+            _ => CHANNELS
+                .iter()
+                .find(|(_, name)| *name == s)
+                .map(|(ch, _)| *ch)
+                .ok_or_else(|| anyhow::anyhow!("Invalid channel value: {s}")),
         }
     }
 }
@@ -72,23 +89,24 @@ impl TryFrom<u32> for Channel {
 impl std::fmt::Display for Channel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Channel::L1 => write!(f, "L1"),
-            Channel::L2 => write!(f, "L2"),
-            Channel::L3 => write!(f, "L3"),
-            Channel::L4 => write!(f, "L4"),
             Channel::ALL => write!(f, "ALL"),
+            other => CHANNELS
+                .iter()
+                .find(|(ch, _)| ch == other)
+                .map(|(_, name)| write!(f, "{name}"))
+                .unwrap_or_else(|| write!(f, "{other:?}")),
         }
     }
 }
 
-pub fn channel_gpio(channel: Channel, config: &TelisGpioOptions) -> u8 {
-    match channel {
-        Channel::L1 => config.led1,
-        Channel::L2 => config.led2,
-        Channel::L3 => config.led3,
-        Channel::L4 => config.led4,
-        Channel::ALL => unreachable!("ALL is not represented by one Telis LED GPIO"),
+pub fn channel_from_gpio(offset: u32, config: &TelisGpioOptions) -> Result<Channel> {
+    let gpio = offset as u8;
+    for channel in &Channel::INDIVIDUALS {
+        if channel.led_gpio(config) == gpio {
+            return Ok(*channel);
+        }
     }
+    Err(anyhow::anyhow!("Invalid channel GPIO value: {offset}"))
 }
 
 pub fn button_gpio(button: TelisButton, config: &TelisGpioOptions) -> u8 {
@@ -113,14 +131,11 @@ mod platform {
     /// Monitors GPIO inputs for LED selection changes
     /// Returns the selected LED input or ALL if multiple inputs are detected
     pub async fn watch_inputs(chip: &str, config: &TelisGpioOptions) -> Result<Channel> {
-        let offsets = [
-            config.led1 as u32,
-            config.led2 as u32,
-            config.led3 as u32,
-            config.led4 as u32,
-        ];
+        let offsets: Vec<u32> = Channel::INDIVIDUALS
+            .iter()
+            .map(|ch| ch.led_gpio(config) as u32)
+            .collect();
 
-        // Request multiple input lines with edge detection
         let req = Request::builder()
             .on_chip(chip)
             .with_lines(&offsets)
@@ -142,7 +157,6 @@ mod platform {
 
         let deadline = tokio::time::Instant::now() + timeout_duration;
 
-        // Collect events within the timeout period.
         while event_count < ALL_EVENTS_THRESHOLD {
             match tokio::time::timeout_at(deadline, events.next()).await {
                 Ok(Some(Ok(event))) => {
@@ -155,23 +169,12 @@ mod platform {
             }
         }
 
-        // Return ALL if multiple events detected, otherwise return the last event
         if event_count < ALL_EVENTS_THRESHOLD {
             let gpio = last_event
                 .ok_or_else(|| anyhow::anyhow!("Timed out waiting for Telis LED GPIO edge"))?;
             channel_from_gpio(gpio, config)
         } else {
             Ok(Channel::ALL)
-        }
-    }
-
-    fn channel_from_gpio(value: u32, config: &TelisGpioOptions) -> Result<Channel> {
-        match value as u8 {
-            gpio if gpio == config.led1 => Ok(Channel::L1),
-            gpio if gpio == config.led2 => Ok(Channel::L2),
-            gpio if gpio == config.led3 => Ok(Channel::L3),
-            gpio if gpio == config.led4 => Ok(Channel::L4),
-            _ => Err(anyhow::anyhow!("Invalid channel GPIO value: {}", value)),
         }
     }
 
@@ -191,7 +194,6 @@ mod platform {
         let offset = gpio as u32;
         let mut value = Value::Active;
 
-        // Request the output line
         let req = Request::builder()
             .on_chip(chip)
             .with_line(offset)
@@ -200,10 +202,8 @@ mod platform {
             .request()
             .context("Failed to request output line")?;
 
-        // Hold the button for minimum detection time
         tokio::time::sleep(duration).await;
 
-        // Release the button
         value = value.not();
         req.set_lone_value(value)
             .context("Failed to set output value")?;
@@ -257,13 +257,13 @@ pub use platform::{trigger_output, trigger_output_gpio, watch_inputs};
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::driver::TelisGpioOptions;
 
     #[test]
     fn channel_from_str_valid() {
-        assert_eq!(Channel::from_str("L1").unwrap(), Channel::L1);
-        assert_eq!(Channel::from_str("L2").unwrap(), Channel::L2);
-        assert_eq!(Channel::from_str("L3").unwrap(), Channel::L3);
-        assert_eq!(Channel::from_str("L4").unwrap(), Channel::L4);
+        for (ch, name) in CHANNELS {
+            assert_eq!(Channel::from_str(name).unwrap(), ch);
+        }
         assert_eq!(Channel::from_str("ALL").unwrap(), Channel::ALL);
     }
 
@@ -274,30 +274,30 @@ mod tests {
     }
 
     #[test]
-    fn channel_try_from_u32_valid() {
-        assert_eq!(Channel::try_from(21u32).unwrap(), Channel::L1);
-        assert_eq!(Channel::try_from(20u32).unwrap(), Channel::L2);
-        assert_eq!(Channel::try_from(16u32).unwrap(), Channel::L3);
-        assert_eq!(Channel::try_from(12u32).unwrap(), Channel::L4);
-    }
-
-    #[test]
-    fn channel_try_from_u32_invalid() {
-        assert!(Channel::try_from(0u32).is_err());
-        assert!(Channel::try_from(99u32).is_err());
+    fn channel_from_gpio_uses_config_pins() {
+        let config = TelisGpioOptions::default();
+        assert_eq!(
+            channel_from_gpio(config.led1 as u32, &config).unwrap(),
+            Channel::L1
+        );
+        assert_eq!(
+            channel_from_gpio(config.led4 as u32, &config).unwrap(),
+            Channel::L4
+        );
+        assert!(channel_from_gpio(99, &config).is_err());
     }
 
     #[test]
     fn channel_display_round_trip() {
-        for v in [
+        for ch in [
             Channel::L1,
             Channel::L2,
             Channel::L3,
             Channel::L4,
             Channel::ALL,
         ] {
-            let s = v.to_string();
-            assert_eq!(Channel::from_str(&s).unwrap(), v);
+            let s = ch.to_string();
+            assert_eq!(Channel::from_str(&s).unwrap(), ch);
         }
     }
 }

@@ -51,7 +51,7 @@ pub enum HapStatus {
     WriteOnly = -70405,
     NotificationNotSupported = -70406,
     ResourceDoesNotExist = -70409,
-    InvalidValue = -70410,
+    InvalidValueInRequest = -70410,
 }
 
 impl HapStatus {

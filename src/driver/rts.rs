@@ -123,7 +123,7 @@ impl RtsDriver {
     pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         match command {
             Command::Select => {
-                let channel = channel.unwrap_or_else(|| next_channel(self.selected_channel()));
+                let channel = channel.unwrap_or_else(|| self.selected_channel().next());
                 self.set_selected_channel(channel).await
             }
             Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
@@ -387,16 +387,6 @@ pub(crate) fn require_loopback(addr: &str) -> Result<()> {
         );
     }
     Ok(())
-}
-
-fn next_channel(channel: Channel) -> Channel {
-    match channel {
-        Channel::L1 => Channel::L2,
-        Channel::L2 => Channel::L3,
-        Channel::L3 => Channel::L4,
-        Channel::L4 => Channel::ALL,
-        Channel::ALL => Channel::L1,
-    }
 }
 
 #[cfg(test)]

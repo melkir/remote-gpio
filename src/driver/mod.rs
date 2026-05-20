@@ -208,7 +208,7 @@ impl CommandRouter {
         match &self.executor {
             DriverExecutor::Fake(driver) => driver.operations(),
             #[allow(unreachable_patterns)]
-            _ => unreachable!("fake driver variant was not compiled"),
+            _ => unreachable!("operations() requires the fake driver"),
         }
     }
 }

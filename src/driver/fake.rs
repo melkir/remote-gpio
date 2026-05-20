@@ -39,7 +39,7 @@ impl FakeDriver {
         let target = channel.unwrap_or_else(|| self.selected_channel());
         match command {
             Command::Select => {
-                let channel = channel.unwrap_or_else(|| next_channel(self.selected_channel()));
+                let channel = channel.unwrap_or_else(|| self.selected_channel().next());
                 self.sender.send(channel)?;
                 self.transport.record_selection(channel).await;
             }
@@ -111,16 +111,6 @@ impl FakeTransport {
                 }
             })
             .collect()
-    }
-}
-
-fn next_channel(channel: Channel) -> Channel {
-    match channel {
-        Channel::L1 => Channel::L2,
-        Channel::L2 => Channel::L3,
-        Channel::L3 => Channel::L4,
-        Channel::L4 => Channel::ALL,
-        Channel::ALL => Channel::L1,
     }
 }
 

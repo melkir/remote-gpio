@@ -6,23 +6,21 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::cli::UpgradeChannel;
-use crate::commands::doctor::{self, BIN_PATH};
+use crate::commands::doctor;
 use crate::commands::install;
-use crate::systemd;
+use crate::deploy::{self, ServiceState, STAGED_DOWNLOAD};
 use crate::version;
 
-pub const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
-const BIN_DIR: &str = "/usr/local/bin";
 const ASSET_NAME: &str = "somfy";
 const SUMS_ASSET: &str = "SHA256SUMS";
 const WAIT_ACTIVE_SECS: u64 = 20;
 
 pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bool) -> Result<()> {
-    if !check && !nix::unistd::Uid::current().is_root() {
-        bail!("somfy upgrade must be run as root (use sudo)");
+    if !check {
+        deploy::require_root("somfy upgrade")?;
     }
 
     let client = reqwest::Client::builder()
@@ -57,7 +55,7 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
     let binary_url = asset_url(&release, ASSET_NAME)?;
     let sums_url = asset_url(&release, SUMS_ASSET).ok();
 
-    let tmp_path = PathBuf::from(BIN_DIR).join(".somfy.download");
+    let tmp_path = PathBuf::from(STAGED_DOWNLOAD);
     // Wipe any leftover from a prior failed run.
     let _ = fs::remove_file(&tmp_path);
 
@@ -112,126 +110,47 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
         }
     }
 
-    // Begin the atomic swap.
+    let resolved_config =
+        crate::config::resolve(None).context("loading config for unit refresh")?;
     let service_state = ServiceState::capture();
-    if let Err(e) = apply_swap(&tmp_path, service_state).await {
+    let was_running = service_state.was_running();
+
+    if let Err(e) = deploy::apply_binary_swap(
+        &tmp_path,
+        service_state,
+        || {
+            install::refresh(None, &resolved_config).context("refreshing unit")?;
+            Ok(())
+        },
+        || async {
+            let report = doctor::collect(&resolved_config, 0).await;
+            if report.has_blocking_failure() {
+                bail!("post-upgrade doctor reported blocking failure");
+            }
+            Ok(())
+        },
+        Duration::from_secs(WAIT_ACTIVE_SECS),
+    )
+    .await
+    {
         eprintln!("Upgrade failed: {e:#}");
         eprintln!("Rolling back...");
-        if let Err(re) = rollback(service_state) {
+        if let Err(re) = deploy::rollback_binary_swap(service_state) {
             eprintln!("Rollback error: {re:#}");
         }
         std::process::exit(1);
     }
 
-    println!("Upgrade complete.");
-    Ok(())
-}
-
-async fn apply_swap(new_bin: &Path, service_state: ServiceState) -> Result<()> {
-    let bin_path = Path::new(BIN_PATH);
-    let prev_path = Path::new(BIN_PREV);
-
-    if bin_path.exists() {
-        let _ = fs::remove_file(prev_path);
-        fs::rename(bin_path, prev_path).context("moving current binary to .prev")?;
-    }
-
-    if service_state.should_restart() {
-        if let Err(e) = systemd::systemctl(&["stop", "somfy"]) {
-            tracing::warn!("systemctl stop reported: {e}");
-        }
-    }
-
-    fs::rename(new_bin, bin_path).context("moving new binary into place")?;
-
-    // Reconcile unit with the new binary's template and resolved config.
-    let resolved_config =
-        crate::config::resolve(None).context("loading config for unit refresh")?;
-    install::refresh(None, &resolved_config).context("refreshing unit")?;
-
-    if !service_state.should_restart() {
+    if !was_running {
         println!(
             "Service was {}; upgraded binary and left somfy stopped.",
-            service_state.state
+            service_state.state_label()
         );
         println!("Run `sudo systemctl start somfy` when you want to start it.");
-        let _ = fs::remove_file(prev_path);
-        return Ok(());
     }
 
-    systemd::systemctl(&["start", "--no-block", "somfy"]).context("starting somfy")?;
-    wait_active(Duration::from_secs(WAIT_ACTIVE_SECS))
-        .await
-        .context("service did not become active")?;
-
-    let report = doctor::collect(&resolved_config, 0).await;
-    if report.has_blocking_failure() {
-        bail!("post-upgrade doctor reported blocking failure");
-    }
-
-    let _ = fs::remove_file(prev_path);
+    println!("Upgrade complete.");
     Ok(())
-}
-
-fn rollback(service_state: ServiceState) -> Result<()> {
-    let bin_path = Path::new(BIN_PATH);
-    let prev_path = Path::new(BIN_PREV);
-    if service_state.should_restart() {
-        let _ = systemd::systemctl(&["stop", "somfy"]);
-    }
-    if prev_path.exists() {
-        let _ = fs::remove_file(bin_path);
-        fs::rename(prev_path, bin_path).context("restoring previous binary")?;
-    }
-    if service_state.should_restart() {
-        systemd::systemctl(&["start", "--no-block", "somfy"])
-            .context("starting previous version")?;
-    }
-    Ok(())
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ServiceState {
-    state: &'static str,
-}
-
-impl ServiceState {
-    fn capture() -> Self {
-        Self::from_state(systemd::is_active("somfy").unwrap_or_default().as_str())
-    }
-
-    fn from_state(state: &str) -> Self {
-        let state = match state {
-            "active" => "active",
-            "activating" => "activating",
-            "reloading" => "reloading",
-            "deactivating" => "deactivating",
-            "failed" => "failed",
-            "inactive" => "inactive",
-            _ => "unknown",
-        };
-        Self { state }
-    }
-
-    fn should_restart(&self) -> bool {
-        matches!(self.state, "active" | "activating" | "reloading")
-    }
-}
-
-async fn wait_active(timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let state = systemd::is_active("somfy").unwrap_or_default();
-        match state.as_str() {
-            "active" => return Ok(()),
-            "failed" => bail!("service entered failed state"),
-            _ => {}
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for active state (last={state})");
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
 }
 
 #[derive(Debug, serde::Deserialize)]
@@ -492,8 +411,8 @@ mod tests {
     fn service_state_restarts_running_states() {
         for state in ["active", "activating", "reloading"] {
             let decision = ServiceState::from_state(state);
-            assert_eq!(decision.state, state);
-            assert!(decision.should_restart(), "expected restart for {state}");
+            assert_eq!(decision.state_label(), state);
+            assert!(decision.was_running(), "expected restart for {state}");
         }
     }
 
@@ -501,10 +420,7 @@ mod tests {
     fn service_state_leaves_stopped_states_stopped() {
         for state in ["inactive", "failed", "deactivating", "", "not-found"] {
             let decision = ServiceState::from_state(state);
-            assert!(
-                !decision.should_restart(),
-                "expected no restart for {state:?}"
-            );
+            assert!(!decision.was_running(), "expected no restart for {state:?}");
         }
     }
 }
