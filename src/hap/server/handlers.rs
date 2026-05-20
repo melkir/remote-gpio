@@ -4,7 +4,6 @@ use serde_json::Value;
 
 use super::state::ConnectionState;
 use super::transport::{HapReader, HapWriter, RawRequest};
-use super::types::{OutboundResponse, RequestOutcome};
 use crate::hap::pair_setup::PersistPolicy;
 use crate::hap::pair_verify::HandleOutcome;
 use crate::hap::runtime::{
@@ -14,6 +13,34 @@ use crate::hap::runtime::{
 };
 use crate::hap::session::SessionKeys;
 use crate::hap::tlv::{HapError, ParsedTlv, Tag as TlvTag, Tlv};
+
+pub(super) struct RequestOutcome {
+    pub response: OutboundResponse,
+    pub events: Vec<CharacteristicEvent>,
+}
+
+impl RequestOutcome {
+    fn response(response: OutboundResponse) -> Self {
+        Self {
+            response,
+            events: Vec::new(),
+        }
+    }
+}
+
+pub(super) enum OutboundResponse {
+    Status(StatusCode),
+    Body {
+        status: StatusCode,
+        content_type: &'static str,
+        body: Vec<u8>,
+    },
+    Upgrade {
+        reply: Vec<u8>,
+        keys: SessionKeys,
+        controller_id: String,
+    },
+}
 
 pub(super) async fn handle_request<A, S>(
     req: RawRequest,
@@ -324,7 +351,7 @@ async fn handle_put_characteristics(
     app.write_characteristics(writes, subs).await
 }
 
-pub(crate) fn parse_characteristic_ids(ids: &str) -> Vec<CharacteristicId> {
+fn parse_characteristic_ids(ids: &str) -> Vec<CharacteristicId> {
     ids.split(',')
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
@@ -346,7 +373,7 @@ fn parse_characteristic_write(entry: &Value) -> CharacteristicWrite {
     }
 }
 
-pub(crate) fn characteristics_body(reads: Vec<CharacteristicRead>) -> Vec<u8> {
+fn characteristics_body(reads: Vec<CharacteristicRead>) -> Vec<u8> {
     let characteristics = reads
         .into_iter()
         .map(|read| {
@@ -370,7 +397,7 @@ pub(crate) fn characteristics_body(reads: Vec<CharacteristicRead>) -> Vec<u8> {
         .into_bytes()
 }
 
-pub(crate) fn write_statuses_body(statuses: Vec<CharacteristicWriteStatus>) -> Vec<u8> {
+fn write_statuses_body(statuses: Vec<CharacteristicWriteStatus>) -> Vec<u8> {
     let characteristics = statuses
         .into_iter()
         .map(|status| {
@@ -384,4 +411,71 @@ pub(crate) fn write_statuses_body(statuses: Vec<CharacteristicWriteStatus>) -> V
     serde_json::json!({ "characteristics": characteristics })
         .to_string()
         .into_bytes()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::hap::runtime::{
+        CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWriteStatus,
+        HapStatus, Subscriptions,
+    };
+    use serde_json::json;
+
+    #[test]
+    fn event_body_filters_to_subscribed_characteristics() {
+        let event = CharacteristicEvent {
+            id: CharacteristicId::new(2, 9),
+            value: json!(100),
+        };
+        let mut subs = Subscriptions::default();
+        assert!(build_event_body(std::slice::from_ref(&event), &subs).is_none());
+
+        subs.insert(event.id);
+        let body = build_event_body(&[event], &subs).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["characteristics"][0]["aid"], 2);
+        assert_eq!(parsed["characteristics"][0]["iid"], 9);
+        assert_eq!(parsed["characteristics"][0]["value"], 100);
+    }
+
+    #[test]
+    fn parses_characteristic_ids() {
+        let ids = parse_characteristic_ids("2.9,3.10");
+        assert_eq!(ids[0], CharacteristicId::new(2, 9));
+        assert_eq!(ids[1], CharacteristicId::new(3, 10));
+    }
+
+    #[test]
+    fn characteristics_body_uses_status_for_read_errors() {
+        let body = characteristics_body(vec![CharacteristicRead::error(
+            CharacteristicId::new(2, 99),
+            HapStatus::ResourceDoesNotExist,
+        )]);
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(parsed["characteristics"][0]["aid"], 2);
+        assert_eq!(parsed["characteristics"][0]["iid"], 99);
+        assert_eq!(
+            parsed["characteristics"][0]["status"],
+            HapStatus::ResourceDoesNotExist.code()
+        );
+        assert!(parsed["characteristics"][0].get("value").is_none());
+    }
+
+    #[test]
+    fn write_statuses_body_reports_per_characteristic_status() {
+        let body = write_statuses_body(vec![CharacteristicWriteStatus::error(
+            CharacteristicId::new(2, 9),
+            HapStatus::ReadOnly,
+        )]);
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(parsed["characteristics"][0]["aid"], 2);
+        assert_eq!(parsed["characteristics"][0]["iid"], 9);
+        assert_eq!(
+            parsed["characteristics"][0]["status"],
+            HapStatus::ReadOnly.code()
+        );
+    }
 }

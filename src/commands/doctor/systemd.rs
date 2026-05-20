@@ -1,8 +1,9 @@
 use std::path::Path;
 
 use super::check::Check;
-use super::{Status, BIN_PATH, UNIT_PATH};
+use super::Status;
 use crate::config::ResolvedConfig;
+use crate::deploy::{BIN_PATH, UNIT_PATH};
 
 pub fn config_file(resolved_config: &ResolvedConfig) -> Check {
     if resolved_config.file_present {

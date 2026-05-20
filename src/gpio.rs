@@ -41,10 +41,6 @@ pub enum Channel {
 impl Channel {
     pub const INDIVIDUALS: [Channel; 4] = [Channel::L1, Channel::L2, Channel::L3, Channel::L4];
 
-    pub fn individuals() -> &'static [Channel] {
-        &Self::INDIVIDUALS
-    }
-
     pub fn led_gpio(self, config: &TelisGpioOptions) -> u8 {
         match self {
             Channel::L1 => config.led1,
@@ -103,13 +99,9 @@ impl std::fmt::Display for Channel {
     }
 }
 
-pub fn channel_gpio(channel: Channel, config: &TelisGpioOptions) -> u8 {
-    channel.led_gpio(config)
-}
-
 pub fn channel_from_gpio(offset: u32, config: &TelisGpioOptions) -> Result<Channel> {
     let gpio = offset as u8;
-    for channel in Channel::individuals() {
+    for channel in &Channel::INDIVIDUALS {
         if channel.led_gpio(config) == gpio {
             return Ok(*channel);
         }
@@ -139,7 +131,7 @@ mod platform {
     /// Monitors GPIO inputs for LED selection changes
     /// Returns the selected LED input or ALL if multiple inputs are detected
     pub async fn watch_inputs(chip: &str, config: &TelisGpioOptions) -> Result<Channel> {
-        let offsets: Vec<u32> = Channel::individuals()
+        let offsets: Vec<u32> = Channel::INDIVIDUALS
             .iter()
             .map(|ch| ch.led_gpio(config) as u32)
             .collect();

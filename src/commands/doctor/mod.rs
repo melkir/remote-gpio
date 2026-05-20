@@ -11,8 +11,6 @@ use crate::config::ResolvedConfig;
 use crate::driver::DriverKind;
 use crate::version;
 
-pub use crate::deploy::{BIN_PATH, UNIT_PATH};
-
 #[derive(Copy, Clone, Debug, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum Status {
@@ -148,7 +146,7 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
     let rendered_unit = systemd::render_expected_unit(resolved_config);
     checks.push(systemd::unit_installed());
 
-    let on_disk = std::fs::read_to_string(UNIT_PATH).ok();
+    let on_disk = std::fs::read_to_string(crate::deploy::UNIT_PATH).ok();
     match (&on_disk, &rendered_unit) {
         (Some(disk), Some(expected)) => {
             checks.push(systemd::unit_in_sync(disk, expected));
