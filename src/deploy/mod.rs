@@ -1,10 +1,12 @@
 //! Shared paths and filesystem helpers for install/upgrade/doctor.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use crate::systemd;
 
 pub const BIN_PATH: &str = "/usr/local/bin/somfy";
 pub const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
@@ -40,6 +42,80 @@ pub fn atomic_write(path: &Path, contents: &str) -> Result<()> {
     }
     fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
     fs::rename(&tmp, path)?;
+    Ok(())
+}
+
+/// Snapshot of `somfy.service` state before a binary swap.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ServiceState {
+    state: &'static str,
+}
+
+impl ServiceState {
+    pub fn capture() -> Self {
+        Self::from_state(systemd::is_active("somfy").unwrap_or_default().as_str())
+    }
+
+    pub fn from_state(state: &str) -> Self {
+        let state = match state {
+            "active" => "active",
+            "activating" => "activating",
+            "reloading" => "reloading",
+            "deactivating" => "deactivating",
+            "failed" => "failed",
+            "inactive" => "inactive",
+            _ => "unknown",
+        };
+        Self { state }
+    }
+
+    pub fn state_label(self) -> &'static str {
+        self.state
+    }
+
+    pub fn was_running(self) -> bool {
+        matches!(self.state, "active" | "activating" | "reloading")
+    }
+}
+
+pub fn stop_somfy_best_effort() {
+    if let Err(e) = systemd::systemctl(&["stop", "somfy"]) {
+        tracing::warn!("systemctl stop reported: {e}");
+    }
+}
+
+pub fn start_somfy() -> Result<()> {
+    systemd::systemctl(&["start", "--no-block", "somfy"]).context("starting somfy")
+}
+
+/// Move the live binary to `somfy.prev` when present.
+pub fn archive_live_binary() -> Result<()> {
+    let bin_path = Path::new(BIN_PATH);
+    let prev_path = Path::new(BIN_PREV);
+    if bin_path.exists() {
+        let _ = fs::remove_file(prev_path);
+        fs::rename(bin_path, prev_path).context("moving current binary to .prev")?;
+    }
+    Ok(())
+}
+
+/// Atomically promote a staged binary into `BIN_PATH`.
+pub fn install_staged_binary(staged: &Path) -> Result<()> {
+    fs::rename(staged, BIN_PATH).context("moving new binary into place")
+}
+
+pub fn remove_prev_binary() {
+    let _ = fs::remove_file(BIN_PREV);
+}
+
+/// Restore `somfy.prev` over the live binary when a rollback is needed.
+pub fn restore_prev_binary() -> Result<()> {
+    let bin_path = PathBuf::from(BIN_PATH);
+    let prev_path = PathBuf::from(BIN_PREV);
+    if prev_path.exists() {
+        let _ = fs::remove_file(&bin_path);
+        fs::rename(&prev_path, &bin_path).context("restoring previous binary")?;
+    }
     Ok(())
 }
 

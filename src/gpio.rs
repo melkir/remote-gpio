@@ -54,6 +54,17 @@ impl Channel {
             Channel::ALL => unreachable!("ALL is not represented by one Telis LED GPIO"),
         }
     }
+
+    /// Advance the Telis selector one step (L1 → L2 → … → ALL → L1).
+    pub fn next(self) -> Self {
+        match self {
+            Channel::L1 => Channel::L2,
+            Channel::L2 => Channel::L3,
+            Channel::L3 => Channel::L4,
+            Channel::L4 => Channel::ALL,
+            Channel::ALL => Channel::L1,
+        }
+    }
 }
 
 /// Represents the Telis button GPIO pins driven by the wired driver.

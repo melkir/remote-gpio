@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 use crate::cli::UpgradeChannel;
 use crate::commands::doctor;
 use crate::commands::install;
-use crate::deploy::{self, BIN_DIR, BIN_PATH, BIN_PREV};
+use crate::deploy::{self, ServiceState, BIN_DIR};
 use crate::systemd;
 use crate::version;
 
@@ -127,38 +127,30 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
 }
 
 async fn apply_swap(new_bin: &Path, service_state: ServiceState) -> Result<()> {
-    let bin_path = Path::new(BIN_PATH);
-    let prev_path = Path::new(BIN_PREV);
+    deploy::archive_live_binary()?;
 
-    if bin_path.exists() {
-        let _ = fs::remove_file(prev_path);
-        fs::rename(bin_path, prev_path).context("moving current binary to .prev")?;
+    if service_state.was_running() {
+        deploy::stop_somfy_best_effort();
     }
 
-    if service_state.should_restart() {
-        if let Err(e) = systemd::systemctl(&["stop", "somfy"]) {
-            tracing::warn!("systemctl stop reported: {e}");
-        }
-    }
-
-    fs::rename(new_bin, bin_path).context("moving new binary into place")?;
+    deploy::install_staged_binary(new_bin)?;
 
     // Reconcile unit with the new binary's template and resolved config.
     let resolved_config =
         crate::config::resolve(None).context("loading config for unit refresh")?;
     install::refresh(None, &resolved_config).context("refreshing unit")?;
 
-    if !service_state.should_restart() {
+    if !service_state.was_running() {
         println!(
             "Service was {}; upgraded binary and left somfy stopped.",
-            service_state.state
+            service_state.state_label()
         );
         println!("Run `sudo systemctl start somfy` when you want to start it.");
-        let _ = fs::remove_file(prev_path);
+        deploy::remove_prev_binary();
         return Ok(());
     }
 
-    systemd::systemctl(&["start", "--no-block", "somfy"]).context("starting somfy")?;
+    deploy::start_somfy()?;
     wait_active(Duration::from_secs(WAIT_ACTIVE_SECS))
         .await
         .context("service did not become active")?;
@@ -168,53 +160,19 @@ async fn apply_swap(new_bin: &Path, service_state: ServiceState) -> Result<()> {
         bail!("post-upgrade doctor reported blocking failure");
     }
 
-    let _ = fs::remove_file(prev_path);
+    deploy::remove_prev_binary();
     Ok(())
 }
 
 fn rollback(service_state: ServiceState) -> Result<()> {
-    let bin_path = Path::new(BIN_PATH);
-    let prev_path = Path::new(BIN_PREV);
-    if service_state.should_restart() {
-        let _ = systemd::systemctl(&["stop", "somfy"]);
+    if service_state.was_running() {
+        deploy::stop_somfy_best_effort();
     }
-    if prev_path.exists() {
-        let _ = fs::remove_file(bin_path);
-        fs::rename(prev_path, bin_path).context("restoring previous binary")?;
-    }
-    if service_state.should_restart() {
-        systemd::systemctl(&["start", "--no-block", "somfy"])
-            .context("starting previous version")?;
+    deploy::restore_prev_binary()?;
+    if service_state.was_running() {
+        deploy::start_somfy()?;
     }
     Ok(())
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct ServiceState {
-    state: &'static str,
-}
-
-impl ServiceState {
-    fn capture() -> Self {
-        Self::from_state(systemd::is_active("somfy").unwrap_or_default().as_str())
-    }
-
-    fn from_state(state: &str) -> Self {
-        let state = match state {
-            "active" => "active",
-            "activating" => "activating",
-            "reloading" => "reloading",
-            "deactivating" => "deactivating",
-            "failed" => "failed",
-            "inactive" => "inactive",
-            _ => "unknown",
-        };
-        Self { state }
-    }
-
-    fn should_restart(&self) -> bool {
-        matches!(self.state, "active" | "activating" | "reloading")
-    }
 }
 
 async fn wait_active(timeout: Duration) -> Result<()> {
@@ -491,8 +449,8 @@ mod tests {
     fn service_state_restarts_running_states() {
         for state in ["active", "activating", "reloading"] {
             let decision = ServiceState::from_state(state);
-            assert_eq!(decision.state, state);
-            assert!(decision.should_restart(), "expected restart for {state}");
+            assert_eq!(decision.state_label(), state);
+            assert!(decision.was_running(), "expected restart for {state}");
         }
     }
 
@@ -500,10 +458,7 @@ mod tests {
     fn service_state_leaves_stopped_states_stopped() {
         for state in ["inactive", "failed", "deactivating", "", "not-found"] {
             let decision = ServiceState::from_state(state);
-            assert!(
-                !decision.should_restart(),
-                "expected no restart for {state:?}"
-            );
+            assert!(!decision.was_running(), "expected no restart for {state:?}");
         }
     }
 }
