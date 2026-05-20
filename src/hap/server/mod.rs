@@ -91,3 +91,20 @@ where
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn server_runtime_layer_does_not_import_somfy_modules() {
+        let root = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hap/server");
+        for name in ["mod.rs", "handlers.rs", "transport.rs", "state.rs"] {
+            let source = std::fs::read_to_string(format!("{root}/{name}")).unwrap();
+            assert!(!source.contains(concat!("crate::", "gpio")), "{name}");
+            assert!(!source.contains(concat!("crate::", "remote")), "{name}");
+            assert!(
+                !source.contains(concat!("crate::server::", "AppState")),
+                "{name}"
+            );
+        }
+    }
+}

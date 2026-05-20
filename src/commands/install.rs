@@ -102,13 +102,30 @@ pub(crate) fn refresh(
 }
 
 pub(crate) fn prepare_rts_prereqs() -> Result<()> {
+    if rts_prereqs_need_root() {
+        require_root("RTS prerequisite setup")?;
+    }
     ensure_pigpio_installed()?;
     configure_pigpiod_localhost()?;
     Ok(())
 }
 
+fn rts_prereqs_need_root() -> bool {
+    !pigpiod_installed() || !pigpiod_override_in_sync()
+}
+
+fn pigpiod_installed() -> bool {
+    command_exists("pigpiod") || Path::new("/usr/bin/pigpiod").is_file()
+}
+
+fn pigpiod_override_in_sync() -> bool {
+    fs::read_to_string(PIGPIOD_OVERRIDE_PATH)
+        .map(|existing| existing.trim() == PIGPIOD_OVERRIDE.trim())
+        .unwrap_or(false)
+}
+
 fn ensure_pigpio_installed() -> Result<()> {
-    if command_exists("pigpiod") {
+    if pigpiod_installed() {
         tracing::info!("pigpiod already installed");
         return Ok(());
     }

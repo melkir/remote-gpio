@@ -24,12 +24,12 @@ pub fn set_driver(resolved: &ResolvedConfig, kind: DriverKind) -> Result<()> {
     next.driver = kind;
     config::validate(&next)?;
 
-    atomic_write(&resolved.path, &config::to_toml(&next)?)?;
-    println!("wrote {} (driver={kind})", resolved.path.display());
-
     if kind == DriverKind::Rts {
         install::prepare_rts_prereqs()?;
     }
+
+    atomic_write(&resolved.path, &config::to_toml(&next)?)?;
+    println!("wrote {} (driver={kind})", resolved.path.display());
 
     restart_somfy()?;
     println!("somfy restarted");
