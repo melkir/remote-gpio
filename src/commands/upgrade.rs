@@ -6,13 +6,12 @@ use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::Command as StdCommand;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::cli::UpgradeChannel;
 use crate::commands::doctor;
 use crate::commands::install;
-use crate::deploy::{self, ServiceState, BIN_DIR};
-use crate::systemd;
+use crate::deploy::{self, ServiceState, STAGED_DOWNLOAD};
 use crate::version;
 
 const ASSET_NAME: &str = "somfy";
@@ -56,7 +55,7 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
     let binary_url = asset_url(&release, ASSET_NAME)?;
     let sums_url = asset_url(&release, SUMS_ASSET).ok();
 
-    let tmp_path = PathBuf::from(BIN_DIR).join(".somfy.download");
+    let tmp_path = PathBuf::from(STAGED_DOWNLOAD);
     // Wipe any leftover from a prior failed run.
     let _ = fs::remove_file(&tmp_path);
 
@@ -111,84 +110,47 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
         }
     }
 
-    // Begin the atomic swap.
+    let resolved_config =
+        crate::config::resolve(None).context("loading config for unit refresh")?;
     let service_state = ServiceState::capture();
-    if let Err(e) = apply_swap(&tmp_path, service_state).await {
+    let was_running = service_state.was_running();
+
+    if let Err(e) = deploy::apply_binary_swap(
+        &tmp_path,
+        service_state,
+        || {
+            install::refresh(None, &resolved_config).context("refreshing unit")?;
+            Ok(())
+        },
+        || async {
+            let report = doctor::collect(&resolved_config, 0).await;
+            if report.has_blocking_failure() {
+                bail!("post-upgrade doctor reported blocking failure");
+            }
+            Ok(())
+        },
+        Duration::from_secs(WAIT_ACTIVE_SECS),
+    )
+    .await
+    {
         eprintln!("Upgrade failed: {e:#}");
         eprintln!("Rolling back...");
-        if let Err(re) = rollback(service_state) {
+        if let Err(re) = deploy::rollback_binary_swap(service_state) {
             eprintln!("Rollback error: {re:#}");
         }
         std::process::exit(1);
     }
 
-    println!("Upgrade complete.");
-    Ok(())
-}
-
-async fn apply_swap(new_bin: &Path, service_state: ServiceState) -> Result<()> {
-    deploy::archive_live_binary()?;
-
-    if service_state.was_running() {
-        deploy::stop_somfy_best_effort();
-    }
-
-    deploy::install_staged_binary(new_bin)?;
-
-    // Reconcile unit with the new binary's template and resolved config.
-    let resolved_config =
-        crate::config::resolve(None).context("loading config for unit refresh")?;
-    install::refresh(None, &resolved_config).context("refreshing unit")?;
-
-    if !service_state.was_running() {
+    if !was_running {
         println!(
             "Service was {}; upgraded binary and left somfy stopped.",
             service_state.state_label()
         );
         println!("Run `sudo systemctl start somfy` when you want to start it.");
-        deploy::remove_prev_binary();
-        return Ok(());
     }
 
-    deploy::start_somfy()?;
-    wait_active(Duration::from_secs(WAIT_ACTIVE_SECS))
-        .await
-        .context("service did not become active")?;
-
-    let report = doctor::collect(&resolved_config, 0).await;
-    if report.has_blocking_failure() {
-        bail!("post-upgrade doctor reported blocking failure");
-    }
-
-    deploy::remove_prev_binary();
+    println!("Upgrade complete.");
     Ok(())
-}
-
-fn rollback(service_state: ServiceState) -> Result<()> {
-    if service_state.was_running() {
-        deploy::stop_somfy_best_effort();
-    }
-    deploy::restore_prev_binary()?;
-    if service_state.was_running() {
-        deploy::start_somfy()?;
-    }
-    Ok(())
-}
-
-async fn wait_active(timeout: Duration) -> Result<()> {
-    let deadline = Instant::now() + timeout;
-    loop {
-        let state = systemd::is_active("somfy").unwrap_or_default();
-        match state.as_str() {
-            "active" => return Ok(()),
-            "failed" => bail!("service entered failed state"),
-            _ => {}
-        }
-        if Instant::now() >= deadline {
-            bail!("timed out waiting for active state (last={state})");
-        }
-        tokio::time::sleep(Duration::from_millis(500)).await;
-    }
 }
 
 #[derive(Debug, serde::Deserialize)]

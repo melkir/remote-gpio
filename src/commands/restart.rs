@@ -1,9 +1,9 @@
 use anyhow::Result;
 
-use crate::systemd;
+use crate::deploy::restart_somfy;
 
 pub fn run() -> Result<()> {
-    systemd::systemctl(&["restart", "somfy"])?;
+    restart_somfy()?;
     println!("somfy restarted");
     Ok(())
 }

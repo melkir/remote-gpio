@@ -5,7 +5,10 @@ use std::path::Path;
 use std::process::Command;
 
 use crate::config::{self as app_config, ResolvedConfig};
-use crate::deploy::{atomic_write, require_root, BIN_PATH, BIN_PREV, UNIT_PATH};
+use crate::deploy::{
+    atomic_write_if_changed, command_exists, enable_somfy, require_root, restart_somfy,
+    run_command, BIN_PATH, BIN_PREV, UNIT_PATH,
+};
 use crate::homekit::config;
 use crate::systemd;
 
@@ -31,7 +34,7 @@ pub fn render_unit(
 
 pub fn run(user_override: Option<String>, resolved_config: &ResolvedConfig) -> Result<()> {
     let service_user = refresh(user_override, resolved_config)?;
-    systemd::systemctl(&["restart", "--no-block", "somfy"])?;
+    restart_somfy()?;
     println!(
         "somfy installed as {service_user}, service enabled and starting (check `somfy doctor`)"
     );
@@ -86,16 +89,7 @@ pub(crate) fn refresh(
         &resolved_config.config.rts.spi_device,
     );
 
-    let unit_path = Path::new(UNIT_PATH);
-    let on_disk = fs::read_to_string(unit_path).ok();
-
-    let needs_write = match &on_disk {
-        Some(existing) => existing.trim() != rendered.trim(),
-        None => true,
-    };
-
-    if needs_write {
-        atomic_write(unit_path, &rendered)?;
+    if atomic_write_if_changed(Path::new(UNIT_PATH), &rendered)? {
         systemd::systemctl(&["daemon-reload"])?;
         tracing::info!("wrote {}", UNIT_PATH);
     } else {
@@ -103,7 +97,7 @@ pub(crate) fn refresh(
     }
 
     prepare_state_dir(&service_user_info)?;
-    systemd::systemctl(&["enable", "somfy"])?;
+    enable_somfy()?;
     Ok(service_user)
 }
 
@@ -139,14 +133,7 @@ fn configure_pigpiod_localhost() -> Result<()> {
             .with_context(|| format!("creating {}", override_path.parent().unwrap().display()))?;
     }
 
-    let on_disk = fs::read_to_string(override_path).ok();
-    let needs_write = match &on_disk {
-        Some(existing) => existing.trim() != PIGPIOD_OVERRIDE.trim(),
-        None => true,
-    };
-
-    if needs_write {
-        atomic_write(override_path, PIGPIOD_OVERRIDE)?;
+    if atomic_write_if_changed(override_path, PIGPIOD_OVERRIDE)? {
         systemd::systemctl(&["daemon-reload"])?;
         tracing::info!("wrote {}", PIGPIOD_OVERRIDE_PATH);
     } else {
@@ -158,29 +145,13 @@ fn configure_pigpiod_localhost() -> Result<()> {
     Ok(())
 }
 
-fn command_exists(command: &str) -> bool {
-    let Some(paths) = std::env::var_os("PATH") else {
-        return false;
-    };
-    std::env::split_paths(&paths).any(|dir| dir.join(command).is_file())
-}
-
-fn run_command(command: &str, args: &[&str]) -> Result<()> {
-    let output = Command::new(command).args(args).output()?;
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("{} {} failed: {}", command, args.join(" "), stderr.trim());
-    }
-    Ok(())
-}
-
 fn ensure_config_file(resolved_config: &ResolvedConfig) -> Result<()> {
     if resolved_config.file_present {
         return Ok(());
     }
     let parent = resolved_config.path.parent().unwrap_or(Path::new("/"));
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
-    atomic_write(
+    crate::deploy::atomic_write(
         &resolved_config.path,
         &app_config::to_toml(&resolved_config.config)?,
     )
@@ -253,13 +224,7 @@ fn install_polkit_rule() -> Result<()> {
         .ok_or_else(|| anyhow::anyhow!("invalid polkit rule path"))?;
     fs::create_dir_all(parent).with_context(|| format!("creating {}", parent.display()))?;
 
-    let on_disk = fs::read_to_string(path).ok();
-    let needs_write = match &on_disk {
-        Some(existing) => existing.trim() != POLKIT_RULE.trim(),
-        None => true,
-    };
-    if needs_write {
-        atomic_write(path, POLKIT_RULE)?;
+    if atomic_write_if_changed(path, POLKIT_RULE)? {
         tracing::info!("wrote {}", POLKIT_RULE_PATH);
     } else {
         tracing::info!("{} already in sync", POLKIT_RULE_PATH);
