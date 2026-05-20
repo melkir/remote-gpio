@@ -9,20 +9,19 @@ use std::process::Command as StdCommand;
 use std::time::{Duration, Instant};
 
 use crate::cli::UpgradeChannel;
-use crate::commands::doctor::{self, BIN_PATH};
+use crate::commands::doctor;
 use crate::commands::install;
+use crate::deploy::{self, BIN_DIR, BIN_PATH, BIN_PREV};
 use crate::systemd;
 use crate::version;
 
-pub const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
-const BIN_DIR: &str = "/usr/local/bin";
 const ASSET_NAME: &str = "somfy";
 const SUMS_ASSET: &str = "SHA256SUMS";
 const WAIT_ACTIVE_SECS: u64 = 20;
 
 pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bool) -> Result<()> {
-    if !check && !nix::unistd::Uid::current().is_root() {
-        bail!("somfy upgrade must be run as root (use sudo)");
+    if !check {
+        deploy::require_root("somfy upgrade")?;
     }
 
     let client = reqwest::Client::builder()

@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod deploy;
 pub mod driver;
 pub mod embed;
 pub mod gpio;

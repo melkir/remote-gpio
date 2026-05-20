@@ -2,6 +2,7 @@ use anyhow::Result;
 
 use crate::commands::install;
 use crate::config::{self, ResolvedConfig};
+use crate::deploy;
 use crate::driver::DriverKind;
 use crate::systemd;
 
@@ -24,7 +25,7 @@ pub fn set_driver(resolved: &ResolvedConfig, kind: DriverKind) -> Result<()> {
     next.driver = kind;
     config::validate(&next)?;
 
-    install::atomic_write(&resolved.path, &config::to_toml(&next)?)?;
+    deploy::atomic_write(&resolved.path, &config::to_toml(&next)?)?;
     println!("wrote {} (driver={kind})", resolved.path.display());
 
     if kind == DriverKind::Rts {

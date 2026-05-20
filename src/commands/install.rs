@@ -1,13 +1,11 @@
 use anyhow::{bail, Context, Result};
 use std::fs;
-use std::io::Write;
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
 
-use crate::commands::doctor::{BIN_PATH, UNIT_PATH};
-use crate::commands::upgrade::BIN_PREV;
 use crate::config::{self as app_config, ResolvedConfig};
+use crate::deploy::{atomic_write, require_root, BIN_PATH, BIN_PREV, UNIT_PATH};
 use crate::homekit::config;
 use crate::systemd;
 
@@ -44,7 +42,7 @@ pub(crate) fn refresh(
     user_override: Option<String>,
     resolved_config: &ResolvedConfig,
 ) -> Result<String> {
-    require_root()?;
+    require_root("somfy install")?;
 
     let service_user = resolve_service_user(user_override)?;
 
@@ -176,13 +174,6 @@ fn run_command(command: &str, args: &[&str]) -> Result<()> {
     Ok(())
 }
 
-fn require_root() -> Result<()> {
-    if !nix::unistd::Uid::current().is_root() {
-        bail!("somfy install must be run as root (use sudo)");
-    }
-    Ok(())
-}
-
 fn ensure_config_file(resolved_config: &ResolvedConfig) -> Result<()> {
     if resolved_config.file_present {
         return Ok(());
@@ -206,33 +197,6 @@ fn resolve_service_user(user_override: Option<String>) -> Result<String> {
         }
     }
     bail!("cannot determine service user; pass --user <pi-user> when invoking directly as root");
-}
-
-pub(crate) fn atomic_write(path: &Path, contents: &str) -> Result<()> {
-    let parent = path.parent().unwrap_or(Path::new("/"));
-    let filename = path
-        .file_name()
-        .ok_or_else(|| anyhow::anyhow!("invalid unit path"))?;
-    let tmp = parent.join(format!(".{}.tmp", filename.to_string_lossy()));
-
-    let existing_mode = fs::metadata(path).ok().map(|m| m.mode() & 0o777);
-    let mode = existing_mode.unwrap_or(0o644);
-
-    {
-        let mut f = fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(mode)
-            .open(&tmp)?;
-        f.write_all(contents.as_bytes())?;
-        f.sync_all()?;
-    }
-    // Open() honors umask; force the intended mode explicitly.
-    fs::set_permissions(&tmp, fs::Permissions::from_mode(mode))?;
-
-    fs::rename(&tmp, path)?;
-    Ok(())
 }
 
 fn ensure_somfy_group() -> Result<()> {
@@ -384,30 +348,6 @@ mod tests {
         std::env::remove_var("SUDO_USER");
         assert!(resolve_service_user(None).is_err());
         restore_env("SUDO_USER", prev);
-    }
-
-    #[test]
-    fn atomic_write_creates_file_with_mode_0644() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("somfy.service");
-        atomic_write(&target, "hello\n").unwrap();
-        assert_eq!(fs::read_to_string(&target).unwrap(), "hello\n");
-        let mode = fs::metadata(&target).unwrap().mode() & 0o777;
-        assert_eq!(mode, 0o644);
-        let tmp_sibling = dir.path().join(".somfy.service.tmp");
-        assert!(!tmp_sibling.exists());
-    }
-
-    #[test]
-    fn atomic_write_preserves_existing_mode() {
-        let dir = tempfile::tempdir().unwrap();
-        let target = dir.path().join("config.toml");
-        atomic_write(&target, "first\n").unwrap();
-        fs::set_permissions(&target, fs::Permissions::from_mode(0o664)).unwrap();
-        atomic_write(&target, "second\n").unwrap();
-        assert_eq!(fs::read_to_string(&target).unwrap(), "second\n");
-        let mode = fs::metadata(&target).unwrap().mode() & 0o777;
-        assert_eq!(mode, 0o664);
     }
 
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());

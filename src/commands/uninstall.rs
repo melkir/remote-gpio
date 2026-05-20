@@ -1,15 +1,13 @@
-use anyhow::{bail, Result};
+use anyhow::Result;
 use std::fs;
 use std::path::Path;
 
-use crate::commands::doctor::UNIT_PATH;
 use crate::commands::install::POLKIT_RULE_PATH;
+use crate::deploy::{require_root, UNIT_PATH};
 use crate::systemd;
 
 pub async fn run() -> Result<()> {
-    if !nix::unistd::Uid::current().is_root() {
-        bail!("somfy uninstall must be run as root (use sudo)");
-    }
+    require_root("somfy uninstall")?;
 
     // Best-effort: disable --now is a no-op if the unit isn't loaded.
     let _ = systemd::systemctl(&["disable", "--now", "somfy"]);
