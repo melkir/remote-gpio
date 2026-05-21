@@ -12,14 +12,15 @@ const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel, false, config_path).await,
-        RemoteCommand::Down { channel } => post_command("down", channel, false, config_path).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel, false, config_path).await,
+        RemoteCommand::Up { channel } => post_command("up", channel, config_path).await,
+        RemoteCommand::Down { channel } => post_command("down", channel, config_path).await,
+        RemoteCommand::Stop { channel } => post_command("stop", channel, config_path).await,
         RemoteCommand::Select { channel } => {
-            post_command("select", Some(channel), false, config_path).await
+            post_command("select", Some(channel), config_path).await
         }
         RemoteCommand::Prog { channel, long } => {
-            post_command("prog", Some(channel), long, config_path).await
+            let command = if long { "prog_long" } else { "prog" };
+            post_command(command, Some(channel), config_path).await
         }
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,
@@ -31,8 +32,6 @@ struct CommandRequest {
     command: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     channel: Option<Channel>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    long: bool,
 }
 
 fn ensure_pairing_allowed(config_path: Option<PathBuf>) -> Result<()> {
@@ -44,29 +43,22 @@ fn ensure_pairing_allowed(config_path: Option<PathBuf>) -> Result<()> {
 async fn post_command(
     command: &'static str,
     channel: Option<Channel>,
-    long: bool,
     config_path: Option<PathBuf>,
 ) -> Result<()> {
-    if command == "prog" {
+    if matches!(command, "prog" | "prog_long") {
         ensure_pairing_allowed(config_path)?;
-        // Fast-fail wire rules (channel required, `long` only on prog) before HTTP;
+        // Fast-fail wire rules (channel required) before HTTP;
         // the server runs the same validation again on POST /command.
-        let wire = WirePress {
+        BlindService::parse_wire(WirePress {
             command: command.to_string(),
             channel,
-            long,
-        };
-        BlindService::parse_wire(wire)?;
+        })?;
     }
 
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{SERVICE_BASE_URL}/command"))
-        .json(&CommandRequest {
-            command,
-            channel,
-            long,
-        })
+        .json(&CommandRequest { command, channel })
         .send()
         .await
         .context("connecting to somfy service at 127.0.0.1:5002")?;

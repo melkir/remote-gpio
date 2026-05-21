@@ -31,8 +31,6 @@ pub struct AppState {
 struct CommandRequest {
     command: String,
     channel: Option<Channel>,
-    #[serde(default)]
-    long: bool,
 }
 
 /// WebSocket query parameters
@@ -108,19 +106,11 @@ async fn handle_command(
 }
 
 async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
-    let CommandRequest {
-        command,
-        channel,
-        long,
-    } = payload;
-    tracing::info!(command = %command, ?channel, long, "remote command received");
+    let CommandRequest { command, channel } = payload;
+    tracing::info!(command = %command, ?channel, "remote command received");
     state
         .blinds
-        .press_wire(WirePress {
-            command,
-            channel,
-            long,
-        })
+        .press_wire(WirePress { command, channel })
         .await
         .map_err(map_press_error)?;
     tracing::info!("remote command completed");
@@ -234,7 +224,14 @@ mod tests {
 
         assert_eq!(req.command, "up");
         assert_eq!(req.channel, Some(Channel::L1));
-        assert!(!req.long);
+    }
+
+    #[test]
+    fn command_request_accepts_prog_long() {
+        let req: CommandRequest =
+            serde_json::from_str(r#"{"command":"prog_long","channel":"L1"}"#).unwrap();
+        assert_eq!(req.command, "prog_long");
+        assert_eq!(req.channel, Some(Channel::L1));
     }
 
     #[test]
