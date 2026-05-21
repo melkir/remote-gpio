@@ -20,8 +20,8 @@ pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result
             let cmd = if long { "prog_long" } else { "prog" };
             post_command(cmd, Some(channel), &resolved).await
         }
-        RemoteCommand::Status => status(HTTP_BASE_URL).await,
-        RemoteCommand::Watch => watch(HTTP_BASE_URL).await,
+        RemoteCommand::Status => status().await,
+        RemoteCommand::Watch => watch().await,
     }
 }
 
@@ -59,8 +59,8 @@ async fn post_command(
     bail!("service rejected {command}: HTTP {status}: {}", body.trim());
 }
 
-async fn status(base_url: &str) -> Result<()> {
-    let url = format!("{base_url}/channel");
+async fn status() -> Result<()> {
+    let url = format!("{HTTP_BASE_URL}/channel");
     let text = reqwest::get(&url)
         .await
         .with_context(|| format!("connecting to somfy service at {url}"))?
@@ -72,8 +72,8 @@ async fn status(base_url: &str) -> Result<()> {
     Ok(())
 }
 
-async fn watch(base_url: &str) -> Result<()> {
-    let url = format!("{base_url}/events");
+async fn watch() -> Result<()> {
+    let url = format!("{HTTP_BASE_URL}/events");
     let response = reqwest::get(&url)
         .await
         .with_context(|| format!("connecting to somfy service at {url}"))?
