@@ -31,7 +31,7 @@ The operator commands support the service, but they are not in the live command 
 
 - Keep one stable command surface for the PWA, API clients, CLI remote mode, and HomeKit.
 - Make the hardware driver a replaceable runtime choice, not a compile-time product variant.
-- Serialize physical operations so GPIO pulses, Telis selection changes, and RTS radio transmissions never interleave.
+- Serialize blind operations so client commands, GPIO pulses, Telis selection changes, and RTS radio transmissions never interleave incorrectly.
 - Preserve RTS rolling-code safety even across crashes and power loss.
 - Run without Node or Homebridge on the Pi; the release artifact is one self-managing binary with embedded frontend assets.
 - Treat the Pi as an appliance: install, upgrade, health checks, and rollback are built into the CLI.
@@ -55,8 +55,8 @@ flowchart TB
   end
 
   subgraph application["Application core"]
-    service["Command validation and dispatch"]
-    controller["Selection, position events, execution"]
+    service["Request validation · pairing gates"]
+    controller["Operation queue · targeting · position events"]
     router["Driver router"]
   end
 
@@ -81,7 +81,7 @@ flowchart TB
   router --> fake
 ```
 
-HTTP, WebSocket, and the PWA enter through the same request validation and dispatch path. HomeKit uses the same controller and driver router, but bypasses the HTTP-oriented service layer because HAP already has its own protocol semantics and accessory model.
+HTTP, WebSocket, and the PWA enter through the same request-validation path before reaching the controller. HomeKit uses the same controller and driver router, but bypasses the HTTP-oriented service layer because HAP already has its own protocol semantics and accessory model.
 
 The CLI has two modes:
 
@@ -92,7 +92,7 @@ The CLI has two modes:
 
 ### Transport Boundary
 
-The wire API is expressed in terms of `Channel` and `Command`: `L1`-`L4`, `ALL`, and actions such as `up`, `down`, `stop`, `select`, `prog`, and `prog_long`. Transport adapters are responsible for parsing protocol-specific input and returning protocol-specific output, but they should not implement hardware behavior.
+Command requests are expressed in terms of `Channel` and `Command`: `L1`-`L4`, `ALL`, and actions such as `up`, `down`, `stop`, `select`, `prog`, and `prog_long`. Transport adapters are responsible for parsing protocol-specific input and returning protocol-specific output, but they should not implement hardware behavior.
 
 Live state is pushed through:
 
@@ -137,15 +137,15 @@ sequenceDiagram
   participant Driver as Active driver
 
   UI->>HTTP: command + optional channel
-  HTTP->>Service: validate and dispatch
-  Service->>Controller: execute command
-  Controller->>Driver: serialized driver operation
+  HTTP->>Service: validate request shape and pairing support
+  Service->>Controller: execute client command
+  Controller->>Driver: target channel or use selection
   Driver-->>Controller: success or error
   Controller-->>HTTP: result
   Controller-->>UI: selection / position events
 ```
 
-The service layer handles the client-facing command contract. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; commands without a channel use the current selection.
+The service layer handles the client-facing request contract. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; movement commands without a channel use the current selection.
 
 ### HomeKit Command
 
@@ -161,7 +161,7 @@ sequenceDiagram
   Home->>HAP: encrypted characteristic write
   HAP->>HK: target position update
   HK->>Controller: execute on channel
-  Controller->>Driver: serialized driver operation
+  Controller->>Driver: target channel directly
   Driver-->>Controller: success or error
   HK->>Cache: persist inferred position
   HAP-->>Home: EVENT notification
@@ -240,8 +240,8 @@ This section is a pointer into the implementation, not the architecture itself.
 | ---- | ------------- |
 | CLI and operator commands | `src/cli.rs`, `src/commands/` |
 | HTTP, SSE, WebSocket, static assets | `src/server.rs`, `src/embed.rs` |
-| Command validation and dispatch | `src/service/` |
-| Selection, execution, position events | `src/controller.rs` |
+| Request validation and pairing gates | `src/service/` |
+| Operation queue, targeting, position events | `src/controller.rs` |
 | Shared command and channel types | `src/core/` |
 | Config resolution and validation | `src/config.rs` |
 | Driver routing and implementations | `src/driver/`, `src/gpio.rs`, `src/rts/` |

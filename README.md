@@ -4,7 +4,7 @@ Self-hosted Somfy controller for Raspberry Pi with native HomeKit, a Preact PWA,
 
 <video src="https://github.com/user-attachments/assets/4dbb72bf-5b67-4a23-8322-f3749d19901c" autoplay loop muted playsinline></video>
 
-The service models one Somfy installation behind a small command surface. It can press a wired Telis 4 remote, transmit RTS frames through a CC1101 radio, or run with a fake driver for local development. The web API, PWA, and HomeKit all use the same command router; hardware selection stays in config.
+The service models one Somfy installation behind a small command surface. It can press a wired Telis 4 remote, transmit RTS frames through a CC1101 radio, or run with a fake driver for local development. The web API, PWA, and HomeKit all pass through the same controller and driver router; hardware selection stays in config.
 
 ### Quick Start
 
