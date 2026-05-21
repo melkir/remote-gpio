@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
-use crate::driver::DriverKind;
-use crate::gpio::Channel;
+use crate::config::DriverKind;
+use crate::core::Channel;
 
 #[derive(Parser, Debug)]
 #[command(

@@ -67,7 +67,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 - `{aid, iid, ev: true|false}` — toggle subscription on the per-connection set. No GPIO action.
 - `{aid, iid, value: N}` where the snapped value (`< 50` → 0, `≥ 50` → 100) **matches the cached position** — no-op. iOS replays the last-known `TargetPosition` right after pairing; without this the bridge would fire UP on every registration.
-- `{aid, iid, value: N}` with a real change — funnels through the same `RemoteControl` command layer used by REST, WebSocket, and HAP. Then updates the cached position, propagates to siblings (or to ALL when all four match), persists `positions.json`, and broadcasts a change event.
+- `{aid, iid, value: N}` with a real change — funnels through the same `BlindController` command layer used by REST, WebSocket, and HAP. Then updates the cached position, propagates to siblings (or to ALL when all four match), persists `positions.json`, and broadcasts a change event.
 
 ## Lifecycle
 

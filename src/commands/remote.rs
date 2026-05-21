@@ -1,55 +1,58 @@
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
-use serde::Serialize;
 use std::path::PathBuf;
 
 use crate::cli::RemoteCommand;
 use crate::config;
-use crate::driver::{DriverKind, TELIS_PROG_UNAVAILABLE};
-use crate::gpio::Channel;
+use crate::core::{Channel, Command};
+use crate::service::{BlindService, CommandRequest};
 
 const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel, false).await,
-        RemoteCommand::Down { channel } => post_command("down", channel, false).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel, false).await,
-        RemoteCommand::Select { channel } => post_command("select", Some(channel), false).await,
+        RemoteCommand::Up { channel } => post_command("up", channel, config_path).await,
+        RemoteCommand::Down { channel } => post_command("down", channel, config_path).await,
+        RemoteCommand::Stop { channel } => post_command("stop", channel, config_path).await,
+        RemoteCommand::Select { channel } => {
+            post_command("select", Some(channel), config_path).await
+        }
         RemoteCommand::Prog { channel, long } => {
-            ensure_prog_driver(config_path)?;
-            post_command("prog", Some(channel), long).await
+            let command = if long { "prog_long" } else { "prog" };
+            post_command(command, Some(channel), config_path).await
         }
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,
     }
 }
 
-#[derive(Serialize)]
-struct CommandRequest {
-    command: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    channel: Option<Channel>,
-    #[serde(skip_serializing_if = "std::ops::Not::not")]
-    long: bool,
-}
-
-fn ensure_prog_driver(config_path: Option<PathBuf>) -> Result<()> {
+fn ensure_pairing_allowed(config_path: Option<PathBuf>) -> Result<()> {
     let resolved = config::resolve(config_path)?;
-    if resolved.config.driver == DriverKind::Telis {
-        bail!("{TELIS_PROG_UNAVAILABLE}");
-    }
+    BlindService::ensure_pairing_for_kind(resolved.config.driver, Command::Prog)?;
     Ok(())
 }
 
-async fn post_command(command: &'static str, channel: Option<Channel>, long: bool) -> Result<()> {
+async fn post_command(
+    command: &'static str,
+    channel: Option<Channel>,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
+    if matches!(command, "prog" | "prog_long") {
+        ensure_pairing_allowed(config_path)?;
+        // Fast-fail wire rules (channel required) before HTTP;
+        // the server runs the same validation again on POST /command.
+        BlindService::parse_command(CommandRequest {
+            command: command.to_string(),
+            channel,
+        })?;
+    }
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{SERVICE_BASE_URL}/command"))
         .json(&CommandRequest {
-            command,
+            command: command.to_string(),
             channel,
-            long,
         })
         .send()
         .await

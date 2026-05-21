@@ -1,6 +1,5 @@
-use crate::gpio::Channel;
-use crate::remote::{Command, RemoteControl};
-use anyhow::{Context, Result};
+use crate::service::{BlindService, CommandError, CommandRequest};
+use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::http::{Method, StatusCode};
@@ -15,7 +14,6 @@ use futures_util::{
 use serde::Deserialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
-use std::str::FromStr;
 use std::sync::Arc;
 use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::DefaultMakeSpan;
@@ -23,34 +21,16 @@ use tower_http::trace::TraceLayer;
 
 /// Application state shared across all routes
 pub struct AppState {
-    pub remote_control: Arc<RemoteControl>,
+    pub blinds: Arc<BlindService>,
+    command_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
-/// Wire-format command payload for HTTP and WebSocket endpoints.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CommandRequest {
-    command: String,
-    channel: Option<Channel>,
-    #[serde(default)]
-    long: bool,
-}
-
-/// Parsed and validated command ready for dispatch.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct ValidatedCommandRequest {
-    command: Command,
-    channel: Option<Channel>,
-}
-
-impl CommandRequest {
-    fn validate(self) -> Result<ValidatedCommandRequest, String> {
-        let CommandRequest {
-            command,
-            channel,
-            long,
-        } = self;
-        validate_command(command, channel, long)
+impl AppState {
+    pub fn new(blinds: Arc<BlindService>) -> Self {
+        Self {
+            blinds,
+            command_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
     }
 }
 
@@ -97,14 +77,14 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 
 /// Returns the currently-selected channel as plain text.
 async fn handle_channel(State(state): State<Arc<AppState>>) -> String {
-    state.remote_control.current_selection().to_string()
+    state.blinds.current_selection().to_string()
 }
 
 /// Streams channel selection changes as server-sent events.
 async fn handle_events(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let mut rx = state.remote_control.subscribe_selection();
+    let mut rx = state.blinds.subscribe_selection();
     rx.mark_changed();
     let stream = stream::unfold(rx, |mut rx| async move {
         rx.changed().await.ok()?;
@@ -120,6 +100,9 @@ async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
+    let Ok(_permit) = state.command_semaphore.acquire().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     match execute_command(&state, payload).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -127,76 +110,19 @@ async fn handle_command(
 }
 
 async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
-    let request = payload.validate()?;
-    dispatch(state, request).await
-}
-
-async fn dispatch(state: &AppState, request: ValidatedCommandRequest) -> Result<(), String> {
-    let ValidatedCommandRequest {
-        command: cmd,
-        channel,
-    } = request;
-    tracing::info!(command = ?cmd, channel = ?channel, "remote command received");
-    if cmd == Command::Select {
-        state
-            .remote_control
-            .execute(cmd, channel)
-            .await
-            .context("executing select command")
-            .map_err(map_command_error)?;
-        return Ok(());
-    }
-
-    if let Some(channel) = channel {
-        tracing::debug!(%channel, "selecting channel");
-        state
-            .remote_control
-            .execute(Command::Select, Some(channel))
-            .await
-            .context("selecting channel before command")
-            .map_err(map_command_error)?;
-    }
+    tracing::info!(command = %payload.command, ?payload.channel, "remote command received");
     state
-        .remote_control
-        .execute(cmd, None)
+        .blinds
+        .dispatch_command(payload)
         .await
-        .with_context(|| format!("executing {cmd:?} command"))
         .map_err(map_command_error)?;
-    tracing::info!(command = ?cmd, "remote command completed");
+    tracing::info!("remote command completed");
     Ok(())
 }
 
-fn map_command_error(err: anyhow::Error) -> String {
-    tracing::error!(error = ?err, "remote command failed");
+fn map_command_error(err: CommandError) -> String {
+    tracing::error!(error = %err, "remote command failed");
     err.to_string()
-}
-
-fn validate_command(
-    command: String,
-    channel: Option<Channel>,
-    long: bool,
-) -> Result<ValidatedCommandRequest, String> {
-    let command = command.as_str();
-    let mut cmd = Command::from_str(command).map_err(|e| e.to_string())?;
-    if long {
-        match cmd {
-            Command::Prog => cmd = Command::ProgLong,
-            Command::ProgLong => {}
-            _ => return Err("`long` is only valid with prog".to_string()),
-        }
-    }
-    let channel = match (cmd, channel) {
-        (Command::Prog | Command::ProgLong, Some(channel)) => Some(channel),
-        (Command::Prog | Command::ProgLong, None) => {
-            return Err("prog requires a channel".to_string());
-        }
-        (Command::Select, channel) => channel,
-        (Command::Up | Command::Down | Command::Stop, channel) => channel,
-    };
-    Ok(ValidatedCommandRequest {
-        command: cmd,
-        channel,
-    })
 }
 
 /// Handles WebSocket upgrade requests
@@ -215,7 +141,7 @@ async fn ws_handler(
 /// Manages WebSocket connections and message handling
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
-    let mut rx_channel = state.remote_control.subscribe_selection();
+    let mut rx_channel = state.blinds.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
     let command_slots = Arc::new(tokio::sync::Semaphore::new(1));
 
@@ -287,127 +213,5 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn validate(
-        command: &str,
-        channel: Option<Channel>,
-        long: bool,
-    ) -> Result<(Command, Option<Channel>), String> {
-        let request = CommandRequest {
-            command: command.to_string(),
-            channel,
-            long,
-        }
-        .validate()?;
-        Ok((request.command, request.channel))
-    }
-
-    #[test]
-    fn validate_accepts_select_with_channel() {
-        assert_eq!(
-            validate("select", Some(Channel::L2), false).unwrap(),
-            (Command::Select, Some(Channel::L2))
-        );
-    }
-
-    #[test]
-    fn validate_accepts_select_without_channel() {
-        assert_eq!(
-            validate("select", None, false).unwrap(),
-            (Command::Select, None)
-        );
-    }
-
-    #[test]
-    fn validate_accepts_directional_channel() {
-        assert_eq!(
-            validate("up", Some(Channel::L1), false).unwrap(),
-            (Command::Up, Some(Channel::L1))
-        );
-    }
-
-    #[test]
-    fn command_request_accepts_channel_field() {
-        let req: CommandRequest =
-            serde_json::from_str(r#"{"command":"up","channel":"L1"}"#).unwrap();
-
-        assert_eq!(req.command, "up");
-        assert_eq!(req.channel, Some(Channel::L1));
-        assert!(!req.long);
-    }
-
-    #[test]
-    fn validate_rejects_prog_without_channel() {
-        let err = validate("prog", None, false).unwrap_err();
-        assert!(err.contains("requires a channel"));
-    }
-
-    #[test]
-    fn validate_accepts_prog_with_channel() {
-        assert_eq!(
-            validate("prog", Some(Channel::L1), false).unwrap(),
-            (Command::Prog, Some(Channel::L1))
-        );
-    }
-
-    #[test]
-    fn validate_promotes_prog_with_long_to_prog_long() {
-        assert_eq!(
-            validate("prog", Some(Channel::L1), true).unwrap(),
-            (Command::ProgLong, Some(Channel::L1))
-        );
-    }
-
-    #[test]
-    fn validate_rejects_long_on_non_prog_commands() {
-        let err = validate("up", Some(Channel::L1), true).unwrap_err();
-        assert!(err.contains("only valid with prog"));
-    }
-
-    #[tokio::test]
-    async fn dispatch_with_channel_selects_then_executes() {
-        let remote_control = Arc::new(
-            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
-                .await
-                .unwrap(),
-        );
-        let state = AppState {
-            remote_control: remote_control.clone(),
-        };
-
-        dispatch(
-            &state,
-            ValidatedCommandRequest {
-                command: Command::Up,
-                channel: Some(Channel::L3),
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(remote_control.current_selection(), Channel::L3);
-        assert_eq!(
-            remote_control.operations(),
-            vec![
-                crate::driver::ProtocolOperation::TelisSelection(Channel::L3),
-                crate::driver::ProtocolOperation::FakeCommand {
-                    channel: Channel::L3,
-                    command: Command::Up,
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn command_request_rejects_legacy_led_field() {
-        let err = serde_json::from_str::<CommandRequest>(r#"{"command":"select","led":"L1"}"#)
-            .unwrap_err();
-        assert!(err.to_string().contains("unknown field"));
     }
 }

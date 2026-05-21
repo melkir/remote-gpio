@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::gpio::Channel;
+use crate::core::Channel;
 use crate::hap::state::atomic_save_bytes;
 use crate::homekit::config;
 

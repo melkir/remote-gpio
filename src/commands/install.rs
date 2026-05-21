@@ -70,7 +70,7 @@ pub(crate) fn refresh(
     ensure_somfy_group()?;
     ensure_user_in_somfy_group(&service_user)?;
 
-    if resolved_config.config.driver == crate::driver::DriverKind::Rts {
+    if resolved_config.config.driver == crate::config::DriverKind::Rts {
         prepare_rts_prereqs()?;
     }
 

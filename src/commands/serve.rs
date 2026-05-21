@@ -3,9 +3,10 @@ use std::sync::Arc;
 
 use crate::commands::doctor;
 use crate::config::ResolvedConfig;
+use crate::controller::BlindController;
 use crate::homekit;
-use crate::remote::RemoteControl;
 use crate::server::{serve, AppState};
+use crate::service::BlindService;
 
 pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
     let report = doctor::collect(&resolved_config, 0).await;
@@ -14,15 +15,15 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         bail!("doctor reported blocking failures; refusing to start");
     }
 
-    let remote_control =
-        Arc::new(RemoteControl::with_driver(resolved_config.config.driver_config()).await?);
+    let driver_kind = resolved_config.config.driver;
+    let controller =
+        Arc::new(BlindController::with_driver(resolved_config.config.driver_config()).await?);
+    let blinds = Arc::new(BlindService::new(controller.clone(), driver_kind));
     let bind = resolved_config.config.server.bind.clone();
-    let shared_state = Arc::new(AppState {
-        remote_control: remote_control.clone(),
-    });
+    let shared_state = Arc::new(AppState::new(blinds));
 
     let hap_handles = if resolved_config.config.homekit {
-        match homekit::start(remote_control).await {
+        match homekit::start(controller).await {
             Ok(handles) => Some(handles),
             Err(e) => {
                 tracing::warn!(

@@ -7,8 +7,8 @@ use anyhow::Result;
 use check::Check;
 use serde::Serialize;
 
+use crate::config::DriverKind;
 use crate::config::ResolvedConfig;
-use crate::driver::DriverKind;
 use crate::version;
 
 #[derive(Copy, Clone, Debug, Serialize, PartialEq, Eq)]

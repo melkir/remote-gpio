@@ -3,7 +3,8 @@ use std::time::Duration;
 
 use super::check::{read_write_file, readable_file, Check};
 use super::Status;
-use crate::driver::{pigpiod_addr_list, pigpiod_addrs, RtsOptions, PIGPIOD_PORT};
+use crate::config::RtsOptions;
+use crate::driver::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 use crate::homekit::config;
 

@@ -1,18 +1,11 @@
+use crate::config::TelisGpioOptions;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
-use std::str::FromStr;
 
-use crate::driver::TelisGpioOptions;
+pub use crate::core::Channel;
 
 pub const DEFAULT_GPIO_CHIP: &str = "/dev/gpiochip0";
 pub const MAX_BCM_GPIO: u8 = 31;
-
-const CHANNELS: [(Channel, &str); 4] = [
-    (Channel::L1, "L1"),
-    (Channel::L2, "L2"),
-    (Channel::L3, "L3"),
-    (Channel::L4, "L4"),
-];
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
@@ -28,38 +21,13 @@ impl Default for GpioOptions {
     }
 }
 
-/// Logical remote target selected by the Telis LED row.
-#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum Channel {
-    L1,
-    L2,
-    L3,
-    L4,
-    ALL,
-}
-
-impl Channel {
-    pub const INDIVIDUALS: [Channel; 4] = [Channel::L1, Channel::L2, Channel::L3, Channel::L4];
-
-    pub fn led_gpio(self, config: &TelisGpioOptions) -> Option<u8> {
-        match self {
-            Channel::L1 => Some(config.led1),
-            Channel::L2 => Some(config.led2),
-            Channel::L3 => Some(config.led3),
-            Channel::L4 => Some(config.led4),
-            Channel::ALL => None,
-        }
-    }
-
-    /// Advance the Telis selector one step (L1 → L2 → … → ALL → L1).
-    pub fn next(self) -> Self {
-        match self {
-            Channel::L1 => Channel::L2,
-            Channel::L2 => Channel::L3,
-            Channel::L3 => Channel::L4,
-            Channel::L4 => Channel::ALL,
-            Channel::ALL => Channel::L1,
-        }
+pub fn channel_led_gpio(channel: Channel, config: &TelisGpioOptions) -> Option<u8> {
+    match channel {
+        Channel::L1 => Some(config.led1),
+        Channel::L2 => Some(config.led2),
+        Channel::L3 => Some(config.led3),
+        Channel::L4 => Some(config.led4),
+        Channel::ALL => None,
     }
 }
 
@@ -72,37 +40,10 @@ pub enum TelisButton {
     Up = 26,
 }
 
-impl FromStr for Channel {
-    type Err = anyhow::Error;
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "ALL" => Ok(Channel::ALL),
-            _ => CHANNELS
-                .iter()
-                .find(|(_, name)| *name == s)
-                .map(|(ch, _)| *ch)
-                .ok_or_else(|| anyhow::anyhow!("Invalid channel value: {s}")),
-        }
-    }
-}
-
-impl std::fmt::Display for Channel {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Channel::ALL => write!(f, "ALL"),
-            other => CHANNELS
-                .iter()
-                .find(|(ch, _)| ch == other)
-                .map(|(_, name)| write!(f, "{name}"))
-                .unwrap_or_else(|| write!(f, "{other:?}")),
-        }
-    }
-}
-
 pub fn channel_from_gpio(offset: u32, config: &TelisGpioOptions) -> Result<Channel> {
     let gpio = offset as u8;
     for channel in &Channel::INDIVIDUALS {
-        if channel.led_gpio(config) == Some(gpio) {
+        if channel_led_gpio(*channel, config) == Some(gpio) {
             return Ok(*channel);
         }
     }
@@ -133,7 +74,7 @@ mod platform {
     pub async fn watch_inputs(chip: &str, config: &TelisGpioOptions) -> Result<Channel> {
         let offsets: Vec<u32> = Channel::INDIVIDUALS
             .iter()
-            .filter_map(|ch| ch.led_gpio(config))
+            .filter_map(|ch| channel_led_gpio(*ch, config))
             .map(u32::from)
             .collect();
         if offsets.len() != Channel::INDIVIDUALS.len() {
@@ -252,21 +193,7 @@ pub use platform::{trigger_output, watch_inputs};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::TelisGpioOptions;
-
-    #[test]
-    fn channel_from_str_valid() {
-        for (ch, name) in CHANNELS {
-            assert_eq!(Channel::from_str(name).unwrap(), ch);
-        }
-        assert_eq!(Channel::from_str("ALL").unwrap(), Channel::ALL);
-    }
-
-    #[test]
-    fn channel_from_str_invalid() {
-        assert!(Channel::from_str("L5").is_err());
-        assert!(Channel::from_str("").is_err());
-    }
+    use crate::config::TelisGpioOptions;
 
     #[test]
     fn channel_from_gpio_uses_config_pins() {
@@ -280,19 +207,5 @@ mod tests {
             Channel::L4
         );
         assert!(channel_from_gpio(99, &config).is_err());
-    }
-
-    #[test]
-    fn channel_display_round_trip() {
-        for ch in [
-            Channel::L1,
-            Channel::L2,
-            Channel::L3,
-            Channel::L4,
-            Channel::ALL,
-        ] {
-            let s = ch.to_string();
-            assert_eq!(Channel::from_str(&s).unwrap(), ch);
-        }
     }
 }

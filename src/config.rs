@@ -1,15 +1,136 @@
 //! TOML configuration loaded from `/etc/somfy/config.toml` (or `--config`).
 
 use anyhow::{bail, Context, Result};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
-use crate::driver::{DriverConfig, DriverKind, RtsOptions, TelisOptions};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 
 /// Default system configuration path on the Pi.
 pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
+
+/// Runtime-selectable blind driver implementation.
+#[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
+#[serde(rename_all = "lowercase")]
+pub enum DriverKind {
+    Fake,
+    Telis,
+    Rts,
+}
+
+impl DriverKind {
+    pub fn default_for_target() -> Self {
+        if cfg!(all(
+            target_os = "linux",
+            any(target_arch = "arm", target_arch = "aarch64")
+        )) {
+            Self::Telis
+        } else {
+            Self::Fake
+        }
+    }
+
+    /// Whether `prog` / `prog --long` can be transmitted (RTS RF pairing).
+    pub fn supports_pairing(self) -> bool {
+        !matches!(self, Self::Telis)
+    }
+}
+
+impl fmt::Display for DriverKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Fake => write!(f, "fake"),
+            Self::Telis => write!(f, "telis"),
+            Self::Rts => write!(f, "rts"),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RtsOptions {
+    pub spi_device: String,
+    pub gpio: RtsGpioOptions,
+}
+
+impl Default for RtsOptions {
+    fn default() -> Self {
+        Self {
+            spi_device: "/dev/spidev0.0".to_string(),
+            gpio: RtsGpioOptions::default(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct RtsGpioOptions {
+    pub gdo0: u8,
+}
+
+impl Default for RtsGpioOptions {
+    fn default() -> Self {
+        Self { gdo0: 18 }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TelisOptions {
+    pub gpio: TelisGpioOptions,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct TelisGpioOptions {
+    pub up: u8,
+    pub stop: u8,
+    pub down: u8,
+    pub select: u8,
+    pub led1: u8,
+    pub led2: u8,
+    pub led3: u8,
+    pub led4: u8,
+}
+
+impl Default for TelisGpioOptions {
+    fn default() -> Self {
+        Self {
+            up: 26,
+            stop: 19,
+            down: 13,
+            select: 6,
+            led1: 21,
+            led2: 20,
+            led3: 16,
+            led4: 12,
+        }
+    }
+}
+
+/// Resolved driver settings passed to [`crate::driver::CommandRouter::new`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DriverConfig {
+    pub kind: DriverKind,
+    pub gpio: GpioOptions,
+    pub rts: RtsOptions,
+    pub telis: TelisOptions,
+}
+
+#[cfg(test)]
+impl DriverConfig {
+    pub(crate) fn fake() -> Self {
+        Self {
+            kind: DriverKind::Fake,
+            gpio: GpioOptions::default(),
+            rts: RtsOptions::default(),
+            telis: TelisOptions::default(),
+        }
+    }
+}
 
 /// Top-level application configuration.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
