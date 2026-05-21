@@ -28,6 +28,20 @@ impl RequestOutcome {
     }
 }
 
+pub(super) enum OutboundResponse {
+    Status(StatusCode),
+    Body {
+        status: StatusCode,
+        content_type: &'static str,
+        body: Vec<u8>,
+    },
+    Upgrade {
+        reply: Vec<u8>,
+        keys: SessionKeys,
+        controller_id: String,
+    },
+}
+
 impl OutboundResponse {
     fn unauthorized() -> Self {
         Self::Status(StatusCode::UNAUTHORIZED)
@@ -60,20 +74,6 @@ impl OutboundResponse {
             body: write_statuses_body(statuses),
         }
     }
-}
-
-pub(super) enum OutboundResponse {
-    Status(StatusCode),
-    Body {
-        status: StatusCode,
-        content_type: &'static str,
-        body: Vec<u8>,
-    },
-    Upgrade {
-        reply: Vec<u8>,
-        keys: SessionKeys,
-        controller_id: String,
-    },
 }
 
 pub(super) async fn handle_request<A, S>(
