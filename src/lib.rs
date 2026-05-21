@@ -9,6 +9,8 @@
 pub mod cli;
 pub mod commands;
 pub mod config;
+pub mod controller;
+pub mod core;
 pub mod deploy;
 pub mod driver;
 pub mod embed;
@@ -16,8 +18,8 @@ pub mod gpio;
 pub mod hap;
 pub mod homekit;
 pub mod logging;
-pub mod remote;
 pub mod rts;
 pub mod server;
+pub mod service;
 pub mod systemd;
 pub mod version;

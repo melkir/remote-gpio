@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use crate::remote::Command;
+use crate::core::Command;
 
 pub const FRAME_LEN: usize = 7;
 pub const DEFAULT_KEY: u8 = 0xA7;

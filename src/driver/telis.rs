@@ -4,9 +4,9 @@ use std::sync::Arc;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
+use crate::core::{Channel, Command};
 use crate::driver::{SelectedChannelRx, TelisOptions, TELIS_PROG_UNAVAILABLE};
-use crate::gpio::{Channel, GpioOptions, TelisButton};
-use crate::remote::Command;
+use crate::gpio::{GpioOptions, TelisButton};
 
 const MAX_SELECT_CYCLES: usize = 8;
 

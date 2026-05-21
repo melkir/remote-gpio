@@ -34,7 +34,8 @@ The frontend is intentionally driver-agnostic. Whether the binary is driving a w
 │  ├─ GET  /ws       → WebSocket: bidirectional API           │
 │  └─ /*             → embedded Preact PWA                    │
 │                                                             │
-│  RemoteControl → CommandRouter (fake / telis / rts)         │
+│  BlindService → BlindController → CommandRouter             │
+│   (fake / telis / rts)                                      │
 │   broadcasts the selected Channel via watch::channel        │
 └──────────────────────────┬──────────────────────────────────┘
                            │
@@ -70,24 +71,44 @@ All three implement the same shape:
 
 Live driver switching is unsupported within a running process — the driver is constructed once at startup. Operators switch drivers through config. When the config file is absent, Raspberry Pi Linux builds default to `telis`; other targets default to `fake`.
 
+### Driver behavior
+
+`DriverKind::supports_pairing()` is the only driver fact adapters query today (`prog` is unavailable on Telis). `BlindService` and `somfy remote prog` call it before dispatch. Selection and `execute_on` semantics still differ per driver — see the driver bullets above and [HARDWARE.md](HARDWARE.md).
+
 ## Module Map
 
 | Area           | Files            | Responsibility                                                                                         |
 | -------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| Domain core    | `src/core/*`     | Shared vocabulary: `Channel` (L1–L4 / ALL), `Command` (up/down/stop/select/prog).                      |
+| Application    | `src/service/*`  | `BlindService`: wire-format validation and UI-style press dispatch for HTTP/WS/CLI.                    |
 | Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                               |
-| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                             |
-| Drivers        | `src/driver/*`   | `fake`, `telis`, `rts` implementations of the active-driver trait.                                     |
+| Controller     | `src/controller.rs` | `BlindController`: hardware dispatch, position fan-out, selection/event broadcasting.              |
+| Drivers        | `src/driver/*`   | `fake`, `telis`, `rts` implementations behind `CommandRouter`.                                         |
 | Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                           |
 | RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver.         |
 | HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.            |
 | HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, target-write planning, position cache, HAP startup. |
 | CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                           |
 
-The important boundaries are `hap` versus `homekit` (protocol vs project), and `driver/`\* versus everything above (hardware vs UX).
+The important boundaries are `core` (domain types), `service` (application dispatch), `controller` + `driver` (hardware orchestration), and `hap` versus `homekit` (protocol vs project).
 
-## RemoteControl
+## Core (`src/core/`)
 
-`RemoteControl` wraps `CommandRouter` and owns the cross-cutting state that isn't driver-specific:
+`Channel` and `Command` are the shared vocabulary for drivers, GPIO, RTS, HomeKit, and transports. Telis-specific helpers such as `channel_led_gpio()` live in `gpio.rs`.
+
+## BlindService (`src/service/`)
+
+`BlindService` is the single application entry for REST/WebSocket presses:
+
+- **`parse_wire`** — validates JSON/CLI bodies (`command`, optional `channel`, `long` for `prog`).
+- **`press` / `press_wire`** — UI dispatch: `select` runs directly; directional commands optionally `select` a channel first, then execute on the current selection.
+- **`ensure_pairing_for_kind`** — rejects `prog` when `supports_pairing` is false.
+
+`serve` constructs one `BlindService` per process and stores it in `AppState`. The web API reads selection via `BlindService::current_selection()` and `subscribe_selection()` without reaching into `BlindController` directly. HomeKit `TargetPosition` writes use `BlindController::execute_on` with HAP-specific batching and cache coalescing in `homekit/`.
+
+## BlindController
+
+`BlindController` wraps `CommandRouter` and owns cross-cutting state that isn't driver-specific:
 
 - `watch<Channel>` (delegated to the driver) tracks the current selection.
 - `broadcast<PositionUpdate>` publishes completed Up/Down movement events.
@@ -107,13 +128,13 @@ The lock is not access control — multiple callers can submit commands. It just
 
 ## Web Flow
 
-The web API is intentionally small. `/command` is the only write endpoint, and it accepts the same shape as WebSocket command messages: a command name and an optional `channel`.
+The web API is intentionally small. `/command` is the only write endpoint, and it accepts the same shape as WebSocket command messages: a command name, an optional `channel`, and an optional `long` flag (promotes `prog` to `prog_long`). The handler delegates to `BlindService::press_wire`.
 
-Both `GET /events` and `GET /ws` subscribe to `RemoteControl::subscribe_selection()`, send the current channel immediately, then forward selection changes. Incoming WebSocket commands are spawned as tasks so updates keep flowing while a command is in flight. A per-connection semaphore keeps those spawned commands ordered; the driver locks still protect the hardware globally.
+Both `GET /events` and `GET /ws` subscribe to `BlindService::subscribe_selection()`, send the current channel immediately, then forward selection changes. Incoming WebSocket commands are spawned as tasks so updates keep flowing while a command is in flight. A per-connection semaphore keeps those spawned commands ordered; the driver locks still protect the hardware globally.
 
 ## HomeKit adapter
 
-`src/homekit/mod.rs` boots mDNS, the HAP TCP server, and the position listener. `src/homekit/somfy.rs` implements the accessory app; `target_writes.rs` batches and coalesces `TargetPosition` writes; `position_cache.rs` persists inferred positions. HomeKit commands go through the same `RemoteControl` / `CommandRouter` path as the web API.
+`src/homekit/mod.rs` boots mDNS, the HAP TCP server, and the position listener. `src/homekit/somfy.rs` implements the accessory app; `target_writes.rs` batches and coalesces `TargetPosition` writes; `position_cache.rs` persists inferred positions. HomeKit commands use `BlindController::execute_on` and the same `CommandRouter` hardware path as web presses.
 
 HomeKit has no direct physical position feedback from the blinds. The adapter therefore keeps a best-effort cache: Up snaps to `100`, Down snaps to `0`, and requested target positions snap to the nearest endpoint. `ALL` is project-level behavior; writing it fans out to individual channels, and individual writes only update `ALL` when every channel matches.
 
@@ -137,9 +158,11 @@ All writes use atomic temp-file + rename. RTS uses a write-ahead reserve block (
 
 ## Good First Places To Read
 
-1. `src/remote.rs` for the command and concurrency model.
-2. `src/server.rs` for the web API, SSE stream, and WebSocket flow.
-3. `src/homekit/somfy.rs` for the HomeKit adapter, then `src/homekit/target_writes.rs` for write planning.
-4. `src/hap/server/mod.rs` and `src/hap/server/handlers/` for the HAP request/session loop.
-5. `docs/HARDWARE.md` for wiring, pairing, and the end-to-end data-flow diagram.
-6. `docs/HAP.md` for the HAP server and pairing lifecycle.
+1. `src/core/` for `Channel` and `Command`.
+2. `src/service/mod.rs` for wire validation and UI press dispatch.
+3. `src/controller.rs` for hardware orchestration, position fan-out, and concurrency.
+4. `src/server.rs` for the web API, SSE stream, and WebSocket flow.
+5. `src/homekit/somfy.rs` for the HomeKit adapter, then `src/homekit/target_writes.rs` for write planning.
+6. `src/hap/server/mod.rs` and `src/hap/server/handlers/` for the HAP request/session loop.
+7. `docs/HARDWARE.md` for wiring, pairing, and the end-to-end data-flow diagram.
+8. `docs/HAP.md` for the HAP server and pairing lifecycle.

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use tokio::sync::Mutex;
 
-use crate::gpio::Channel;
+use crate::core::Channel;
 use crate::hap::runtime::{CharacteristicEvent, CharacteristicId};
 use crate::homekit::accessory_db::{
     IID_CURRENT_POSITION, IID_POSITION_STATE, IID_TARGET_POSITION, POSITION_STATE_STOPPED,

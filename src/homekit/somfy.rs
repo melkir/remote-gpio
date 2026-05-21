@@ -1,14 +1,15 @@
 //! Somfy HomeKit accessory adapter.
 //!
 //! This module wires the HAP trait implementation to the shared position cache,
-//! target-write planner, and remote-control command router.
+//! target-write planner, and blind controller.
 
 use anyhow::anyhow;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::gpio::Channel;
+use crate::controller::{BlindController, PositionUpdate};
+use crate::core::{Channel, Command};
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWrite,
     CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture, HapStatus,
@@ -23,28 +24,27 @@ use crate::homekit::position_cache::{
     effective_position, find_blind, PositionCache, SnappedPosition, BLINDS,
 };
 use crate::homekit::target_writes::{grouped_all_target, plan_target_writes, PendingTargetWrite};
-use crate::remote::{Command, PositionUpdate, RemoteControl};
 
 pub struct SomfyHapApp {
-    remote_control: Arc<RemoteControl>,
+    controller: Arc<BlindController>,
     positions: PositionCache,
 }
 
 impl SomfyHapApp {
-    pub fn new(remote_control: Arc<RemoteControl>) -> Self {
+    pub fn new(controller: Arc<BlindController>) -> Self {
         Self {
-            remote_control,
+            controller,
             positions: PositionCache::new(),
         }
     }
 
     #[cfg(test)]
     fn new_with_positions(
-        remote_control: Arc<RemoteControl>,
+        controller: Arc<BlindController>,
         positions: std::collections::HashMap<u64, u8>,
     ) -> Self {
         Self {
-            remote_control,
+            controller,
             positions: PositionCache::from_positions(positions),
         }
     }
@@ -88,7 +88,7 @@ impl SomfyHapApp {
             return Ok(Vec::new());
         }
 
-        self.remote_control
+        self.controller
             .execute_on(Channel::ALL, command_for_snapped(snapped))
             .await
             .map_err(|e| anyhow!(e))?;
@@ -109,7 +109,7 @@ impl SomfyHapApp {
             return Ok(Vec::new());
         }
 
-        self.remote_control
+        self.controller
             .execute_on(target.blind.channel, command_for_snapped(target.snapped))
             .await
             .map_err(|e| anyhow!(e))?;
@@ -241,8 +241,7 @@ fn command_for_snapped(snapped: SnappedPosition) -> Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::gpio::Channel;
-    use crate::remote::Command;
+    use crate::core::{Channel, Command};
     use serde_json::json;
     use std::collections::HashMap;
 
@@ -272,12 +271,12 @@ mod tests {
 
     #[tokio::test]
     async fn full_individual_write_batch_sends_one_all_driver_command() {
-        let remote_control = Arc::new(
-            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
+        let controller = Arc::new(
+            BlindController::with_driver(crate::driver::DriverConfig::fake())
                 .await
                 .unwrap(),
         );
-        let app = SomfyHapApp::new_with_positions(remote_control.clone(), HashMap::new());
+        let app = SomfyHapApp::new_with_positions(controller.clone(), HashMap::new());
         let writes = [2, 3, 4, 5]
             .into_iter()
             .map(|aid| CharacteristicWrite {
@@ -296,7 +295,7 @@ mod tests {
         assert!(outcome.all_success());
         assert_eq!(outcome.statuses.len(), 4);
         assert_eq!(
-            remote_control.operations(),
+            controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {
                 channel: Channel::ALL,
                 command: Command::Up,
@@ -306,14 +305,14 @@ mod tests {
 
     #[tokio::test]
     async fn cache_hit_does_not_break_full_batch_coalesce() {
-        let remote_control = Arc::new(
-            RemoteControl::with_driver(crate::driver::DriverConfig::fake())
+        let controller = Arc::new(
+            BlindController::with_driver(crate::driver::DriverConfig::fake())
                 .await
                 .unwrap(),
         );
         let mut positions = HashMap::new();
         positions.insert(2, 100);
-        let app = SomfyHapApp::new_with_positions(remote_control.clone(), positions);
+        let app = SomfyHapApp::new_with_positions(controller.clone(), positions);
         let writes = [2, 3, 4, 5]
             .into_iter()
             .map(|aid| CharacteristicWrite {
@@ -331,7 +330,7 @@ mod tests {
 
         assert!(outcome.all_success());
         assert_eq!(
-            remote_control.operations(),
+            controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {
                 channel: Channel::ALL,
                 command: Command::Up,

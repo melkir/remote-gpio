@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use tokio::sync::watch::Receiver;
 
-use crate::gpio::{Channel, GpioOptions};
-use crate::remote::Command;
+use crate::core::{Channel, Command};
+use crate::gpio::GpioOptions;
 
 mod fake;
 mod rts;
@@ -57,6 +57,13 @@ impl fmt::Display for DriverKind {
             Self::Telis => write!(f, "telis"),
             Self::Rts => write!(f, "rts"),
         }
+    }
+}
+
+impl DriverKind {
+    /// Whether `prog` / `prog --long` can be transmitted (RTS RF pairing).
+    pub fn supports_pairing(self) -> bool {
+        !matches!(self, Self::Telis)
     }
 }
 

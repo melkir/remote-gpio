@@ -4,10 +4,10 @@ use anyhow::Result;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
+use crate::controller::BlindController;
 use crate::hap::mdns::{self, MdnsConfig};
 use crate::hap::runtime::HapRuntime;
 use crate::hap::state::{FileHapStore, HapState};
-use crate::remote::RemoteControl;
 
 mod accessory_db;
 pub mod config;
@@ -41,7 +41,7 @@ impl HomekitHandles {
 /// Boot the project HomeKit subsystem. Loads or initializes persistent HAP
 /// state, prints the setup code, advertises via mDNS, and serves the HAP TCP
 /// port.
-pub async fn start(remote_control: Arc<RemoteControl>) -> Result<HomekitHandles> {
+pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     let store = store();
     let hap_state = store.load_or_init()?;
     let setup_uri = setup_uri(&hap_state)?;
@@ -57,8 +57,8 @@ pub async fn start(remote_control: Arc<RemoteControl>) -> Result<HomekitHandles>
     )?;
 
     let (events, _) = broadcast::channel(64);
-    let position_rx = remote_control.subscribe_positions();
-    let app = Arc::new(somfy::SomfyHapApp::new(remote_control));
+    let position_rx = controller.subscribe_positions();
+    let app = Arc::new(somfy::SomfyHapApp::new(controller));
     let runtime = Arc::new(HapRuntime::new(hap_state, store, app.clone(), events));
 
     let event_tx = runtime.event_sender();

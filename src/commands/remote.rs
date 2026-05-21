@@ -5,20 +5,21 @@ use std::path::PathBuf;
 
 use crate::cli::RemoteCommand;
 use crate::config;
-use crate::driver::{DriverKind, TELIS_PROG_UNAVAILABLE};
-use crate::gpio::Channel;
+use crate::core::{Channel, Command};
+use crate::service::{BlindService, WirePress};
 
 const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel, false).await,
-        RemoteCommand::Down { channel } => post_command("down", channel, false).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel, false).await,
-        RemoteCommand::Select { channel } => post_command("select", Some(channel), false).await,
+        RemoteCommand::Up { channel } => post_command("up", channel, false, config_path).await,
+        RemoteCommand::Down { channel } => post_command("down", channel, false, config_path).await,
+        RemoteCommand::Stop { channel } => post_command("stop", channel, false, config_path).await,
+        RemoteCommand::Select { channel } => {
+            post_command("select", Some(channel), false, config_path).await
+        }
         RemoteCommand::Prog { channel, long } => {
-            ensure_prog_driver(config_path)?;
-            post_command("prog", Some(channel), long).await
+            post_command("prog", Some(channel), long, config_path).await
         }
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,
@@ -34,15 +35,28 @@ struct CommandRequest {
     long: bool,
 }
 
-fn ensure_prog_driver(config_path: Option<PathBuf>) -> Result<()> {
+fn ensure_pairing_allowed(config_path: Option<PathBuf>) -> Result<()> {
     let resolved = config::resolve(config_path)?;
-    if resolved.config.driver == DriverKind::Telis {
-        bail!("{TELIS_PROG_UNAVAILABLE}");
-    }
+    BlindService::ensure_pairing_for_kind(resolved.config.driver, Command::Prog)?;
     Ok(())
 }
 
-async fn post_command(command: &'static str, channel: Option<Channel>, long: bool) -> Result<()> {
+async fn post_command(
+    command: &'static str,
+    channel: Option<Channel>,
+    long: bool,
+    config_path: Option<PathBuf>,
+) -> Result<()> {
+    if command == "prog" {
+        ensure_pairing_allowed(config_path)?;
+        let wire = WirePress {
+            command: command.to_string(),
+            channel,
+            long,
+        };
+        BlindService::parse_wire(wire)?;
+    }
+
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{SERVICE_BASE_URL}/command"))

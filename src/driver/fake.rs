@@ -4,11 +4,10 @@ use std::sync::Mutex as StdMutex;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
+use crate::core::{Channel, Command};
 #[cfg(test)]
 use crate::driver::ProtocolOperation;
 use crate::driver::SelectedChannelRx;
-use crate::gpio::Channel;
-use crate::remote::Command;
 
 #[derive(Debug)]
 pub(crate) struct FakeDriver {
