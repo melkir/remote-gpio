@@ -98,10 +98,10 @@ The important boundaries are `core` (domain types), `service` (application dispa
 
 ## BlindService (`src/service/`)
 
-`BlindService` is the single application entry for REST/WebSocket presses:
+`BlindService` is the single application entry for REST/WebSocket commands:
 
-- **`parse_wire`** — validates JSON/CLI bodies (`command`, optional `channel`; pairing uses `prog` or `prog_long`).
-- **`press` / `press_wire`** — UI dispatch: `select` runs directly; directional commands optionally `select` a channel first, then execute on the current selection.
+- **`parse_command`** — validates `CommandRequest` bodies (`command`, optional `channel`; pairing uses `prog` or `prog_long`).
+- **`dispatch_command`** — validates and routes: `select` runs directly; directional commands optionally `select` a channel first, then delegate to the controller.
 - **`ensure_pairing_for_kind`** — rejects `prog` when `supports_pairing` is false.
 
 `serve` constructs one `BlindService` per process and stores it in `AppState`. The web API reads selection via `BlindService::current_selection()` and `subscribe_selection()` without reaching into `BlindController` directly. HomeKit `TargetPosition` writes use `BlindController::execute_on` with HAP-specific batching and cache coalescing in `homekit/`.
@@ -128,7 +128,7 @@ The lock is not access control — multiple callers can submit commands. It just
 
 ## Web Flow
 
-The web API is intentionally small. `/command` is the only write endpoint, and it accepts the same shape as WebSocket command messages: a command name (`up`, `down`, `stop`, `select`, `prog`, `prog_long`, …) and an optional `channel`. The handler delegates to `BlindService::press_wire`. Long RF pairing bursts use `prog_long` (CLI: `somfy remote prog … --long`).
+The web API is intentionally small. `/command` is the only write endpoint, and it accepts the same shape as WebSocket command messages: a command name (`up`, `down`, `stop`, `select`, `prog`, `prog_long`, …) and an optional `channel`. The handler delegates to `BlindService::dispatch_command`. Long RF pairing bursts use `prog_long` (CLI: `somfy remote prog … --long`).
 
 Both `GET /events` and `GET /ws` subscribe to `BlindService::subscribe_selection()`, send the current channel immediately, then forward selection changes. Incoming WebSocket commands are spawned as tasks so updates keep flowing while a command is in flight. A per-connection semaphore keeps those spawned commands ordered; the driver locks still protect the hardware globally.
 

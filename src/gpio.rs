@@ -1,4 +1,4 @@
-use crate::driver::TelisGpioOptions;
+use crate::config::TelisGpioOptions;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 
@@ -193,7 +193,7 @@ pub use platform::{trigger_output, watch_inputs};
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::driver::TelisGpioOptions;
+    use crate::config::TelisGpioOptions;
 
     #[test]
     fn channel_from_gpio_uses_config_pins() {

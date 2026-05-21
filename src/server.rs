@@ -1,5 +1,4 @@
-use crate::core::Channel;
-use crate::service::{BlindService, PressError, WirePress};
+use crate::service::{BlindService, CommandError, CommandRequest};
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
@@ -33,14 +32,6 @@ impl AppState {
             command_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
         }
     }
-}
-
-/// Wire-format command payload for HTTP and WebSocket endpoints.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct CommandRequest {
-    command: String,
-    channel: Option<Channel>,
 }
 
 /// WebSocket query parameters
@@ -119,18 +110,17 @@ async fn handle_command(
 }
 
 async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
-    let CommandRequest { command, channel } = payload;
-    tracing::info!(command = %command, ?channel, "remote command received");
+    tracing::info!(command = %payload.command, ?payload.channel, "remote command received");
     state
         .blinds
-        .press_wire(WirePress { command, channel })
+        .dispatch_command(payload)
         .await
-        .map_err(map_press_error)?;
+        .map_err(map_command_error)?;
     tracing::info!("remote command completed");
     Ok(())
 }
 
-fn map_press_error(err: PressError) -> String {
+fn map_command_error(err: CommandError) -> String {
     tracing::error!(error = %err, "remote command failed");
     err.to_string()
 }
@@ -223,34 +213,5 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 }
             }
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn command_request_accepts_channel_field() {
-        let req: CommandRequest =
-            serde_json::from_str(r#"{"command":"up","channel":"L1"}"#).unwrap();
-
-        assert_eq!(req.command, "up");
-        assert_eq!(req.channel, Some(Channel::L1));
-    }
-
-    #[test]
-    fn command_request_accepts_prog_long() {
-        let req: CommandRequest =
-            serde_json::from_str(r#"{"command":"prog_long","channel":"L1"}"#).unwrap();
-        assert_eq!(req.command, "prog_long");
-        assert_eq!(req.channel, Some(Channel::L1));
-    }
-
-    #[test]
-    fn command_request_rejects_legacy_led_field() {
-        let err = serde_json::from_str::<CommandRequest>(r#"{"command":"select","led":"L1"}"#)
-            .unwrap_err();
-        assert!(err.to_string().contains("unknown field"));
     }
 }

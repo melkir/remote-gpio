@@ -272,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn full_individual_write_batch_sends_one_all_driver_command() {
         let controller = Arc::new(
-            BlindController::with_driver(crate::driver::DriverConfig::fake())
+            BlindController::with_driver(crate::config::DriverConfig::fake())
                 .await
                 .unwrap(),
         );
@@ -306,7 +306,7 @@ mod tests {
     #[tokio::test]
     async fn cache_hit_does_not_break_full_batch_coalesce() {
         let controller = Arc::new(
-            BlindController::with_driver(crate::driver::DriverConfig::fake())
+            BlindController::with_driver(crate::config::DriverConfig::fake())
                 .await
                 .unwrap(),
         );

@@ -21,7 +21,7 @@ pub struct BlindController {
 }
 
 impl BlindController {
-    pub async fn with_driver(config: crate::driver::DriverConfig) -> Result<Self> {
+    pub async fn with_driver(config: crate::config::DriverConfig) -> Result<Self> {
         let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {

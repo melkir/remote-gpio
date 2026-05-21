@@ -5,8 +5,9 @@ use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
+use crate::config::RtsOptions;
 use crate::core::{Channel, Command};
-use crate::driver::{RtsOptions, SelectedChannelRx};
+use crate::driver::SelectedChannelRx;
 use crate::gpio::MAX_BCM_GPIO;
 use crate::rts::cc1101::Cc1101;
 use crate::rts::frame::{RtsCommand, RtsFrame};

@@ -1,12 +1,11 @@
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
-use serde::Serialize;
 use std::path::PathBuf;
 
 use crate::cli::RemoteCommand;
 use crate::config;
 use crate::core::{Channel, Command};
-use crate::service::{BlindService, WirePress};
+use crate::service::{BlindService, CommandRequest};
 
 const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
 
@@ -27,13 +26,6 @@ pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result
     }
 }
 
-#[derive(Serialize)]
-struct CommandRequest {
-    command: &'static str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    channel: Option<Channel>,
-}
-
 fn ensure_pairing_allowed(config_path: Option<PathBuf>) -> Result<()> {
     let resolved = config::resolve(config_path)?;
     BlindService::ensure_pairing_for_kind(resolved.config.driver, Command::Prog)?;
@@ -49,7 +41,7 @@ async fn post_command(
         ensure_pairing_allowed(config_path)?;
         // Fast-fail wire rules (channel required) before HTTP;
         // the server runs the same validation again on POST /command.
-        BlindService::parse_wire(WirePress {
+        BlindService::parse_command(CommandRequest {
             command: command.to_string(),
             channel,
         })?;
@@ -58,7 +50,10 @@ async fn post_command(
     let client = reqwest::Client::new();
     let response = client
         .post(format!("{SERVICE_BASE_URL}/command"))
-        .json(&CommandRequest { command, channel })
+        .json(&CommandRequest {
+            command: command.to_string(),
+            channel,
+        })
         .send()
         .await
         .context("connecting to somfy service at 127.0.0.1:5002")?;

@@ -1,9 +1,9 @@
 use anyhow::Result;
 
 use crate::commands::install;
+use crate::config::DriverKind;
 use crate::config::{self, ResolvedConfig};
 use crate::deploy::{atomic_write, restart_somfy};
-use crate::driver::DriverKind;
 
 pub fn path(resolved: &ResolvedConfig) {
     println!("{}", resolved.path.display());
