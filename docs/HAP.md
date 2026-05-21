@@ -33,7 +33,7 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 
 ## Connection lifecycle
 
-`src/hap/server.rs::handle_connection` runs a single `tokio::select!`:
+`src/hap/server/mod.rs::handle_connection` runs a single `tokio::select!`:
 
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.

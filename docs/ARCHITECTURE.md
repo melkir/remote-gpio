@@ -182,5 +182,5 @@ automation associations.
 1. `src/remote.rs` for the command and concurrency model.
 2. `src/server.rs` for the web API, SSE stream, and WebSocket flow.
 3. `src/homekit/somfy.rs` for the HomeKit adapter, then `src/homekit/target_writes.rs` for write planning.
-4. `src/hap/server.rs` for the HAP request/session loop.
+4. `src/hap/server/mod.rs` and `src/hap/server/handlers.rs` for the HAP request/session loop.
 5. `docs/HARDWARE.md` for GPIO wiring and debounce details.
