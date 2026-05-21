@@ -10,9 +10,13 @@ use crate::hap::state::{FileHapStore, HapState};
 use crate::remote::RemoteControl;
 
 mod accessory_db;
+mod blinds;
 pub mod config;
+mod position_cache;
 pub mod positions;
+mod reads;
 pub mod somfy;
+mod target_writes;
 
 pub fn store() -> FileHapStore {
     FileHapStore::new(config::state_dir())

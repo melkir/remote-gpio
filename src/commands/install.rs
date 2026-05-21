@@ -139,15 +139,20 @@ fn ensure_pigpio_installed() -> Result<()> {
     Ok(())
 }
 
-fn configure_pigpiod_localhost() -> Result<()> {
+fn pigpiod_override_paths() -> Result<(&'static Path, &'static Path)> {
     let override_path = Path::new(PIGPIOD_OVERRIDE_PATH);
-    if !override_path
+    let override_dir = override_path
         .parent()
-        .ok_or_else(|| anyhow::anyhow!("invalid pigpiod override path"))?
-        .exists()
-    {
-        fs::create_dir_all(override_path.parent().unwrap())
-            .with_context(|| format!("creating {}", override_path.parent().unwrap().display()))?;
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("invalid pigpiod override path"))?;
+    Ok((override_path, override_dir))
+}
+
+fn configure_pigpiod_localhost() -> Result<()> {
+    let (override_path, override_dir) = pigpiod_override_paths()?;
+    if !override_dir.exists() {
+        fs::create_dir_all(override_dir)
+            .with_context(|| format!("creating {}", override_dir.display()))?;
     }
 
     if atomic_write_if_changed(override_path, PIGPIOD_OVERRIDE)? {
@@ -319,6 +324,13 @@ mod tests {
         std::env::set_var("SUDO_USER", "root");
         assert!(resolve_service_user(None).is_err());
         restore_env("SUDO_USER", prev);
+    }
+
+    #[test]
+    fn pigpiod_override_paths_resolve_parent_directory() {
+        let (path, dir) = pigpiod_override_paths().unwrap();
+        assert_eq!(path, Path::new(PIGPIOD_OVERRIDE_PATH));
+        assert_eq!(dir, Path::new("/etc/systemd/system/pigpiod.service.d"));
     }
 
     #[test]

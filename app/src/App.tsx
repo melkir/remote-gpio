@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
 
 export function App() {
-  const [activeLed, setActiveLed] = useState<string | null>(null);
+  const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const { triggerHaptic: shortHaptic } = useHaptic(100);
   const { triggerHaptic: longHaptic } = useHaptic(200);
   const send = useCallback(async (payload: { command: string; channel?: string }) => {
@@ -32,7 +32,7 @@ export function App() {
     }
   }, []);
   const { readyState } = useSelectionEvents('/events', {
-    onSelection: setActiveLed,
+    onSelection: setActiveChannel,
     onClosed: handleAccessSessionExpiry,
   });
 
@@ -54,7 +54,7 @@ export function App() {
         if (response.ok) {
           const channel = (await response.text()).trim();
           if (isValidChannel(channel)) {
-            setActiveLed(channel);
+            setActiveChannel(channel);
           } else {
             await handleAccessSessionExpiry();
           }
@@ -89,7 +89,7 @@ export function App() {
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-evenly gap-4 pt-4">
-      {/* Connection Status LED */}
+      {/* Connection status indicator */}
       <div className={cn('absolute top-0 h-4 w-72 rounded-b-full bg-accent', status)} />
 
       {/* Up, Stop, Down */}
@@ -124,7 +124,7 @@ export function App() {
         </Button>
       ))}
 
-      {/* LED Row */}
+      {/* Channel selection row */}
       <div className="flex flex-row items-center justify-center gap-12">
         {['L1', 'L2', 'L3', 'L4'].map((channel) => (
           <Button
@@ -135,7 +135,9 @@ export function App() {
             onClick={() => send({ command: 'select', channel })}
           >
             <Circle
-              fill={activeLed === 'ALL' || activeLed === channel ? 'currentColor' : undefined}
+              fill={
+                activeChannel === 'ALL' || activeChannel === channel ? 'currentColor' : undefined
+              }
               className="size-6"
             />
           </Button>

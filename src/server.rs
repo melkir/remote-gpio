@@ -26,7 +26,7 @@ pub struct AppState {
     pub remote_control: Arc<RemoteControl>,
 }
 
-/// Command request structure for HTTP and WebSocket endpoints
+/// Wire-format command payload for HTTP and WebSocket endpoints.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct CommandRequest {
@@ -34,6 +34,24 @@ struct CommandRequest {
     channel: Option<Channel>,
     #[serde(default)]
     long: bool,
+}
+
+/// Parsed and validated command ready for dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ValidatedCommandRequest {
+    command: Command,
+    channel: Option<Channel>,
+}
+
+impl CommandRequest {
+    fn validate(self) -> Result<ValidatedCommandRequest, String> {
+        let CommandRequest {
+            command,
+            channel,
+            long,
+        } = self;
+        validate_command(command, channel, long)
+    }
 }
 
 /// WebSocket query parameters
@@ -102,24 +120,22 @@ async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
-    let CommandRequest {
-        command,
-        channel,
-        long,
-    } = payload;
-    match dispatch(&state, &command, channel, long).await {
+    match execute_command(&state, payload).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
     }
 }
 
-async fn dispatch(
-    state: &AppState,
-    command: &str,
-    channel: Option<Channel>,
-    long: bool,
-) -> Result<(), String> {
-    let (cmd, channel) = validate_command_request(command, channel, long)?;
+async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
+    let request = payload.validate()?;
+    dispatch(state, request).await
+}
+
+async fn dispatch(state: &AppState, request: ValidatedCommandRequest) -> Result<(), String> {
+    let ValidatedCommandRequest {
+        command: cmd,
+        channel,
+    } = request;
     tracing::info!(command = ?cmd, channel = ?channel, "remote command received");
     if cmd == Command::Select {
         state
@@ -147,11 +163,12 @@ async fn dispatch(
     Ok(())
 }
 
-fn validate_command_request(
-    command: &str,
+fn validate_command(
+    command: String,
     channel: Option<Channel>,
     long: bool,
-) -> Result<(Command, Option<Channel>), String> {
+) -> Result<ValidatedCommandRequest, String> {
+    let command = command.as_str();
     let mut cmd = Command::from_str(command).map_err(|e| e.to_string())?;
     if long {
         match cmd {
@@ -160,12 +177,18 @@ fn validate_command_request(
             _ => return Err("`long` is only valid with prog".to_string()),
         }
     }
-    match (cmd, channel) {
-        (Command::Prog | Command::ProgLong, Some(channel)) => Ok((cmd, Some(channel))),
-        (Command::Prog | Command::ProgLong, None) => Err("prog requires a channel".to_string()),
-        (Command::Select, channel) => Ok((cmd, channel)),
-        (Command::Up | Command::Down | Command::Stop, channel) => Ok((cmd, channel)),
-    }
+    let channel = match (cmd, channel) {
+        (Command::Prog | Command::ProgLong, Some(channel)) => Some(channel),
+        (Command::Prog | Command::ProgLong, None) => {
+            return Err("prog requires a channel".to_string());
+        }
+        (Command::Select, channel) => channel,
+        (Command::Up | Command::Down | Command::Stop, channel) => channel,
+    };
+    Ok(ValidatedCommandRequest {
+        command: cmd,
+        channel,
+    })
 }
 
 /// Handles WebSocket upgrade requests
@@ -216,12 +239,14 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 match msg {
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<CommandRequest>(&text) {
-                            Ok(CommandRequest { command, channel, long }) => {
-                                // Spawn command processing so LED updates aren't blocked
+                            Ok(payload) => {
+                                let command = payload.command.clone();
+                                let channel = payload.channel;
+                                // Spawn command processing so selection updates aren't blocked.
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
-                                    match dispatch(&state, &command, channel, long).await {
+                                    match execute_command(&state, payload).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)
                                         }
@@ -257,55 +282,92 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
 mod tests {
     use super::*;
 
+    fn validated(command: &str, channel: Option<Channel>, long: bool) -> ValidatedCommandRequest {
+        CommandRequest {
+            command: command.to_string(),
+            channel,
+            long,
+        }
+        .validate()
+        .unwrap()
+    }
+
     #[test]
     fn validate_accepts_select_with_channel() {
         assert_eq!(
-            validate_command_request("select", Some(Channel::L2), false).unwrap(),
-            (Command::Select, Some(Channel::L2))
+            validated("select", Some(Channel::L2), false),
+            ValidatedCommandRequest {
+                command: Command::Select,
+                channel: Some(Channel::L2),
+            }
         );
     }
 
     #[test]
     fn validate_accepts_select_without_channel() {
         assert_eq!(
-            validate_command_request("select", None, false).unwrap(),
-            (Command::Select, None)
+            validated("select", None, false),
+            ValidatedCommandRequest {
+                command: Command::Select,
+                channel: None,
+            }
         );
     }
 
     #[test]
     fn validate_accepts_directional_channel() {
         assert_eq!(
-            validate_command_request("up", Some(Channel::L1), false).unwrap(),
-            (Command::Up, Some(Channel::L1))
+            validated("up", Some(Channel::L1), false),
+            ValidatedCommandRequest {
+                command: Command::Up,
+                channel: Some(Channel::L1),
+            }
         );
     }
 
     #[test]
     fn validate_rejects_prog_without_channel() {
-        let err = validate_command_request("prog", None, false).unwrap_err();
+        let err = CommandRequest {
+            command: "prog".into(),
+            channel: None,
+            long: false,
+        }
+        .validate()
+        .unwrap_err();
         assert!(err.contains("requires a channel"));
     }
 
     #[test]
     fn validate_accepts_prog_with_channel() {
         assert_eq!(
-            validate_command_request("prog", Some(Channel::L1), false).unwrap(),
-            (Command::Prog, Some(Channel::L1))
+            validated("prog", Some(Channel::L1), false),
+            ValidatedCommandRequest {
+                command: Command::Prog,
+                channel: Some(Channel::L1),
+            }
         );
     }
 
     #[test]
     fn validate_promotes_prog_with_long_to_prog_long() {
         assert_eq!(
-            validate_command_request("prog", Some(Channel::L1), true).unwrap(),
-            (Command::ProgLong, Some(Channel::L1))
+            validated("prog", Some(Channel::L1), true),
+            ValidatedCommandRequest {
+                command: Command::ProgLong,
+                channel: Some(Channel::L1),
+            }
         );
     }
 
     #[test]
     fn validate_rejects_long_on_non_prog_commands() {
-        let err = validate_command_request("up", Some(Channel::L1), true).unwrap_err();
+        let err = CommandRequest {
+            command: "up".into(),
+            channel: Some(Channel::L1),
+            long: true,
+        }
+        .validate()
+        .unwrap_err();
         assert!(err.contains("only valid with prog"));
     }
 
@@ -320,9 +382,15 @@ mod tests {
             remote_control: remote_control.clone(),
         };
 
-        dispatch(&state, "up", Some(Channel::L3), false)
-            .await
-            .unwrap();
+        dispatch(
+            &state,
+            ValidatedCommandRequest {
+                command: Command::Up,
+                channel: Some(Channel::L3),
+            },
+        )
+        .await
+        .unwrap();
 
         assert_eq!(remote_control.current_selection(), Channel::L3);
         assert_eq!(
