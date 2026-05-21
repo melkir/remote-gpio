@@ -71,3 +71,44 @@ fn directory_sync_unsupported(e: &io::Error) -> bool {
         io::ErrorKind::InvalidInput | io::ErrorKind::Unsupported
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn atomic_save_bytes_creates_private_file_and_removes_temp() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("state.json");
+
+        atomic_save_bytes(&target, br#"{"ok":true}"#, false).unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), br#"{"ok":true}"#);
+        let mode = fs::metadata(&target).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        assert!(!dir.path().join(".state.json.tmp").exists());
+    }
+
+    #[test]
+    fn atomic_save_bytes_overwrites_existing_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("state.json");
+
+        atomic_save_bytes(&target, b"first", false).unwrap();
+        atomic_save_bytes(&target, b"second", false).unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"second");
+        assert!(!dir.path().join(".state.json.tmp").exists());
+    }
+
+    #[test]
+    fn atomic_save_bytes_supports_durable_writes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("state.json");
+
+        atomic_save_bytes(&target, b"durable", true).unwrap();
+
+        assert_eq!(fs::read(&target).unwrap(), b"durable");
+    }
+}
