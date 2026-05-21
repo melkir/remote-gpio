@@ -7,8 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::core::Channel;
-use crate::hap::state::atomic_save_bytes;
-use crate::homekit::config;
+use crate::persist::{self, atomic_save_bytes};
 
 pub const STATE_FILE: &str = "rts.json";
 pub const SCHEMA_VERSION: u32 = 1;
@@ -46,7 +45,7 @@ pub struct RtsStateStore {
 
 impl RtsStateStore {
     pub fn load_or_init_default() -> Result<Self> {
-        Self::load_or_init(config::state_dir().join(STATE_FILE), DEFAULT_RESERVE_SIZE)
+        Self::load_or_init(persist::state_dir().join(STATE_FILE), DEFAULT_RESERVE_SIZE)
     }
 
     pub fn load_or_init(path: impl Into<PathBuf>, reserve_size: u16) -> Result<Self> {

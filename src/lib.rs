@@ -18,6 +18,7 @@ pub mod gpio;
 pub mod hap;
 pub mod homekit;
 pub mod logging;
+pub mod persist;
 pub mod rts;
 pub mod server;
 pub mod service;

@@ -3,60 +3,63 @@ use futures_util::StreamExt;
 use std::path::PathBuf;
 
 use crate::cli::RemoteCommand;
-use crate::config;
-use crate::core::{Channel, Command};
-use crate::service::{BlindService, CommandRequest};
-
-const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
+use crate::config::{self, ResolvedConfig};
+use crate::core::Channel;
+use crate::service::{validate_command_request, CommandRequest};
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
+    let resolved = config::resolve(config_path)?;
+    let base_url = service_base_url(&resolved);
+
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel, config_path).await,
-        RemoteCommand::Down { channel } => post_command("down", channel, config_path).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel, config_path).await,
+        RemoteCommand::Up { channel } => post_command(&base_url, "up", channel, &resolved).await,
+        RemoteCommand::Down { channel } => {
+            post_command(&base_url, "down", channel, &resolved).await
+        }
+        RemoteCommand::Stop { channel } => {
+            post_command(&base_url, "stop", channel, &resolved).await
+        }
         RemoteCommand::Select { channel } => {
-            post_command("select", Some(channel), config_path).await
+            post_command(&base_url, "select", Some(channel), &resolved).await
         }
         RemoteCommand::Prog { channel, long } => {
-            let command = if long { "prog_long" } else { "prog" };
-            post_command(command, Some(channel), config_path).await
+            let cmd = if long { "prog_long" } else { "prog" };
+            post_command(&base_url, cmd, Some(channel), &resolved).await
         }
-        RemoteCommand::Status => status().await,
-        RemoteCommand::Watch => watch().await,
+        RemoteCommand::Status => status(&base_url).await,
+        RemoteCommand::Watch => watch(&base_url).await,
     }
 }
 
-fn ensure_pairing_allowed(config_path: Option<PathBuf>) -> Result<()> {
-    let resolved = config::resolve(config_path)?;
-    BlindService::ensure_pairing_for_kind(resolved.config.driver, Command::Prog)?;
-    Ok(())
+fn service_base_url(resolved: &ResolvedConfig) -> String {
+    format!("http://{}", resolved.config.server.bind)
 }
 
 async fn post_command(
+    base_url: &str,
     command: &'static str,
     channel: Option<Channel>,
-    config_path: Option<PathBuf>,
+    resolved: &ResolvedConfig,
 ) -> Result<()> {
-    if matches!(command, "prog" | "prog_long") {
-        ensure_pairing_allowed(config_path)?;
-        // Fast-fail wire rules (channel required) before HTTP;
-        // the server runs the same validation again on POST /command.
-        BlindService::parse_command(CommandRequest {
+    validate_command_request(
+        resolved.config.driver,
+        CommandRequest {
             command: command.to_string(),
             channel,
-        })?;
-    }
+        },
+    )?;
 
     let client = reqwest::Client::new();
+    let url = format!("{base_url}/command");
     let response = client
-        .post(format!("{SERVICE_BASE_URL}/command"))
+        .post(&url)
         .json(&CommandRequest {
             command: command.to_string(),
             channel,
         })
         .send()
         .await
-        .context("connecting to somfy service at 127.0.0.1:5002")?;
+        .with_context(|| format!("connecting to somfy service at {url}"))?;
 
     if response.status().is_success() {
         return Ok(());
@@ -67,10 +70,11 @@ async fn post_command(
     bail!("service rejected {command}: HTTP {status}: {}", body.trim());
 }
 
-async fn status() -> Result<()> {
-    let text = reqwest::get(format!("{SERVICE_BASE_URL}/channel"))
+async fn status(base_url: &str) -> Result<()> {
+    let url = format!("{base_url}/channel");
+    let text = reqwest::get(&url)
         .await
-        .context("connecting to somfy service at 127.0.0.1:5002")?
+        .with_context(|| format!("connecting to somfy service at {url}"))?
         .error_for_status()
         .context("reading selected channel from somfy service")?
         .text()
@@ -79,10 +83,11 @@ async fn status() -> Result<()> {
     Ok(())
 }
 
-async fn watch() -> Result<()> {
-    let response = reqwest::get(format!("{SERVICE_BASE_URL}/events"))
+async fn watch(base_url: &str) -> Result<()> {
+    let url = format!("{base_url}/events");
+    let response = reqwest::get(&url)
         .await
-        .context("connecting to somfy service at 127.0.0.1:5002")?
+        .with_context(|| format!("connecting to somfy service at {url}"))?
         .error_for_status()
         .context("opening somfy service event stream")?;
     let mut stream = response.bytes_stream();

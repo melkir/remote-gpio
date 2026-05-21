@@ -17,7 +17,7 @@ pub mod somfy;
 mod target_writes;
 
 pub fn store() -> FileHapStore {
-    FileHapStore::new(config::state_dir())
+    FileHapStore::new(crate::persist::state_dir())
 }
 
 pub fn setup_uri(state: &HapState) -> Result<String> {

@@ -15,10 +15,9 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         bail!("doctor reported blocking failures; refusing to start");
     }
 
-    let driver_kind = resolved_config.config.driver;
     let controller =
         Arc::new(BlindController::with_driver(resolved_config.config.driver_config()).await?);
-    let blinds = Arc::new(BlindService::new(controller.clone(), driver_kind));
+    let blinds = Arc::new(BlindService::new(controller.clone()));
     let bind = resolved_config.config.server.bind.clone();
     let shared_state = Arc::new(AppState::new(blinds));
 
