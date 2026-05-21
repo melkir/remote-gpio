@@ -2,6 +2,26 @@
 
 `somfy serve` runs a native HomeKit Accessory Protocol server alongside the HTTP, SSE, and WebSocket API. The Home app talks straight to the Rust binary — no Homebridge, no Node.
 
+## Pairing
+
+Show the setup code and pairing QR:
+
+```bash
+somfy homekit status
+```
+
+In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
+
+Pairing lifecycle commands are exposed by the CLI:
+
+```bash
+somfy homekit --help
+```
+
+## Doctor
+
+`somfy doctor` deliberately stays focused on process and deployment health: systemd unit drift, service state, GPIO access, updates, and deployed version. HomeKit pairing state lives under `somfy homekit ...` so diagnostics and pairing lifecycle commands do not drift apart.
+
 ## Wire layout
 
 - **Port `5010`** — dedicated TCP listener. Kept off `:5002` because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
@@ -47,11 +67,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 - `{aid, iid, ev: true|false}` — toggle subscription on the per-connection set. No GPIO action.
 - `{aid, iid, value: N}` where the snapped value (`< 50` → 0, `≥ 50` → 100) **matches the cached position** — no-op. iOS replays the last-known `TargetPosition` right after pairing; without this the bridge would fire UP on every registration.
-- `{aid, iid, value: N}` with a real change — funnels through `RemoteControl::execute(Some(led), command)`, the single command layer shared by REST, WebSocket, and HAP. Then updates the cached position, propagates to siblings (or to ALL when all four match), persists `positions.json`, and broadcasts a change event.
-
-## Doctor
-
-`somfy doctor` deliberately stays focused on process and deployment health: systemd unit drift, service state, GPIO access, updates, and deployed version. HomeKit pairing state lives under `somfy homekit ...` so diagnostics and pairing lifecycle commands do not drift apart.
+- `{aid, iid, value: N}` with a real change — funnels through the same `RemoteControl` command layer used by REST, WebSocket, and HAP. Then updates the cached position, propagates to siblings (or to ALL when all four match), persists `positions.json`, and broadcasts a change event.
 
 ## Lifecycle
 
@@ -60,22 +76,6 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 ## Dependencies
 
 `mdns-sd`, `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `hkdf`, `rand`, `httparse`, `http`, `num-bigint`. All pure Rust, all cross-compile cleanly for `armv7-unknown-linux-gnueabihf`.
-
-## Pairing
-
-Show the setup code and pairing QR:
-
-```bash
-somfy homekit status
-```
-
-In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
-
-Pairing lifecycle commands are exposed by the CLI:
-
-```bash
-somfy homekit --help
-```
 
 `status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. Resetting or removing pairings requires `sudo somfy restart` so the in-memory HAP server advertises and enforces the updated state.
 
