@@ -28,8 +28,8 @@ Operator CLI is defined in `src/cli.rs` — prefer `somfy --help` over duplicati
 - `src/config.rs` — TOML config (`/etc/somfy/config.toml`): selects the driver and supplies shared GPIO, Telis, and RTS options. `validate()` is the single gate.
 - `src/server.rs` — Axum routes (`/events`, `/ws`, `/command`, `/channel`, embedded static files).
 - `src/controller.rs` — `BlindController` state engine; broadcasts the selected `Channel` via `watch::channel`.
-- `src/service/` — `BlindService` wire validation and UI press dispatch for HTTP/WS/CLI.
-- `src/core/` — shared `Channel` and `Command` types.
+- `src/service/` — command wire validation and UI press dispatch for HTTP/WS/CLI.
+- `src/core.rs` — shared `Channel` and `Command` types.
 - `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (all three are always compiled into the binary; selection is purely runtime via config). `Prog` / `ProgLong` are RTS-only (RF pairing); the Telis driver rejects them.
 - `src/rts/` — RTS protocol: `frame` (encode + obfuscation; remote ID is big-endian per Pi-Somfy), `waveform` (pulse builder, 4 frames default / 20 for `prog --long`, patent-derived 1280µs bit period), `state` (per-channel rolling code, atomic write-ahead reserve at `$STATE_DIRECTORY/rts.json`), `pigpio` (TCP client to `pigpiod`, loopback-only), `cc1101` (SPI driver for OOK @ 433.42 MHz).
 - `src/gpio.rs` — `gpiocdev` wrapper used by the Telis driver. Output pulses are 60ms active-low; input debounce uses a 300ms edge-count window. Hosts the shared `MAX_BCM_GPIO` constant.

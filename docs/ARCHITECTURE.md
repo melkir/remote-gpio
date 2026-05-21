@@ -244,7 +244,7 @@ This section is a pointer into the implementation, not the architecture itself.
 | HTTP, SSE, WebSocket, static assets         | `src/server.rs`, `src/embed.rs`            |
 | Request validation and pairing gates        | `src/service/`                             |
 | Operation queue, targeting, position events | `src/controller.rs`                        |
-| Shared command and channel types            | `src/core/`                                |
+| Shared command and channel types            | `src/core.rs`                              |
 | Config resolution and validation            | `src/config.rs`                            |
 | Driver routing and implementations          | `src/driver/`, `src/gpio.rs`, `src/rts/`   |
 | HomeKit application adapter                 | `src/homekit/`                             |

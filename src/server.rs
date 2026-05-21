@@ -1,4 +1,5 @@
-use crate::service::{BlindService, CommandError, CommandRequest};
+use crate::controller::BlindController;
+use crate::service::{dispatch_command, CommandError, CommandRequest};
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
@@ -24,12 +25,12 @@ pub const HTTP_BASE_URL: &str = "http://127.0.0.1:5002";
 
 /// Application state shared across all routes
 pub struct AppState {
-    pub blinds: Arc<BlindService>,
+    pub controller: Arc<BlindController>,
 }
 
 impl AppState {
-    pub fn new(blinds: Arc<BlindService>) -> Self {
-        Self { blinds }
+    pub fn new(controller: Arc<BlindController>) -> Self {
+        Self { controller }
     }
 }
 
@@ -76,14 +77,14 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 
 /// Returns the currently-selected channel as plain text.
 async fn handle_channel(State(state): State<Arc<AppState>>) -> String {
-    state.blinds.current_selection().to_string()
+    state.controller.current_selection().to_string()
 }
 
 /// Streams channel selection changes as server-sent events.
 async fn handle_events(
     State(state): State<Arc<AppState>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let mut rx = state.blinds.subscribe_selection();
+    let mut rx = state.controller.subscribe_selection();
     rx.mark_changed();
     let stream = stream::unfold(rx, |mut rx| async move {
         rx.changed().await.ok()?;
@@ -107,9 +108,7 @@ async fn handle_command(
 
 async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
     tracing::info!(command = %payload.command, ?payload.channel, "remote command received");
-    state
-        .blinds
-        .dispatch_command(payload)
+    dispatch_command(state.controller.as_ref(), payload)
         .await
         .map_err(map_command_error)?;
     tracing::info!("remote command completed");
@@ -137,7 +136,7 @@ async fn ws_handler(
 /// Manages WebSocket connections and message handling
 async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
     let (mut sink, mut stream) = stream.split();
-    let mut rx_channel = state.blinds.subscribe_selection();
+    let mut rx_channel = state.controller.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
     // Send initial channel state.

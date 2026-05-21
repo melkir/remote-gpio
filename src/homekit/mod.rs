@@ -10,18 +10,22 @@ use crate::hap::runtime::HapRuntime;
 use crate::hap::state::{FileHapStore, HapState};
 
 mod accessory_db;
-pub mod config;
 mod position_cache;
-pub mod positions;
 pub mod somfy;
 mod target_writes;
+
+pub const HAP_PORT: u16 = 5010;
+pub const MODEL: &str = "Somfy Telis 4";
+/// Accessory Category Identifier advertised over mDNS and encoded into setup QR payloads.
+pub const HAP_CATEGORY: &str = "2";
+pub const MDNS_NAME_PREFIX: &str = "Somfy";
 
 pub fn store() -> FileHapStore {
     FileHapStore::new(crate::persist::state_dir())
 }
 
 pub fn setup_uri(state: &HapState) -> Result<String> {
-    crate::hap::qr::setup_uri(state, config::HAP_CATEGORY)
+    crate::hap::qr::setup_uri(state, HAP_CATEGORY)
 }
 
 /// Handles for the background HomeKit tasks started by [`start`].
@@ -45,14 +49,14 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     let store = store();
     let hap_state = store.load_or_init()?;
     let setup_uri = setup_uri(&hap_state)?;
-    mdns::log_setup_payload(&hap_state, config::HAP_PORT, &setup_uri);
+    mdns::log_setup_payload(&hap_state, HAP_PORT, &setup_uri);
     let announcement = mdns::announce(
         &hap_state,
         &MdnsConfig {
-            name_prefix: config::MDNS_NAME_PREFIX,
-            model: config::MODEL,
-            category: config::HAP_CATEGORY,
-            port: config::HAP_PORT,
+            name_prefix: MDNS_NAME_PREFIX,
+            model: MODEL,
+            category: HAP_CATEGORY,
+            port: HAP_PORT,
         },
     )?;
 
@@ -67,7 +71,7 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     });
 
     let hap_server = tokio::spawn(async move {
-        if let Err(e) = crate::hap::server::serve(runtime, config::HAP_PORT).await {
+        if let Err(e) = crate::hap::server::serve(runtime, HAP_PORT).await {
             tracing::error!("HAP server exited: {}", e);
         }
     });

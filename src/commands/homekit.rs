@@ -6,7 +6,7 @@ use crate::config::ResolvedConfig;
 use crate::hap::qr;
 use crate::hap::runtime::HapStore;
 use crate::hap::state::display_setup_code;
-use crate::homekit::{self, config};
+use crate::homekit::{self, HAP_PORT};
 
 #[derive(Serialize)]
 struct StatusReport {
@@ -82,7 +82,7 @@ fn status(json: bool, uri_only: bool, resolved_config: &ResolvedConfig) -> Resul
         setup_id: state.setup_id.clone(),
         setup_code: display_setup_code(&state.setup_code),
         setup_uri: uri.clone(),
-        port: config::HAP_PORT,
+        port: HAP_PORT,
         paired: state.is_paired(),
         paired_controllers: state.paired_controllers.len(),
         config_number: state.config_number,

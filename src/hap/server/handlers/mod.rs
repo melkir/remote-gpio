@@ -1,5 +1,4 @@
 mod characteristics;
-mod events;
 mod pairing;
 
 use anyhow::Result;
@@ -7,7 +6,7 @@ use http::StatusCode;
 
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWriteStatus,
-    HapAccessoryApp, HapRuntime, HapStore,
+    HapAccessoryApp, HapRuntime, HapStore, Subscriptions,
 };
 use crate::hap::server::state::ConnectionState;
 use crate::hap::server::transport::{HapReader, HapWriter, RawRequest};
@@ -21,9 +20,26 @@ use pairing::{handle_pair_setup, handle_pair_verify, handle_pairings};
 
 pub(super) fn build_event_body(
     changes: &[CharacteristicEvent],
-    subs: &crate::hap::runtime::Subscriptions,
+    subs: &Subscriptions,
 ) -> Option<Vec<u8>> {
-    events::build_event_body(changes, subs)
+    let mut out = Vec::new();
+    for event in changes {
+        if subs.contains(&event.id) {
+            out.push(serde_json::json!({
+                "aid": event.id.aid.0,
+                "iid": event.id.iid.0,
+                "value": event.value.clone(),
+            }));
+        }
+    }
+    if out.is_empty() {
+        return None;
+    }
+    Some(
+        serde_json::json!({ "characteristics": out })
+            .to_string()
+            .into_bytes(),
+    )
 }
 
 pub(super) struct RequestOutcome {
@@ -199,5 +215,29 @@ pub(super) async fn write_request_response(
             tracing::info!("hap session encrypted; switched to control channel");
             Ok(())
         }
+    }
+}
+
+#[cfg(test)]
+mod event_body_tests {
+    use super::*;
+    use crate::hap::runtime::CharacteristicId;
+    use serde_json::json;
+
+    #[test]
+    fn event_body_filters_to_subscribed_characteristics() {
+        let event = CharacteristicEvent {
+            id: CharacteristicId::new(2, 9),
+            value: json!(100),
+        };
+        let mut subs = Subscriptions::default();
+        assert!(build_event_body(std::slice::from_ref(&event), &subs).is_none());
+
+        subs.insert(event.id);
+        let body = build_event_body(&[event], &subs).unwrap();
+        let parsed: serde_json::Value = serde_json::from_slice(&body).unwrap();
+        assert_eq!(parsed["characteristics"][0]["aid"], 2);
+        assert_eq!(parsed["characteristics"][0]["iid"], 9);
+        assert_eq!(parsed["characteristics"][0]["value"], 100);
     }
 }

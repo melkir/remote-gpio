@@ -32,10 +32,10 @@ somfy homekit --help
 
 `$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`; otherwise defaults to `/var/lib/somfy` in release builds and `./hap-state` in debug builds; override with `SOMFY_STATE_DIR`):
 
-| File             | Owner                  | Contents                                                                                |
-| ---------------- | ---------------------- | --------------------------------------------------------------------------------------- |
-| `hap.json`       | `state.rs`             | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
-| `positions.json` | `homekit/positions.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
+| File             | Owner                       | Contents                                                                                |
+| ---------------- | --------------------------- | --------------------------------------------------------------------------------------- |
+| `hap.json`       | `state.rs`                  | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
+| `positions.json` | `homekit/position_cache.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
 
 Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
 

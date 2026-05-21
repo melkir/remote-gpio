@@ -1,14 +1,13 @@
-//! Application service: command validation and UI-style dispatch.
+//! Command validation and UI-style dispatch for HTTP/WS/CLI.
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::str::FromStr;
-use std::sync::Arc;
 
 use crate::config::DriverKind;
 use crate::controller::BlindController;
 use crate::core::{Channel, Command};
-use crate::driver::{CommandOutcome, SelectedChannelRx, TELIS_PROG_UNAVAILABLE};
+use crate::driver::{CommandOutcome, TELIS_PROG_UNAVAILABLE};
 
 /// Parsed command ready for dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,95 +45,60 @@ fn command_error(err: anyhow::Error) -> CommandError {
     CommandError::Invalid(format!("{err:?}"))
 }
 
+/// Validate a command request. Does not touch hardware.
+pub fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, CommandError> {
+    let CommandRequest { command, channel } = request;
+    let cmd = Command::from_str(&command).map_err(|e| CommandError::Invalid(e.to_string()))?;
+    let channel = match (cmd, channel) {
+        (Command::Prog | Command::ProgLong, Some(channel)) => Some(channel),
+        (Command::Prog | Command::ProgLong, None) => {
+            return Err(CommandError::Invalid(
+                "prog and prog_long require a channel".to_string(),
+            ));
+        }
+        (Command::Select, channel) => channel,
+        (Command::Up | Command::Down | Command::Stop, channel) => channel,
+    };
+    Ok(ParsedCommandRequest {
+        command: cmd,
+        channel,
+    })
+}
+
+/// Reject pairing commands when the active driver cannot transmit them.
+pub fn ensure_pairing_for_kind(kind: DriverKind, command: Command) -> Result<(), CommandError> {
+    if matches!(command, Command::Prog | Command::ProgLong) && !kind.supports_pairing() {
+        return Err(CommandError::PairingUnavailable);
+    }
+    Ok(())
+}
+
 /// Parse a wire request and apply driver pairing rules. Does not touch hardware.
 pub fn validate_command_request(
     kind: DriverKind,
     request: CommandRequest,
 ) -> Result<ParsedCommandRequest, CommandError> {
-    let parsed = BlindService::parse_command(request)?;
-    BlindService::ensure_pairing_for_kind(kind, parsed.command)?;
+    let parsed = parse_command(request)?;
+    ensure_pairing_for_kind(kind, parsed.command)?;
     Ok(parsed)
 }
 
-/// Central dispatch for REST, WebSocket, and in-process callers.
-#[derive(Debug)]
-pub struct BlindService {
-    controller: Arc<BlindController>,
-}
-
-impl BlindService {
-    pub fn new(controller: Arc<BlindController>) -> Self {
-        Self { controller }
-    }
-
-    pub fn driver_kind(&self) -> DriverKind {
-        self.controller.driver_kind()
-    }
-
-    pub fn current_selection(&self) -> Channel {
-        self.controller.current_selection()
-    }
-
-    pub fn subscribe_selection(&self) -> SelectedChannelRx {
-        self.controller.subscribe_selection()
-    }
-
-    /// Validate a command request. Does not touch hardware.
-    pub fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, CommandError> {
-        let CommandRequest { command, channel } = request;
-        let cmd = Command::from_str(&command).map_err(|e| CommandError::Invalid(e.to_string()))?;
-        let channel = match (cmd, channel) {
-            (Command::Prog | Command::ProgLong, Some(channel)) => Some(channel),
-            (Command::Prog | Command::ProgLong, None) => {
-                return Err(CommandError::Invalid(
-                    "prog and prog_long require a channel".to_string(),
-                ));
-            }
-            (Command::Select, channel) => channel,
-            (Command::Up | Command::Down | Command::Stop, channel) => channel,
-        };
-        Ok(ParsedCommandRequest {
-            command: cmd,
-            channel,
-        })
-    }
-
-    /// Reject pairing commands when the active driver cannot transmit them.
-    pub fn ensure_pairing_allowed(&self, command: Command) -> Result<(), CommandError> {
-        Self::ensure_pairing_for_kind(self.driver_kind(), command)
-    }
-
-    pub fn ensure_pairing_for_kind(kind: DriverKind, command: Command) -> Result<(), CommandError> {
-        if matches!(command, Command::Prog | Command::ProgLong) && !kind.supports_pairing() {
-            return Err(CommandError::PairingUnavailable);
-        }
-        Ok(())
-    }
-
-    /// Validate and dispatch a command. `select` changes selection; action commands
-    /// with an explicit channel target that channel directly.
-    pub async fn dispatch_command(
-        &self,
-        request: CommandRequest,
-    ) -> Result<CommandOutcome, CommandError> {
-        self.dispatch_parsed_command(validate_command_request(self.driver_kind(), request)?)
-            .await
-    }
-
-    async fn dispatch_parsed_command(
-        &self,
-        request: ParsedCommandRequest,
-    ) -> Result<CommandOutcome, CommandError> {
-        let ParsedCommandRequest {
-            command: cmd,
-            channel,
-        } = request;
-        self.controller
-            .execute(cmd, channel)
-            .await
-            .with_context(|| format!("executing {cmd:?} command"))
-            .map_err(command_error)
-    }
+/// Validate and dispatch a command. `select` changes selection; action commands
+/// with an explicit channel target that channel directly.
+pub async fn dispatch_command(
+    controller: &BlindController,
+    request: CommandRequest,
+) -> Result<CommandOutcome, CommandError> {
+    let parsed = validate_command_request(controller.driver_kind(), request)?;
+    let ParsedCommandRequest {
+        command: cmd,
+        channel,
+    } = parsed;
+    controller
+        .execute(cmd, channel)
+        .await
+        .with_context(|| format!("executing {cmd:?} command"))
+        .map_err(command_error)
 }
 
 #[cfg(test)]
@@ -146,7 +110,7 @@ mod tests {
         command: &str,
         channel: Option<Channel>,
     ) -> Result<ParsedCommandRequest, CommandError> {
-        BlindService::parse_command(CommandRequest {
+        parse_command(CommandRequest {
             command: command.to_string(),
             channel,
         })
@@ -156,7 +120,7 @@ mod tests {
     fn telis_rejects_pairing() {
         assert!(!DriverKind::Telis.supports_pairing());
         assert!(matches!(
-            BlindService::ensure_pairing_for_kind(DriverKind::Telis, Command::Prog),
+            ensure_pairing_for_kind(DriverKind::Telis, Command::Prog),
             Err(CommandError::PairingUnavailable)
         ));
     }
@@ -164,7 +128,7 @@ mod tests {
     #[test]
     fn rts_supports_pairing() {
         assert!(DriverKind::Rts.supports_pairing());
-        assert!(BlindService::ensure_pairing_for_kind(DriverKind::Rts, Command::ProgLong).is_ok());
+        assert!(ensure_pairing_for_kind(DriverKind::Rts, Command::ProgLong).is_ok());
     }
 
     #[test]
