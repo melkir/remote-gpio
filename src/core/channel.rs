@@ -51,12 +51,11 @@ impl FromStr for Channel {
 impl std::fmt::Display for Channel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Channel::L1 => write!(f, "L1"),
+            Channel::L2 => write!(f, "L2"),
+            Channel::L3 => write!(f, "L3"),
+            Channel::L4 => write!(f, "L4"),
             Channel::ALL => write!(f, "ALL"),
-            other => CHANNELS
-                .iter()
-                .find(|(ch, _)| ch == other)
-                .map(|(_, name)| write!(f, "{name}"))
-                .unwrap_or_else(|| write!(f, "{other:?}")),
         }
     }
 }

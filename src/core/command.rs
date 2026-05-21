@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::fmt;
 use std::str::FromStr;
 
 /// Press the wired remote or transmit an RTS frame.
@@ -10,6 +11,19 @@ pub enum Command {
     Select,
     Prog,
     ProgLong,
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Command::Up => "up",
+            Command::Down => "down",
+            Command::Stop => "stop",
+            Command::Select => "select",
+            Command::Prog => "prog",
+            Command::ProgLong => "prog_long",
+        })
+    }
 }
 
 impl FromStr for Command {
@@ -38,6 +52,7 @@ mod tests {
         assert_eq!(Command::from_str("stop").unwrap(), Command::Stop);
         assert_eq!(Command::from_str("select").unwrap(), Command::Select);
         assert_eq!(Command::from_str("prog").unwrap(), Command::Prog);
+        assert_eq!(Command::from_str("prog_long").unwrap(), Command::ProgLong);
     }
 
     #[test]
@@ -45,5 +60,20 @@ mod tests {
         assert!(Command::from_str("UP").is_err());
         assert!(Command::from_str("toggle").is_err());
         assert!(Command::from_str("").is_err());
+    }
+
+    #[test]
+    fn display_round_trip() {
+        for cmd in [
+            Command::Up,
+            Command::Down,
+            Command::Stop,
+            Command::Select,
+            Command::Prog,
+            Command::ProgLong,
+        ] {
+            let s = cmd.to_string();
+            assert_eq!(Command::from_str(&s).unwrap(), cmd);
+        }
     }
 }

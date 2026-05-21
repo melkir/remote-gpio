@@ -49,6 +49,8 @@ async fn post_command(
 ) -> Result<()> {
     if command == "prog" {
         ensure_pairing_allowed(config_path)?;
+        // Fast-fail wire rules (channel required, `long` only on prog) before HTTP;
+        // the server runs the same validation again on POST /command.
         let wire = WirePress {
             command: command.to_string(),
             channel,

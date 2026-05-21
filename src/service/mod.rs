@@ -40,6 +40,10 @@ impl std::fmt::Display for PressError {
 
 impl std::error::Error for PressError {}
 
+fn press_error(err: anyhow::Error) -> PressError {
+    PressError::Invalid(format!("{err:?}"))
+}
+
 /// Central dispatch for REST, WebSocket, and in-process callers.
 #[derive(Debug)]
 pub struct BlindService {
@@ -123,7 +127,7 @@ impl BlindService {
                 .execute(cmd, channel)
                 .await
                 .context("executing select command")
-                .map_err(|e| PressError::Invalid(e.to_string()));
+                .map_err(press_error);
         }
 
         if let Some(channel) = channel {
@@ -131,13 +135,13 @@ impl BlindService {
                 .execute(Command::Select, Some(channel))
                 .await
                 .context("selecting channel before command")
-                .map_err(|e| PressError::Invalid(e.to_string()))?;
+                .map_err(press_error)?;
         }
         self.controller
             .execute(cmd, None)
             .await
             .with_context(|| format!("executing {cmd:?} command"))
-            .map_err(|e| PressError::Invalid(e.to_string()))
+            .map_err(press_error)
     }
 
     pub async fn press_wire(&self, wire: WirePress) -> Result<CommandOutcome, PressError> {
