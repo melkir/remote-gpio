@@ -14,12 +14,12 @@ For wiring, bring-up, and pairing flow, see [HARDWARE.md](HARDWARE.md#cc1101-rts
 
 ## Frame Layout (7 bytes, unobfuscated)
 
-| Byte | Meaning                                       | Notes                                                                          |
-| ---: | --------------------------------------------- | ------------------------------------------------------------------------------ |
+| Byte | Meaning                                       | Notes                                                                                                     |
+| ---: | --------------------------------------------- | --------------------------------------------------------------------------------------------------------- |
 |    0 | Key byte                                      | `0xA7` (matches Pi-Somfy / Telis 1 emitters). Upper nibble must be `0xA`; lower nibble varies by emitter. |
-|    1 | Command (high nibble) + checksum (low nibble) | Command is `rts_code << 4`.                                                    |
-| 2..3 | Rolling code                                  | Big-endian `u16`.                                                              |
-| 4..6 | Remote address                                | Big-endian 24-bit ID (frame[4] = MSB, frame[6] = LSB).                          |
+|    1 | Command (high nibble) + checksum (low nibble) | Command is `rts_code << 4`.                                                                               |
+| 2..3 | Rolling code                                  | Big-endian `u16`.                                                                                         |
+| 4..6 | Remote address                                | Big-endian 24-bit ID (frame[4] = MSB, frame[6] = LSB).                                                    |
 
 ### Command codes
 
@@ -118,9 +118,7 @@ The file is rewritten via tmp + atomic rename + fsync, mode `0600`, owned by the
 
 `pigpiod` owns the GDO0 timing because RTS uses 640 µs half-symbols while the same process serves HTTP/SSE/WS/HomeKit. Doing this from Rust async sleeps is not reliable enough.
 
-The driver speaks the pigpiod socket protocol directly (no `libpigpio` linkage).
-It only tries loopback endpoints on port `8888` (`127.0.0.1`, then `::1`).
-pigpiod is unauthenticated, so this is a security boundary, not a preference.
+The driver speaks the pigpiod socket protocol directly (no `libpigpio` linkage). It only tries loopback endpoints on port `8888` (`127.0.0.1`, then `::1`). pigpiod is unauthenticated, so this is a security boundary, not a preference.
 
 ### Commands used
 
@@ -194,8 +192,6 @@ Bring-up notes (see also [HARDWARE.md](HARDWARE.md#bring-up-checklist)):
 - Initial raw data rate ~2.4 kBaud — gives the async sampler enough resolution for 640 µs half-symbols.
 - **Disable** packet handling, whitening, CRC, and radio-side Manchester. The application generates the full pulse train.
 - Strobe to TX only while a wave is transmitting; return to idle (`SIDLE`) afterward.
-
-The register set in `src/rts/cc1101.rs` is a starting point and has not been validated against a scope — see the bring-up checklist before relying on it for new motor generations.
 
 ## External References
 

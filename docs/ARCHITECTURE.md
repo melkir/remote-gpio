@@ -94,8 +94,7 @@ The important boundaries are `hap` versus `homekit` (protocol vs project), and `
 
 The selection watch is stateful. A new SSE or WebSocket client subscribes and immediately learns whether the active channel is `L1`, `L2`, `L3`, `L4`, or `ALL`. On Telis the selection follows the physical LEDs; on RTS it is persisted to `rts.json` and survives restart.
 
-The position broadcast is event-like. It fires after every successful `Up` / `Down` and carries an inferred HomeKit position (`100` for Up, `0` for Down).
-When the command targets `ALL`, `complete_command` fans the update out to `L1`–`L4` so HomeKit's per-channel position cache stays consistent with what a physical RTS remote does over the air.
+The position broadcast is event-like. It fires after every successful `Up` / `Down` and carries an inferred HomeKit position (`100` for Up, `0` for Down). When the command targets `ALL`, `complete_command` fans the update out to `L1`–`L4` so HomeKit's per-channel position cache stays consistent with what a physical RTS remote does over the air.
 
 ## Command Serialization
 
@@ -114,32 +113,17 @@ Both `GET /events` and `GET /ws` subscribe to `RemoteControl::subscribe_selectio
 
 ## HomeKit adapter
 
-`src/homekit/mod.rs` boots mDNS, the HAP TCP server, and the position listener.
-`src/homekit/somfy.rs` implements the accessory app; `target_writes.rs` batches
-and coalesces `TargetPosition` writes; `position_cache.rs` persists inferred
-positions. HomeKit commands go through the same `RemoteControl` / `CommandRouter`
-path as the web API.
+`src/homekit/mod.rs` boots mDNS, the HAP TCP server, and the position listener. `src/homekit/somfy.rs` implements the accessory app; `target_writes.rs` batches and coalesces `TargetPosition` writes; `position_cache.rs` persists inferred positions. HomeKit commands go through the same `RemoteControl` / `CommandRouter` path as the web API.
 
-HomeKit has no direct physical position feedback from the blinds. The adapter
-therefore keeps a best-effort cache: Up snaps to `100`, Down snaps to `0`, and
-requested target positions snap to the nearest endpoint. `ALL` is project-level
-behavior; writing it fans out to individual channels, and individual writes only
-update `ALL` when every channel matches.
+HomeKit has no direct physical position feedback from the blinds. The adapter therefore keeps a best-effort cache: Up snaps to `100`, Down snaps to `0`, and requested target positions snap to the nearest endpoint. `ALL` is project-level behavior; writing it fans out to individual channels, and individual writes only update `ALL` when every channel matches.
 
-Protocol (pair-setup, encryption, PUT semantics, pairing commands):
-[HAP.md](HAP.md).
+Protocol (pair-setup, encryption, PUT semantics, pairing commands): [HAP.md](HAP.md).
 
-The HAP server is not built on Axum or Hyper because pair-verify upgrades the
-existing TCP socket into Apple's encrypted frame format. `src/hap/server/mod.rs`
-owns that socket loop; `src/hap/server/handlers/` contains the protocol routes
-so the IO loop stays readable.
+The HAP server is not built on Axum or Hyper because pair-verify upgrades the existing TCP socket into Apple's encrypted frame format. `src/hap/server/mod.rs` owns that socket loop; `src/hap/server/handlers/` contains the protocol routes so the IO loop stays readable.
 
 ## Persistence
 
-All writes use atomic temp-file + rename. RTS uses a write-ahead reserve block
-(default 16 codes) so a crash cannot roll the on-air counter backwards. Burning
-a few unused codes is acceptable; replaying an old rolling code is what can
-desync a motor.
+All writes use atomic temp-file + rename. RTS uses a write-ahead reserve block (default 16 codes) so a crash cannot roll the on-air counter backwards. Burning a few unused codes is acceptable; replaying an old rolling code is what can desync a motor.
 
 ## Design Tradeoffs
 

@@ -91,8 +91,7 @@ somfy config show   # resolved TOML after validation
 
 Pairing requires `driver = "rts"` in config (`somfy config set-driver rts`). The Telis driver does not implement `prog`; if you are using the wired Telis setup, put the motor into pair-listen with a physical Somfy remote. If the Pi is meant to be the master RTS remote, use `--long`.
 
-Each channel is paired independently. There are two useful flows depending on
-whether you already have a paired remote.
+Each channel is paired independently. There are two useful flows depending on whether you already have a paired remote.
 
 **Adding the Pi as a new remote (recommended).** Long-press the PROG button on an already-paired remote until the motor jogs (~5 s). Then send the command:
 
