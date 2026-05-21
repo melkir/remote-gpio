@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::driver::{infer_position, CommandOutcome, CommandRouter, SelectedChannelRx};
@@ -48,27 +48,11 @@ impl BlindController {
         self.position_tx.subscribe()
     }
 
-    /// Run a UI command against driver state. Directional commands target the
-    /// selected channel; `Select` optionally targets a specific channel.
-    ///
-    /// `Select` with `channel=Some` is a no-op after the cycle; `Select` with
-    /// `channel=None` triggers exactly one cycle tick.
-    pub async fn execute(
-        &self,
-        command: Command,
-        channel: Option<Channel>,
-    ) -> Result<CommandOutcome> {
-        let _guard = self.operation_lock.lock().await;
-        self.router.execute(command, channel).await?;
-        let target = self.current_selection();
-        Ok(self.complete_command(target, command))
-    }
-
     /// Run a client command as one logical operation. `Select` changes the
     /// selected channel; action commands with an explicit channel target that
     /// channel directly without changing logical selection when the driver
     /// supports that distinction.
-    pub async fn execute_client_command(
+    pub async fn execute(
         &self,
         command: Command,
         channel: Option<Channel>,
@@ -90,10 +74,13 @@ impl BlindController {
         Ok(self.complete_command(target, command))
     }
 
-    /// Run a command directly on `channel`. RTS can do this without changing
-    /// public selection state; Telis may update selection because targeting a
-    /// channel requires moving the physical selector.
+    /// Run an action command directly on `channel`. RTS can do this without
+    /// changing public selection state; Telis may update selection because
+    /// targeting a channel requires moving the physical selector.
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
+        if command == Command::Select {
+            bail!("select is not a direct targeted command");
+        }
         let _guard = self.operation_lock.lock().await;
         self.router.execute_on(channel, command).await?;
         Ok(self.complete_command(channel, command))
@@ -137,6 +124,8 @@ fn fan_out_channels(channel: Channel) -> &'static [Channel] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Arc;
+    use tokio::time::{timeout, Duration};
 
     #[test]
     fn fan_out_targets_only_self_for_single_channels() {
@@ -165,7 +154,7 @@ mod tests {
             .unwrap();
 
         controller
-            .execute_client_command(Command::Up, Some(Channel::L3))
+            .execute(Command::Up, Some(Channel::L3))
             .await
             .unwrap();
 
@@ -177,5 +166,56 @@ mod tests {
                 command: Command::Up,
             }]
         );
+    }
+
+    #[tokio::test]
+    async fn controller_operations_wait_behind_operation_lock() {
+        let controller = Arc::new(
+            BlindController::with_driver(crate::config::DriverConfig::fake())
+                .await
+                .unwrap(),
+        );
+        let guard = controller.operation_lock.lock().await;
+        let pending_controller = controller.clone();
+
+        let operation = tokio::spawn(async move {
+            pending_controller
+                .execute(Command::Up, Some(Channel::L2))
+                .await
+        });
+
+        assert!(timeout(Duration::from_millis(10), async {
+            while !operation.is_finished() {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .is_err());
+
+        drop(guard);
+        operation.await.unwrap().unwrap();
+        assert_eq!(
+            controller.operations(),
+            vec![crate::driver::ProtocolOperation::FakeCommand {
+                channel: Channel::L2,
+                command: Command::Up,
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn execute_on_rejects_select() {
+        let controller = BlindController::with_driver(crate::config::DriverConfig::fake())
+            .await
+            .unwrap();
+
+        let err = controller
+            .execute_on(Channel::L2, Command::Select)
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(err.contains("select is not a direct targeted command"));
+        assert_eq!(controller.operations(), Vec::new());
     }
 }

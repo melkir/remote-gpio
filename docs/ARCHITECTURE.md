@@ -145,7 +145,7 @@ sequenceDiagram
   Controller-->>UI: selection / position events
 ```
 
-The service layer handles the client-facing request contract. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; movement commands without a channel use the current selection.
+The service layer handles the client-facing request contract. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; movement commands without a channel use the current selection. Direct targeted controller calls reject `select` because selection is a client request, not a per-channel action.
 
 ### HomeKit Command
 
@@ -191,7 +191,9 @@ Drivers still keep local locks around hardware resources:
 - RTS uses one transmission lock around radio configuration and pigpiod waveform operations.
 - WebSocket commands run asynchronously so connection keepalives and selection updates can continue while command work waits behind the controller queue.
 
-Selection notifications and position broadcasts are separate from hardware locks, so observers can continue receiving state while a command is queued or executing.
+The controller lock is the application-level ordering rule. Driver locks are internal safety guards for hardware resources and driver state; they remain useful if driver code is tested directly or a future path accidentally bypasses the controller.
+
+Selection notifications and position broadcasts are separate from operation and hardware locks, so observers can continue receiving state while a command is queued or executing.
 
 These locks are correctness mechanisms, not trust boundaries. They prevent malformed timing and state races; they do not authenticate clients.
 

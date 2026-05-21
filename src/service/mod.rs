@@ -122,7 +122,7 @@ impl BlindService {
             channel,
         } = request;
         self.controller
-            .execute_client_command(cmd, channel)
+            .execute(cmd, channel)
             .await
             .with_context(|| format!("executing {cmd:?} command"))
             .map_err(command_error)
