@@ -10,26 +10,22 @@ use crate::service::{validate_command_request, CommandRequest};
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
     let resolved = config::resolve(config_path)?;
-    let base_url = HTTP_BASE_URL;
 
     match command {
-        RemoteCommand::Up { channel } => post_command(base_url, "up", channel, &resolved).await,
-        RemoteCommand::Down { channel } => post_command(base_url, "down", channel, &resolved).await,
-        RemoteCommand::Stop { channel } => post_command(base_url, "stop", channel, &resolved).await,
-        RemoteCommand::Select { channel } => {
-            post_command(base_url, "select", Some(channel), &resolved).await
-        }
+        RemoteCommand::Up { channel } => post_command("up", channel, &resolved).await,
+        RemoteCommand::Down { channel } => post_command("down", channel, &resolved).await,
+        RemoteCommand::Stop { channel } => post_command("stop", channel, &resolved).await,
+        RemoteCommand::Select { channel } => post_command("select", Some(channel), &resolved).await,
         RemoteCommand::Prog { channel, long } => {
             let cmd = if long { "prog_long" } else { "prog" };
-            post_command(base_url, cmd, Some(channel), &resolved).await
+            post_command(cmd, Some(channel), &resolved).await
         }
-        RemoteCommand::Status => status(base_url).await,
-        RemoteCommand::Watch => watch(base_url).await,
+        RemoteCommand::Status => status(HTTP_BASE_URL).await,
+        RemoteCommand::Watch => watch(HTTP_BASE_URL).await,
     }
 }
 
 async fn post_command(
-    base_url: &str,
     command: &'static str,
     channel: Option<Channel>,
     resolved: &ResolvedConfig,
@@ -43,7 +39,7 @@ async fn post_command(
     )?;
 
     let client = reqwest::Client::new();
-    let url = format!("{base_url}/command");
+    let url = format!("{HTTP_BASE_URL}/command");
     let response = client
         .post(&url)
         .json(&CommandRequest {
