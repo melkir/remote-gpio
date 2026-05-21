@@ -120,7 +120,11 @@ impl<S: Read + Write> PigpioClient<S> {
         let mut response = [0u8; 16];
         self.stream.read_exact(&mut response)?;
         if response[0..12] != request[0..12] {
-            let echoed_cmd = u32::from_le_bytes(response[0..4].try_into().expect("fixed slice"));
+            let echoed_cmd = u32::from_le_bytes(
+                response[0..4]
+                    .try_into()
+                    .map_err(|_| anyhow::anyhow!("pigpiod response header too short"))?,
+            );
             bail!(
                 "pigpiod reply did not match request: sent {} ({}), got command field {} ({})",
                 command_name(command),
@@ -129,7 +133,11 @@ impl<S: Read + Write> PigpioClient<S> {
                 echoed_cmd,
             );
         }
-        let result = i32::from_le_bytes(response[12..16].try_into().expect("fixed slice length"));
+        let result = i32::from_le_bytes(
+            response[12..16]
+                .try_into()
+                .map_err(|_| anyhow::anyhow!("pigpiod response header too short"))?,
+        );
         if result < 0 {
             let (name, description) = pi_error(result);
             bail!(

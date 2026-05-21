@@ -133,7 +133,7 @@ pub async fn run(json: bool, verbose: bool, resolved_config: &ResolvedConfig) ->
         report.print_summary();
     }
     if report.has_blocking_failure() {
-        std::process::exit(1);
+        anyhow::bail!("doctor reported blocking failures");
     }
     Ok(())
 }

@@ -92,10 +92,11 @@ impl FakeTransport {
     }
 
     async fn record(&self, operation: FakeOperation) {
-        self.operations
-            .lock()
-            .expect("fake transport mutex")
-            .push(operation);
+        if let Ok(mut ops) = self.operations.lock() {
+            ops.push(operation);
+        } else {
+            tracing::error!("fake transport mutex poisoned; dropping operation");
+        }
     }
 
     #[cfg(test)]

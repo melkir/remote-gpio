@@ -89,29 +89,29 @@ impl RtsStateStore {
         save_to(&self.path, &self.state)
     }
 
-    pub fn channel(&self, channel: Channel) -> &RtsChannelState {
+    pub fn channel(&self, channel: Channel) -> Result<&RtsChannelState> {
         self.state
             .channels
             .get(&channel)
-            .expect("validated RTS state has every channel")
+            .ok_or_else(|| anyhow::anyhow!("missing RTS channel state for {channel}"))
     }
 
-    pub fn next_on_wire(&self, channel: Channel) -> u16 {
-        *self
-            .next_on_wire
+    pub fn next_on_wire(&self, channel: Channel) -> Result<u16> {
+        self.next_on_wire
             .get(&channel)
-            .expect("validated RTS state has every channel")
+            .copied()
+            .ok_or_else(|| anyhow::anyhow!("missing RTS rolling code for {channel}"))
     }
 
     pub fn reserve_rolling_code(&mut self, channel: Channel) -> Result<u16> {
-        let next = self.next_on_wire(channel);
-        let reserved_until = self.channel(channel).reserved_until;
+        let next = self.next_on_wire(channel)?;
+        let reserved_until = self.channel(channel)?.reserved_until;
         if next == reserved_until {
             let new_reserved_until = next.wrapping_add(self.reserve_size);
             self.state
                 .channels
                 .get_mut(&channel)
-                .expect("validated RTS state has every channel")
+                .ok_or_else(|| anyhow::anyhow!("missing RTS channel state for {channel}"))?
                 .reserved_until = new_reserved_until;
             save_to(&self.path, &self.state)?;
         }
@@ -119,7 +119,7 @@ impl RtsStateStore {
     }
 
     pub fn commit_rolling_code(&mut self, channel: Channel, code: u16) -> Result<()> {
-        let next = self.next_on_wire(channel);
+        let next = self.next_on_wire(channel)?;
         if code != next {
             bail!("cannot commit rolling code {code} for {channel}; next on wire is {next}");
         }
@@ -227,9 +227,9 @@ mod tests {
         assert_eq!(store.selected_channel(), Channel::L1);
         assert!(state_path(&dir).exists());
         for channel in CHANNELS {
-            assert!(store.channel(channel).remote_id > 0);
-            assert_eq!(store.channel(channel).reserved_until, 1);
-            assert_eq!(store.next_on_wire(channel), 1);
+            assert!(store.channel(channel).unwrap().remote_id > 0);
+            assert_eq!(store.channel(channel).unwrap().reserved_until, 1);
+            assert_eq!(store.next_on_wire(channel).unwrap(), 1);
         }
     }
 
@@ -292,13 +292,13 @@ mod tests {
         let mut store = RtsStateStore::load_or_init(&path, 16).unwrap();
 
         assert_eq!(store.reserve_rolling_code(Channel::L1).unwrap(), 1);
-        assert_eq!(store.channel(Channel::L1).reserved_until, 17);
-        assert_eq!(store.channel(Channel::L2).reserved_until, 1);
+        assert_eq!(store.channel(Channel::L1).unwrap().reserved_until, 17);
+        assert_eq!(store.channel(Channel::L2).unwrap().reserved_until, 1);
         assert!(path.exists());
 
         store.commit_rolling_code(Channel::L1, 1).unwrap();
-        assert_eq!(store.next_on_wire(Channel::L1), 2);
-        assert_eq!(store.next_on_wire(Channel::L2), 1);
+        assert_eq!(store.next_on_wire(Channel::L1).unwrap(), 2);
+        assert_eq!(store.next_on_wire(Channel::L2).unwrap(), 1);
     }
 
     #[test]
@@ -316,10 +316,10 @@ mod tests {
 
         let code = store.reserve_rolling_code(Channel::L1).unwrap();
         assert_eq!(code, u16::MAX);
-        assert_eq!(store.channel(Channel::L1).reserved_until, 15);
+        assert_eq!(store.channel(Channel::L1).unwrap().reserved_until, 15);
 
         store.commit_rolling_code(Channel::L1, u16::MAX).unwrap();
-        assert_eq!(store.next_on_wire(Channel::L1), 0);
+        assert_eq!(store.next_on_wire(Channel::L1).unwrap(), 0);
     }
 
     #[test]
@@ -330,9 +330,9 @@ mod tests {
 
         let code = store.reserve_rolling_code(Channel::L1).unwrap();
         assert_eq!(code, 1);
-        assert_eq!(store.next_on_wire(Channel::L1), 1);
+        assert_eq!(store.next_on_wire(Channel::L1).unwrap(), 1);
 
         let restarted = RtsStateStore::load_or_init(&path, 16).unwrap();
-        assert_eq!(restarted.next_on_wire(Channel::L1), 17);
+        assert_eq!(restarted.next_on_wire(Channel::L1).unwrap(), 17);
     }
 }

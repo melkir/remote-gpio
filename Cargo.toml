@@ -55,6 +55,14 @@ spidev = { version = "0.7" }
 anyhow = "1.0"
 vergen-gix = { version = "9.1", features = ["build"] }
 
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "warn"
+panic = "deny"
+
 [profile.release]
 strip = true
 lto = "fat"

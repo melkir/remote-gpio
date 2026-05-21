@@ -138,7 +138,7 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
         if let Err(re) = deploy::rollback_binary_swap(service_state) {
             eprintln!("Rollback error: {re:#}");
         }
-        std::process::exit(1);
+        return Err(e);
     }
 
     if !was_running {

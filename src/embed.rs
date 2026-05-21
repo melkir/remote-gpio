@@ -8,6 +8,7 @@ use axum::response::{IntoResponse, Response};
 #[folder = "app/dist/"]
 struct Assets;
 
+/// Serves the embedded PWA in release builds, or reads `app/dist/` from disk in debug.
 pub async fn static_handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };

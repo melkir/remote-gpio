@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use std::sync::Arc;
 
 use crate::commands::doctor;
@@ -11,7 +11,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
     let report = doctor::collect(&resolved_config, 0).await;
     report.print_summary();
     if report.has_blocking_failure() {
-        std::process::exit(1);
+        bail!("doctor reported blocking failures; refusing to start");
     }
 
     let remote_control =
@@ -21,9 +21,9 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         remote_control: remote_control.clone(),
     });
 
-    let _hap_announcement = if resolved_config.config.homekit {
+    let hap_handles = if resolved_config.config.homekit {
         match homekit::start(remote_control).await {
-            Ok(a) => Some(a),
+            Ok(handles) => Some(handles),
             Err(e) => {
                 tracing::warn!(
                     "HAP subsystem failed to start, continuing without HomeKit: {}",
@@ -40,6 +40,9 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         res = serve(shared_state, &bind) => res,
         sig = wait_for_shutdown() => {
             tracing::info!("received {sig}, shutting down");
+            if let Some(handles) = hap_handles {
+                handles.abort();
+            }
             Ok(())
         }
     }

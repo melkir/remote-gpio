@@ -1,6 +1,6 @@
 use crate::gpio::Channel;
 use crate::remote::{Command, RemoteControl};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::http::{Method, StatusCode};
@@ -142,7 +142,8 @@ async fn dispatch(state: &AppState, request: ValidatedCommandRequest) -> Result<
             .remote_control
             .execute(cmd, channel)
             .await
-            .map_err(|e| e.to_string())?;
+            .context("executing select command")
+            .map_err(map_command_error)?;
         return Ok(());
     }
 
@@ -152,15 +153,22 @@ async fn dispatch(state: &AppState, request: ValidatedCommandRequest) -> Result<
             .remote_control
             .execute(Command::Select, Some(channel))
             .await
-            .map_err(|e| e.to_string())?;
+            .context("selecting channel before command")
+            .map_err(map_command_error)?;
     }
     state
         .remote_control
         .execute(cmd, None)
         .await
-        .map_err(|e| e.to_string())?;
+        .with_context(|| format!("executing {cmd:?} command"))
+        .map_err(map_command_error)?;
     tracing::info!(command = ?cmd, "remote command completed");
     Ok(())
+}
+
+fn map_command_error(err: anyhow::Error) -> String {
+    tracing::error!(error = ?err, "remote command failed");
+    err.to_string()
 }
 
 fn validate_command(
@@ -209,6 +217,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
     let (mut sink, mut stream) = stream.split();
     let mut rx_channel = state.remote_control.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+    let command_slots = Arc::new(tokio::sync::Semaphore::new(1));
 
     // Send initial channel state.
     let selection = rx_channel.borrow().to_string();
@@ -242,10 +251,13 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                             Ok(payload) => {
                                 let command = payload.command.clone();
                                 let channel = payload.channel;
-                                // Spawn command processing so selection updates aren't blocked.
                                 let state = state.clone();
                                 let client_name = client_name.clone();
+                                let command_slots = command_slots.clone();
                                 tokio::spawn(async move {
+                                    let Ok(_permit) = command_slots.acquire().await else {
+                                        return;
+                                    };
                                     match execute_command(&state, payload).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)
@@ -318,6 +330,16 @@ mod tests {
             validate("up", Some(Channel::L1), false).unwrap(),
             (Command::Up, Some(Channel::L1))
         );
+    }
+
+    #[test]
+    fn command_request_accepts_channel_field() {
+        let req: CommandRequest =
+            serde_json::from_str(r#"{"command":"up","channel":"L1"}"#).unwrap();
+
+        assert_eq!(req.command, "up");
+        assert_eq!(req.channel, Some(Channel::L1));
+        assert!(!req.long);
     }
 
     #[test]

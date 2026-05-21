@@ -1,3 +1,11 @@
+//! Somfy blind controller for Raspberry Pi.
+//!
+//! Drives Somfy blinds via swappable drivers (`fake`, `telis`, `rts`) selected in
+//! `/etc/somfy/config.toml`. Exposes an HTTP API, WebSocket control, and optional
+//! native HomeKit Accessory Protocol support.
+
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod cli;
 pub mod commands;
 pub mod config;

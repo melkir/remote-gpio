@@ -1,3 +1,5 @@
+//! Hardware driver abstraction (`fake`, `telis`, `rts`).
+
 use anyhow::Result;
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
@@ -13,7 +15,7 @@ mod telis;
 
 use fake::FakeDriver;
 use rts::RtsDriver;
-pub(crate) use rts::{pigpiod_addrs, PIGPIOD_ADDR};
+pub(crate) use rts::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
 use telis::TelisDriver;
 
 pub type SelectedChannelRx = Receiver<Channel>;
@@ -23,6 +25,7 @@ pub struct CommandOutcome {
     pub inferred_position: Option<u8>,
 }
 
+/// Runtime-selectable blind driver implementation.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
 #[serde(rename_all = "lowercase")]
 pub enum DriverKind {
@@ -119,6 +122,7 @@ impl Default for TelisGpioOptions {
     }
 }
 
+/// Resolved driver settings passed to [`CommandRouter::new`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DriverConfig {
     pub kind: DriverKind,

@@ -41,13 +41,13 @@ pub enum Channel {
 impl Channel {
     pub const INDIVIDUALS: [Channel; 4] = [Channel::L1, Channel::L2, Channel::L3, Channel::L4];
 
-    pub fn led_gpio(self, config: &TelisGpioOptions) -> u8 {
+    pub fn led_gpio(self, config: &TelisGpioOptions) -> Option<u8> {
         match self {
-            Channel::L1 => config.led1,
-            Channel::L2 => config.led2,
-            Channel::L3 => config.led3,
-            Channel::L4 => config.led4,
-            Channel::ALL => unreachable!("ALL is not represented by one Telis LED GPIO"),
+            Channel::L1 => Some(config.led1),
+            Channel::L2 => Some(config.led2),
+            Channel::L3 => Some(config.led3),
+            Channel::L4 => Some(config.led4),
+            Channel::ALL => None,
         }
     }
 
@@ -102,7 +102,7 @@ impl std::fmt::Display for Channel {
 pub fn channel_from_gpio(offset: u32, config: &TelisGpioOptions) -> Result<Channel> {
     let gpio = offset as u8;
     for channel in &Channel::INDIVIDUALS {
-        if channel.led_gpio(config) == gpio {
+        if channel.led_gpio(config) == Some(gpio) {
             return Ok(*channel);
         }
     }
@@ -133,7 +133,10 @@ mod platform {
     pub async fn watch_inputs(chip: &str, config: &TelisGpioOptions) -> Result<Channel> {
         let offsets: Vec<u32> = Channel::INDIVIDUALS
             .iter()
-            .map(|ch| ch.led_gpio(config) as u32)
+            .map(|ch| {
+                ch.led_gpio(config)
+                    .expect("individual channels have LED GPIO") as u32
+            })
             .collect();
 
         let req = Request::builder()
