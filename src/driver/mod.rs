@@ -13,6 +13,9 @@ mod fake;
 mod rts;
 mod telis;
 
+/// Shown when `prog` is requested while the Telis driver is selected.
+pub const TELIS_PROG_UNAVAILABLE: &str = "prog is not available with the Telis driver; set driver = \"rts\" in config.toml (somfy config set-driver rts) to pair over RF — see docs/HARDWARE.md#pairing";
+
 use fake::FakeDriver;
 use rts::RtsDriver;
 pub(crate) use rts::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
@@ -102,8 +105,6 @@ pub struct TelisGpioOptions {
     pub led2: u8,
     pub led3: u8,
     pub led4: u8,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prog: Option<u8>,
 }
 
 impl Default for TelisGpioOptions {
@@ -117,7 +118,6 @@ impl Default for TelisGpioOptions {
             led2: 20,
             led3: 16,
             led4: 12,
-            prog: None,
         }
     }
 }
@@ -175,6 +175,9 @@ impl CommandRouter {
         Ok(Self { executor })
     }
 
+    /// UI-style command dispatch. Telis/Fake may use `channel` to select or target
+    /// before acting; RTS uses persisted selection for directional commands (use
+    /// [`Self::execute_on`] to transmit on a specific channel without selecting).
     pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         match &self.executor {
             DriverExecutor::Fake(driver) => driver.execute(command, channel).await,
@@ -183,6 +186,8 @@ impl CommandRouter {
         }
     }
 
+    /// Send `command` on `channel`. Native for RTS (addressed RF); Telis selects
+    /// the physical LED row first; Fake records the target channel directly.
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         match &self.executor {
             DriverExecutor::Fake(driver) => driver.execute_on(channel, command).await,

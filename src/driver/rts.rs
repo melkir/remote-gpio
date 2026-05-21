@@ -146,6 +146,8 @@ impl RtsDriver {
                 let channel = channel.unwrap_or_else(|| self.selected_channel().next());
                 self.set_selected_channel(channel).await
             }
+            // Directional commands use persisted logical selection, not `channel`.
+            // Call [`Self::execute_on`] to transmit on a specific RTS channel.
             Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
                 let channel = self.selected_channel();
                 self.execute_on(channel, command).await

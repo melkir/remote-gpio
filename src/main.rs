@@ -38,7 +38,7 @@ async fn main() -> Result<()> {
         }
         Command::Uninstall => somfy::commands::uninstall::run().await,
         Command::Restart => somfy::commands::restart::run(),
-        Command::Remote { command } => somfy::commands::remote::run(command).await,
+        Command::Remote { command } => somfy::commands::remote::run(command, config_path).await,
         Command::Homekit { command } => {
             let resolved_config = somfy::config::resolve(config_path)?;
             somfy::commands::homekit::run(command, &resolved_config)

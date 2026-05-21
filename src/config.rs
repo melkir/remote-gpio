@@ -125,11 +125,6 @@ pub fn validate(config: &AppConfig) -> Result<()> {
             bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
         }
     }
-    if let Some(gpio) = config.telis.gpio.prog {
-        if gpio > MAX_BCM_GPIO {
-            bail!("telis.gpio.prog must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
-        }
-    }
     Ok(())
 }
 

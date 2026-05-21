@@ -36,24 +36,23 @@ All three implement the same shape:
 - `selected_channel()` / `subscribe_selected_channel()` for the live selection watch channel.
 
 Live driver switching is unsupported within a running process — the driver is
-constructed once at startup. Operators switch drivers by running
-`sudo somfy config set-driver <kind>`, which rewrites `/etc/somfy/config.toml`,
-runs any new-driver prereqs (e.g. `pigpiod` for `rts`), and restarts the unit.
+constructed once at startup. Operators switch drivers with
+`somfy config set-driver <kind>` (see [README.md](../README.md#drivers)).
 When the config file is absent, Raspberry Pi Linux builds default to `telis`;
 other targets default to `fake`.
 
 ## Module Map
 
-| Area           | Files            | Responsibility                                                                                 |
-| -------------- | ---------------- | ---------------------------------------------------------------------------------------------- |
-| Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                       |
-| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                     |
-| Drivers        | `src/driver/*`   | `fake`, `telis`, `rts` implementations of the active-driver trait.                             |
-| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                   |
-| RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
-| HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
+| Area           | Files            | Responsibility                                                                                         |
+| -------------- | ---------------- | ------------------------------------------------------------------------------------------------------ |
+| Web API        | `src/server.rs`  | Axum HTTP, SSE, WebSocket routes and static app serving.                                               |
+| Remote control | `src/remote.rs`  | Driver-agnostic command surface, position fan-out, and event broadcasting.                             |
+| Drivers        | `src/driver/*`   | `fake`, `telis`, `rts` implementations of the active-driver trait.                                     |
+| Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                           |
+| RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver.         |
+| HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.            |
 | HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, target-write planning, position cache, HAP startup. |
-| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                   |
+| CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                           |
 
 The important boundaries are `hap` versus `homekit` (protocol vs project), and
 `driver/`\* versus everything above (hardware vs UX).
@@ -92,80 +91,52 @@ than rejecting concurrent commands with a "busy" error.
 
 ## Web Flow
 
-The web server exposes one command endpoint and two live-state transports:
+HTTP routes and example JSON bodies are listed in [README.md](../README.md#api).
+Implementation: `src/server.rs`.
 
-- `GET /channel` for the current selection (plain text, e.g. `L2`).
-- `POST /command` for one command (`{"command":"up"}`, `{"command":"up","channel":"L3"}`, or `{"command":"select","channel":"L3"}`).
-- `GET /events` for the Preact PWA's SSE stream of selection updates (`event.data === "L2"`).
-- `GET /ws` for bidirectional clients that want live updates and command messages.
+The web API is intentionally small. `/command` is the only write endpoint, and
+it accepts the same shape as WebSocket command messages: a command name, an
+optional `channel`, and `long: true` only for RTS pairing.
 
-Both live transports subscribe to `RemoteControl::subscribe_selection()`, send
-the current channel immediately, and then forward selection changes. Incoming
-WebSocket commands are spawned as tasks so updates keep flowing while a command
-is in flight.
+Both `GET /events` and `GET /ws` subscribe to
+`RemoteControl::subscribe_selection()`, send the current channel immediately,
+then forward selection changes. Incoming WebSocket commands are spawned as tasks
+so updates keep flowing while a command is in flight. A per-connection semaphore
+keeps those spawned commands ordered; the driver locks still protect the hardware
+globally.
 
-## HomeKit Flow
+## HomeKit adapter
 
-`src/homekit/mod.rs` starts the HomeKit subsystem:
+`src/homekit/mod.rs` boots mDNS, the HAP TCP server, and the position listener.
+`src/homekit/somfy.rs` implements the accessory app; `target_writes.rs` batches
+and coalesces `TargetPosition` writes; `position_cache.rs` persists inferred
+positions. HomeKit commands go through the same `RemoteControl` / `CommandRouter`
+path as the web API.
 
-1. Load or initialize persistent HAP identity from `hap.json`.
-2. Build the setup URI and log/render the QR code if unpaired.
-3. Advertise `_hap._tcp.local.` through mDNS.
-4. Create `SomfyHapApp`, the Somfy-specific implementation of the HAP runtime trait.
-5. Start the generic HAP TCP server.
-6. Listen for `PositionUpdate` events from `RemoteControl` and mirror them into HomeKit events.
+HomeKit has no direct physical position feedback from the blinds. The adapter
+therefore keeps a best-effort cache: Up snaps to `100`, Down snaps to `0`, and
+requested target positions snap to the nearest endpoint. `ALL` is project-level
+behavior; writing it fans out to individual channels, and individual writes only
+update `ALL` when every channel matches.
 
-`src/homekit/somfy.rs` stays as the HAP adapter. It delegates persisted blind
-position updates to `position_cache.rs` and HomeKit `TargetPosition` write
-normalization/coalescing to `target_writes.rs`.
+Protocol (pair-setup, encryption, PUT semantics, pairing commands):
+[HAP.md](HAP.md).
 
-HomeKit has no direct physical position feedback from the blinds. The app keeps
-a best-effort cache:
-
-- Up means position `100`.
-- Down means position `0`.
-- Target values below `50` snap to `0`; values `50` and above snap to `100`.
-- The cache is persisted to `positions.json`.
-- Restart never replays cached positions to GPIO.
-
-The `ALL` accessory is also custom project behavior. Writing `ALL` propagates
-to the individual blinds, and individual writes update `ALL` only when every
-individual blind matches.
-
-## HAP Core
-
-The HAP server is intentionally not built on Axum or Hyper. After pair-verify,
-HAP switches the existing TCP socket into its own encrypted frame format, so a
-normal HTTP server abstraction does not fit cleanly.
-
-Instead:
-
-- `httparse` parses plain HTTP request bytes.
-- The same parser is reused after decrypting HAP frames.
-- `http::StatusCode` provides canonical response phrases.
-- `EncryptedReader` and `EncryptedWriter` own the post-verify AEAD framing.
-
-`handle_connection` owns the socket loop. It waits for either a request or a
-HomeKit event. Request routing is delegated to helpers so the loop stays focused
-on IO and event multiplexing.
+The HAP server is not built on Axum or Hyper because pair-verify upgrades the
+existing TCP socket into Apple's encrypted frame format. `src/hap/server/mod.rs`
+owns that socket loop; `src/hap/server/handlers/` contains the protocol routes
+so the IO loop stays readable.
 
 ## Persistence
 
-State files under the systemd state directory (`/var/lib/somfy/`, or
-`./hap-state` in debug builds):
+State under `$STATE_DIRECTORY` (`/var/lib/somfy/` in production, `./hap-state` in
+debug — see [HAP.md](HAP.md#persistent-state) for HomeKit files). RTS adds
+`rts.json` (virtual remote IDs, rolling-code reserves, `selected_channel`).
 
-- `hap.json` — HomeKit identity, setup code, signing key, config/state numbers, paired controllers.
-- `positions.json` — HomeKit position cache.
-- `rts.json` (RTS driver only) — schema-versioned virtual-remote identities, per-channel rolling-code reserves, and persisted `selected_channel`.
-
-All writes go through the same atomic temp-file-plus-rename helper. The RTS
-state file uses a write-ahead reserve block (default 16 codes) so a crashed or
-yanked Pi loses at most a few unused codes rather than allowing the rolling
-counter to roll backwards — losing a code is harmless, replaying one isn't.
-
-Identity stability matters. Changing the HAP identity forces re-pairing.
-Changing accessory IDs or characteristic IDs can make Home lose room, name, and
-automation associations.
+All writes use atomic temp-file + rename. RTS uses a write-ahead reserve block
+(default 16 codes) so a crash cannot roll the on-air counter backwards. Burning
+a few unused codes is acceptable; replaying an old rolling code is what can
+desync a motor.
 
 ## Design Tradeoffs
 
@@ -182,5 +153,6 @@ automation associations.
 1. `src/remote.rs` for the command and concurrency model.
 2. `src/server.rs` for the web API, SSE stream, and WebSocket flow.
 3. `src/homekit/somfy.rs` for the HomeKit adapter, then `src/homekit/target_writes.rs` for write planning.
-4. `src/hap/server/mod.rs` and `src/hap/server/handlers.rs` for the HAP request/session loop.
-5. `docs/HARDWARE.md` for GPIO wiring and debounce details.
+4. `src/hap/server/mod.rs` and `src/hap/server/handlers/` for the HAP request/session loop.
+5. `docs/HARDWARE.md` for wiring, pairing, and the end-to-end data-flow diagram.
+6. `docs/HAP.md` for the HAP server and pairing lifecycle.

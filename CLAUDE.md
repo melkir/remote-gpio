@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code working in this repo. User-facing docs live in [README.md](README.md).
+Canonical guidance for AI agents in this repo. User-facing docs: [README.md](README.md). Codex: see [AGENTS.md](AGENTS.md) (pointer here).
 
 ## Project
 
@@ -20,14 +20,16 @@ mise run cross-build  # armv7 release build
 
 Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled as a task.
 
+Operator CLI is defined in `src/cli.rs` — prefer `somfy --help` over duplicating subcommand lists in markdown.
+
 ## Repo Layout
 
 - `src/cli.rs` — clap subcommands. Default is `serve`. Per-command logic under `src/commands/`.
 - `src/config.rs` — TOML config (`/etc/somfy/config.toml`): selects the driver and supplies shared GPIO, Telis, and RTS options. `validate()` is the single gate.
 - `src/server.rs` — Axum routes (`/events`, `/ws`, `/command`, `/channel`, embedded static files).
-- `src/remote.rs` — `RemoteControl` state engine; broadcasts the selected `Channel` via `watch::channel` (the legacy `led` payload was removed).
-- `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (all three are always compiled into the binary; selection is purely runtime via config). When the `rts` driver is selected and `telis.gpio.prog` is set, `TelisProgrammer` handles `Prog` via the wired Telis remote.
-- `src/rts/` — RTS protocol: `frame` (encode + obfuscation; remote ID is big-endian per Pi-Somfy), `waveform` (pulse builder, 4 frames default / 20 for `Prog --long`, patent-derived 1280µs bit period), `state` (per-channel rolling code, atomic write-ahead reserve at `$STATE_DIRECTORY/rts.json`), `pigpio` (TCP client to `pigpiod`, loopback-only), `cc1101` (SPI driver for OOK @ 433.42 MHz).
+- `src/remote.rs` — `RemoteControl` state engine; broadcasts the selected `Channel` via `watch::channel`.
+- `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (all three are always compiled into the binary; selection is purely runtime via config). `Prog` / `ProgLong` are RTS-only (RF pairing); the Telis driver rejects them.
+- `src/rts/` — RTS protocol: `frame` (encode + obfuscation; remote ID is big-endian per Pi-Somfy), `waveform` (pulse builder, 4 frames default / 20 for `prog --long`, patent-derived 1280µs bit period), `state` (per-channel rolling code, atomic write-ahead reserve at `$STATE_DIRECTORY/rts.json`), `pigpio` (TCP client to `pigpiod`, loopback-only), `cc1101` (SPI driver for OOK @ 433.42 MHz).
 - `src/gpio.rs` — `gpiocdev` wrapper used by the Telis driver. Output pulses are 60ms active-low; input debounce uses a 300ms edge-count window. Hosts the shared `MAX_BCM_GPIO` constant.
 - `build.rs` + `vergen` — embeds git SHA and build date at compile time.
 - `app/` — Preact PWA. Vite + Tailwind. React imports aliased to `preact/compat` in `tsconfig.json` and `vite.config.ts`.
@@ -37,7 +39,7 @@ Reach for raw `cargo`/`bun` only when a subproject-level operation isn't modeled
 
 - **Error handling:** `anyhow::Result<T>` throughout the Rust code.
 - **Driver seam:** all hardware lives behind `CommandRouter`. The HTTP/SSE/WS/HomeKit surfaces never branch on driver kind — they call `execute` / `execute_on`. New transports go through `CommandRouter`; new hardware goes behind a new `DriverExecutor` variant. There are no Cargo feature gates — every driver is always compiled in, and `cfg(target_os = "linux")` is the only platform gate (used to swap real hardware code for stubs on macOS dev builds).
-- **Channel, not LED, on the wire:** SSE/WS payloads and the `/command` POST identify targets by `channel` (`L1`–`L4` / `ALL`). Any reference to `led` is legacy and rejected by the server.
+- **Channel on the wire:** SSE/WS payloads and the `/command` POST identify targets by `channel` (`L1`–`L4` / `ALL`).
 - **RTS rolling-code safety:** `RtsStateStore` reserves a block of codes ahead of transmit and only commits on success; the file is rewritten via tmp + atomic rename + fsync. A crash mid-transmit may burn up to `DEFAULT_RESERVE_SIZE` codes per channel — that's intentional and within the receiver window.
 - **pigpiod is loopback-only, hard.** The RTS driver uses the fixed local endpoint `127.0.0.1:8888`, and install configures `pigpiod -l`. pigpiod is unauthenticated; treat any non-loopback access as a security bug, not a preference.
 - **RTS waveform timings are fixed.** Timing constants in `src/rts/waveform.rs` are derived from the Somfy patent (US7860481 B2: 1280µs bit period) and cross-checked against Pi-Somfy. The only frame-count knob is `Command::ProgLong` (CLI `--long`, JSON `"long": true` on `prog`), which routes to `waveform::build_long` (`FRAME_COUNT_LONG = 20`) so the Pi can act as the master and put the motor into pair-listen. Up/Down/Stop and short `Prog` always use `FRAME_COUNT = 4`. Do not re-add a generic `frame_count` config knob.

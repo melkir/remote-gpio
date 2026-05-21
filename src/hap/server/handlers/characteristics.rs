@@ -25,11 +25,36 @@ pub(super) async fn handle_put_characteristics(
         .and_then(|c| c.as_array())
         .ok_or_else(|| anyhow!("missing characteristics array"))?;
 
-    let writes = chars
-        .iter()
-        .map(parse_characteristic_write)
-        .collect::<Vec<_>>();
-    app.write_characteristics(writes, subs).await
+    let mut writes = Vec::new();
+    let mut pre_statuses = Vec::new();
+    for entry in chars {
+        match parse_characteristic_write(entry) {
+            Ok(write) => {
+                pre_statuses.push(None);
+                writes.push(write);
+            }
+            Err(status) => pre_statuses.push(Some(status)),
+        }
+    }
+
+    let mut outcome = if writes.is_empty() {
+        CharacteristicWriteOutcome::default()
+    } else {
+        app.write_characteristics(writes, subs).await?
+    };
+
+    let mut app_statuses = outcome.statuses.into_iter();
+    let mut merged = Vec::with_capacity(pre_statuses.len());
+    for slot in pre_statuses {
+        merged.push(match slot {
+            Some(status) => status,
+            None => app_statuses
+                .next()
+                .ok_or_else(|| anyhow!("missing write status for parsed characteristic"))?,
+        });
+    }
+    outcome.statuses = merged;
+    Ok(outcome)
 }
 
 pub(super) fn parse_characteristic_ids(
@@ -58,18 +83,25 @@ pub(super) fn parse_characteristic_ids(
         .collect()
 }
 
-pub(super) fn parse_characteristic_write(entry: &Value) -> CharacteristicWrite {
+pub(super) fn parse_characteristic_write(
+    entry: &Value,
+) -> Result<CharacteristicWrite, CharacteristicWriteStatus> {
     let aid = entry.get("aid").and_then(|v| v.as_u64());
     let iid = entry.get("iid").and_then(|v| v.as_u64());
     let id = match (aid, iid) {
         (Some(aid), Some(iid)) => CharacteristicId::new(aid, iid),
-        _ => CharacteristicId::new(0, 0),
+        (aid, iid) => {
+            return Err(CharacteristicWriteStatus::error(
+                CharacteristicId::new(aid.unwrap_or(0), iid.unwrap_or(0)),
+                HapStatus::InvalidValueInRequest,
+            ));
+        }
     };
-    CharacteristicWrite {
+    Ok(CharacteristicWrite {
         id,
         value: entry.get("value").cloned(),
         ev: entry.get("ev").and_then(|v| v.as_bool()),
-    }
+    })
 }
 
 pub(super) fn characteristics_body(reads: Vec<CharacteristicRead>) -> Vec<u8> {
@@ -137,9 +169,10 @@ mod tests {
     }
 
     #[test]
-    fn missing_aid_or_iid_maps_to_invalid_write() {
-        let write = parse_characteristic_write(&json!({"value": 50}));
-        assert_eq!(write.id, CharacteristicId::new(0, 0));
+    fn missing_aid_or_iid_returns_invalid_value_status() {
+        let err = parse_characteristic_write(&json!({"value": 50})).unwrap_err();
+        assert_eq!(err.id, CharacteristicId::new(0, 0));
+        assert_eq!(err.status, HapStatus::InvalidValueInRequest);
     }
 
     #[test]

@@ -189,11 +189,8 @@ mod platform {
         config: &TelisGpioOptions,
     ) -> Result<()> {
         tracing::debug!("Triggering Telis button: {:?}", output);
-        trigger_output_gpio(chip, button_gpio(output, config), Duration::from_millis(60)).await
-    }
-
-    /// Triggers one active-low GPIO output for `duration`.
-    pub async fn trigger_output_gpio(chip: &str, gpio: u8, duration: Duration) -> Result<()> {
+        let gpio = button_gpio(output, config);
+        let duration = Duration::from_millis(60);
         tracing::debug!("Triggering GPIO{gpio} for {:?}", duration);
         let offset = gpio as u32;
         let mut value = Value::Active;
@@ -248,15 +245,9 @@ mod platform {
         tokio::time::sleep(Duration::from_millis(60)).await;
         Ok(())
     }
-
-    pub async fn trigger_output_gpio(_chip: &str, gpio: u8, duration: Duration) -> Result<()> {
-        tracing::debug!("Fake triggering GPIO{gpio} for {:?}", duration);
-        tokio::time::sleep(duration).await;
-        Ok(())
-    }
 }
 
-pub use platform::{trigger_output, trigger_output_gpio, watch_inputs};
+pub use platform::{trigger_output, watch_inputs};
 
 #[cfg(test)]
 mod tests {
