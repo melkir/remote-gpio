@@ -11,11 +11,17 @@ use tokio::sync::broadcast;
 use crate::gpio::Channel;
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWrite,
-    CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture,
+    CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture, HapStatus,
     Subscriptions,
 };
-use crate::homekit::position_cache::{PositionCache, SnappedPosition};
-use crate::homekit::reads::{build_accessories, read_characteristic};
+use crate::homekit::accessory_db::{
+    self, BlindAccessory, BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE,
+    IID_IDENTIFY, IID_MANUFACTURER, IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
+    IID_TARGET_POSITION, POSITION_STATE_STOPPED,
+};
+use crate::homekit::position_cache::{
+    effective_position, find_blind, PositionCache, SnappedPosition, BLINDS,
+};
 use crate::homekit::target_writes::{grouped_all_target, plan_target_writes, PendingTargetWrite};
 use crate::remote::{Command, PositionUpdate, RemoteControl};
 
@@ -171,6 +177,60 @@ impl HapAccessoryApp for SomfyHapApp {
     }
 }
 
+fn read_characteristic(
+    positions: &std::collections::HashMap<u64, u8>,
+    id: CharacteristicId,
+) -> CharacteristicRead {
+    let aid = id.aid.0;
+    let iid = id.iid.0;
+    let value = if aid == BRIDGE_AID {
+        match iid {
+            IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
+            IID_MANUFACTURER => serde_json::json!("Somfy"),
+            IID_MODEL => serde_json::json!("Telis 4 Bridge"),
+            IID_NAME => serde_json::json!("Somfy Bridge"),
+            IID_SERIAL => serde_json::json!("somfy-bridge"),
+            IID_FIRMWARE => serde_json::json!(env!("CARGO_PKG_VERSION")),
+            IID_BRIDGE_VERSION => serde_json::json!("1.1.0"),
+            _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
+        }
+    } else if let Some(blind) = find_blind(aid) {
+        match iid {
+            IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
+            IID_MANUFACTURER => serde_json::json!("Somfy"),
+            IID_MODEL => serde_json::json!("Telis 4"),
+            IID_NAME => serde_json::json!(blind.name),
+            IID_SERIAL => serde_json::json!(blind.serial),
+            IID_FIRMWARE => serde_json::json!(env!("CARGO_PKG_VERSION")),
+            IID_CURRENT_POSITION | IID_TARGET_POSITION => {
+                serde_json::json!(effective_position(positions, aid))
+            }
+            IID_POSITION_STATE => serde_json::json!(POSITION_STATE_STOPPED),
+            _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
+        }
+    } else {
+        return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist);
+    };
+    CharacteristicRead::success(id, value)
+}
+
+fn build_accessories(positions: &[(u64, u8)]) -> Value {
+    let blinds: Vec<BlindAccessory<'_>> = BLINDS
+        .iter()
+        .map(|blind| BlindAccessory {
+            aid: blind.aid,
+            name: blind.name,
+            serial: blind.serial,
+            position: positions
+                .iter()
+                .find(|(aid, _)| *aid == blind.aid)
+                .map(|(_, pos)| *pos)
+                .unwrap_or(100),
+        })
+        .collect();
+    accessory_db::build_accessories(&blinds)
+}
+
 fn command_for_snapped(snapped: SnappedPosition) -> Command {
     match snapped {
         SnappedPosition::Open => Command::Up,
@@ -182,10 +242,33 @@ fn command_for_snapped(snapped: SnappedPosition) -> Command {
 mod tests {
     use super::*;
     use crate::gpio::Channel;
-    use crate::homekit::accessory_db::IID_TARGET_POSITION;
     use crate::remote::Command;
     use serde_json::json;
     use std::collections::HashMap;
+
+    #[test]
+    fn read_position_returns_cached_value() {
+        let mut positions = HashMap::new();
+        positions.insert(2, 0);
+
+        let read = read_characteristic(&positions, CharacteristicId::new(2, IID_CURRENT_POSITION));
+
+        assert_eq!(read.status, HapStatus::Success);
+        assert_eq!(read.value, Some(json!(0)));
+    }
+
+    #[test]
+    fn accessories_expose_four_blinds() {
+        let body = build_accessories(&[(2, 100), (3, 100), (4, 100), (5, 100)]);
+        let aids = body["accessories"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|accessory| accessory["aid"].as_u64().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(aids, vec![1, 2, 3, 4, 5]);
+    }
 
     #[tokio::test]
     async fn full_individual_write_batch_sends_one_all_driver_command() {

@@ -5,9 +5,11 @@ use crate::hap::runtime::{
 };
 use crate::homekit::accessory_db::IID_IDENTIFY;
 use crate::homekit::accessory_db::IID_TARGET_POSITION;
-use crate::homekit::blinds::{find_blind, Blind, BLINDS};
-use crate::homekit::position_cache::SnappedPosition;
-use crate::homekit::reads::{is_known_characteristic, supports_events, write_error_status};
+use crate::homekit::accessory_db::{
+    BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE, IID_MANUFACTURER,
+    IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
+};
+use crate::homekit::position_cache::{find_blind, Blind, SnappedPosition, BLINDS};
 
 #[derive(Copy, Clone, Debug)]
 pub struct PendingTargetWrite {
@@ -111,10 +113,55 @@ fn handle_subscription(
     CharacteristicWriteStatus::success(id)
 }
 
+fn write_error_status(id: CharacteristicId) -> HapStatus {
+    if is_known_characteristic(id) {
+        HapStatus::ReadOnly
+    } else {
+        HapStatus::ResourceDoesNotExist
+    }
+}
+
+fn is_known_characteristic(id: CharacteristicId) -> bool {
+    let aid = id.aid.0;
+    let iid = id.iid.0;
+    match aid {
+        BRIDGE_AID => matches!(
+            iid,
+            IID_IDENTIFY
+                | IID_MANUFACTURER
+                | IID_MODEL
+                | IID_NAME
+                | IID_SERIAL
+                | IID_FIRMWARE
+                | IID_BRIDGE_VERSION
+        ),
+        _ if find_blind(aid).is_some() => matches!(
+            iid,
+            IID_IDENTIFY
+                | IID_MANUFACTURER
+                | IID_MODEL
+                | IID_NAME
+                | IID_SERIAL
+                | IID_FIRMWARE
+                | IID_CURRENT_POSITION
+                | IID_TARGET_POSITION
+                | IID_POSITION_STATE
+        ),
+        _ => false,
+    }
+}
+
+fn supports_events(id: CharacteristicId) -> bool {
+    find_blind(id.aid.0).is_some()
+        && matches!(
+            id.iid.0,
+            IID_CURRENT_POSITION | IID_TARGET_POSITION | IID_POSITION_STATE
+        )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::homekit::accessory_db::IID_TARGET_POSITION;
 
     #[test]
     fn full_individual_batch_groups_to_all_blinds() {
@@ -126,6 +173,18 @@ mod tests {
         let snapped = grouped_all_target(&targets).unwrap();
 
         assert_eq!(snapped, SnappedPosition::Open);
+    }
+
+    #[test]
+    fn unsupported_write_reports_protocol_status() {
+        assert_eq!(
+            write_error_status(CharacteristicId::new(2, IID_CURRENT_POSITION)),
+            HapStatus::ReadOnly
+        );
+        assert_eq!(
+            write_error_status(CharacteristicId::new(99, 99)),
+            HapStatus::ResourceDoesNotExist
+        );
     }
 
     #[test]
