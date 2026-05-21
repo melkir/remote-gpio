@@ -103,7 +103,6 @@ mod tests {
             "state.rs",
             "handlers/mod.rs",
             "handlers/characteristics.rs",
-            "handlers/events.rs",
             "handlers/pairing.rs",
         ];
         for name in files {

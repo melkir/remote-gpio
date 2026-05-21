@@ -2,9 +2,8 @@ use anyhow::{bail, Result};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::config::DriverKind;
+use crate::core::{Channel, Command};
 use crate::driver::{CommandOutcome, CommandRouter, SelectedChannelRx};
-
-pub use crate::core::{Channel, Command};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PositionUpdate {

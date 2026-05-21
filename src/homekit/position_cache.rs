@@ -1,6 +1,11 @@
-//! Persisted blind position cache and HAP characteristic event diffs.
+//! In-memory HomeKit blind positions, `positions.json` persistence, and HAP event diffs.
+//!
+//! Reload is read-only: we never replay a saved position to GPIO.
 
+use anyhow::{Context, Result};
 use std::collections::HashMap;
+use std::fs;
+use std::path::Path;
 use tokio::sync::Mutex;
 
 use crate::core::Channel;
@@ -8,8 +13,10 @@ use crate::hap::runtime::{CharacteristicEvent, CharacteristicId};
 use crate::homekit::accessory_db::{
     IID_CURRENT_POSITION, IID_POSITION_STATE, IID_TARGET_POSITION, POSITION_STATE_STOPPED,
 };
-use crate::homekit::positions;
+use crate::persist::{self, atomic_save_bytes};
 use serde_json::json;
+
+const POSITIONS_FILE: &str = "positions.json";
 
 #[derive(Copy, Clone, Debug)]
 pub struct Blind {
@@ -82,7 +89,7 @@ pub struct PositionCache {
 impl PositionCache {
     pub fn new() -> Self {
         Self {
-            positions: Mutex::new(positions::load()),
+            positions: Mutex::new(load_positions()),
             persist: true,
         }
     }
@@ -168,7 +175,7 @@ impl PositionCache {
         positions: &HashMap<u64, u8>,
     ) -> Vec<CharacteristicEvent> {
         if self.persist {
-            if let Err(e) = positions::save(positions) {
+            if let Err(e) = save_positions(positions) {
                 tracing::warn!("failed to persist positions: {e}");
             }
         }
@@ -177,6 +184,45 @@ impl PositionCache {
             .flat_map(|(aid, pos)| position_events(*aid, *pos))
             .collect()
     }
+}
+
+fn load_positions() -> HashMap<u64, u8> {
+    load_positions_from(&persist::state_dir().join(POSITIONS_FILE))
+}
+
+fn save_positions(positions: &HashMap<u64, u8>) -> Result<()> {
+    let dir = persist::state_dir();
+    fs::create_dir_all(&dir)
+        .with_context(|| format!("creating state directory {}", dir.display()))?;
+    save_positions_to(&dir.join(POSITIONS_FILE), positions)
+}
+
+fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
+    let text = match fs::read_to_string(path) {
+        Ok(t) => t,
+        Err(_) => return HashMap::new(),
+    };
+    let raw: HashMap<String, u8> = match serde_json::from_str(&text) {
+        Ok(m) => m,
+        Err(e) => {
+            tracing::warn!("ignoring malformed {}: {}", path.display(), e);
+            return HashMap::new();
+        }
+    };
+    raw.into_iter()
+        .filter_map(|(k, v)| {
+            let aid = k.parse::<u64>().ok()?;
+            let snapped = if v >= 50 { 100 } else { 0 };
+            Some((aid, snapped))
+        })
+        .collect()
+}
+
+fn save_positions_to(path: &Path, positions: &HashMap<u64, u8>) -> Result<()> {
+    let stringified: HashMap<String, u8> =
+        positions.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+    let bytes = serde_json::to_vec_pretty(&stringified)?;
+    atomic_save_bytes(path, &bytes, false)
 }
 
 pub fn effective_position(positions: &HashMap<u64, u8>, aid: u64) -> u8 {
@@ -227,5 +273,26 @@ mod tests {
         assert!(events
             .iter()
             .any(|e| e.id == CharacteristicId::new(2, IID_CURRENT_POSITION)));
+    }
+
+    #[test]
+    fn positions_file_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(POSITIONS_FILE);
+        let mut original = HashMap::new();
+        original.insert(2u64, 0u8);
+        original.insert(3u64, 100u8);
+        original.insert(6u64, 0u8);
+        save_positions_to(&path, &original).unwrap();
+        let loaded = load_positions_from(&path);
+        assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn missing_positions_file_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(POSITIONS_FILE);
+        let loaded = load_positions_from(&path);
+        assert!(loaded.is_empty());
     }
 }
