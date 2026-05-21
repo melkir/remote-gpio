@@ -23,6 +23,16 @@ use tower_http::trace::TraceLayer;
 /// Application state shared across all routes
 pub struct AppState {
     pub blinds: Arc<BlindService>,
+    command_semaphore: Arc<tokio::sync::Semaphore>,
+}
+
+impl AppState {
+    pub fn new(blinds: Arc<BlindService>) -> Self {
+        Self {
+            blinds,
+            command_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
+        }
+    }
 }
 
 /// Wire-format command payload for HTTP and WebSocket endpoints.
@@ -99,6 +109,9 @@ async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
+    let Ok(_permit) = state.command_semaphore.acquire().await else {
+        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+    };
     match execute_command(&state, payload).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),

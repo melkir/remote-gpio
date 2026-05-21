@@ -20,7 +20,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         Arc::new(BlindController::with_driver(resolved_config.config.driver_config()).await?);
     let blinds = Arc::new(BlindService::new(controller.clone(), driver_kind));
     let bind = resolved_config.config.server.bind.clone();
-    let shared_state = Arc::new(AppState { blinds });
+    let shared_state = Arc::new(AppState::new(blinds));
 
     let hap_handles = if resolved_config.config.homekit {
         match homekit::start(controller).await {
