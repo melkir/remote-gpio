@@ -42,6 +42,40 @@ pub(super) enum OutboundResponse {
     },
 }
 
+impl OutboundResponse {
+    fn unauthorized() -> Self {
+        Self::Status(StatusCode::UNAUTHORIZED)
+    }
+
+    fn hap_json(body: Vec<u8>) -> Self {
+        Self::Body {
+            status: StatusCode::OK,
+            content_type: "application/hap+json",
+            body,
+        }
+    }
+
+    fn pairing_tlv(body: Vec<u8>) -> Self {
+        Self::Body {
+            status: StatusCode::OK,
+            content_type: "application/pairing+tlv8",
+            body,
+        }
+    }
+
+    fn no_content() -> Self {
+        Self::Status(StatusCode::NO_CONTENT)
+    }
+
+    fn multi_status(statuses: Vec<CharacteristicWriteStatus>) -> Self {
+        Self::Body {
+            status: StatusCode::MULTI_STATUS,
+            content_type: "application/hap+json",
+            body: write_statuses_body(statuses),
+        }
+    }
+}
+
 pub(super) async fn handle_request<A, S>(
     req: RawRequest,
     ctx: &HapRuntime<A, S>,
@@ -57,22 +91,14 @@ where
         ("POST", "/pair-verify") => handle_pair_verify(ctx, conn, &req.body).await,
         ("GET", "/accessories") => {
             if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::Status(
-                    StatusCode::UNAUTHORIZED,
-                )));
+                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
             }
             let body = serde_json::to_vec(&ctx.app.accessories().await?)?;
-            Ok(RequestOutcome::response(OutboundResponse::Body {
-                status: StatusCode::OK,
-                content_type: "application/hap+json",
-                body,
-            }))
+            Ok(RequestOutcome::response(OutboundResponse::hap_json(body)))
         }
         ("GET", "/characteristics") => {
             if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::Status(
-                    StatusCode::UNAUTHORIZED,
-                )));
+                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
             }
             let ids = req.query_param("id").unwrap_or_default();
             let ids = match parse_characteristic_ids(&ids) {
@@ -82,36 +108,22 @@ where
                         CharacteristicId::new(0, 0),
                         status,
                     )]);
-                    return Ok(RequestOutcome::response(OutboundResponse::Body {
-                        status: StatusCode::OK,
-                        content_type: "application/hap+json",
-                        body,
-                    }));
+                    return Ok(RequestOutcome::response(OutboundResponse::hap_json(body)));
                 }
             };
             let body = handle_get_characteristics(ctx.app.as_ref(), &ids).await?;
-            Ok(RequestOutcome::response(OutboundResponse::Body {
-                status: StatusCode::OK,
-                content_type: "application/hap+json",
-                body,
-            }))
+            Ok(RequestOutcome::response(OutboundResponse::hap_json(body)))
         }
         ("PUT", "/characteristics") => {
             if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::Status(
-                    StatusCode::UNAUTHORIZED,
-                )));
+                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
             }
             match handle_put_characteristics(ctx.app.as_ref(), &req.body, &mut conn.subs).await {
                 Ok(write) => {
                     let response = if write.all_success() {
-                        OutboundResponse::Status(StatusCode::NO_CONTENT)
+                        OutboundResponse::no_content()
                     } else {
-                        OutboundResponse::Body {
-                            status: StatusCode::MULTI_STATUS,
-                            content_type: "application/hap+json",
-                            body: write_statuses_body(write.statuses),
-                        }
+                        OutboundResponse::multi_status(write.statuses)
                     };
                     Ok(RequestOutcome {
                         response,
@@ -128,16 +140,12 @@ where
         }
         ("POST", "/pairings") => {
             if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::Status(
-                    StatusCode::UNAUTHORIZED,
-                )));
+                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
             }
             let body = handle_pairings(ctx, conn.controller_id.as_deref(), &req.body).await;
-            Ok(RequestOutcome::response(OutboundResponse::Body {
-                status: StatusCode::OK,
-                content_type: "application/pairing+tlv8",
+            Ok(RequestOutcome::response(OutboundResponse::pairing_tlv(
                 body,
-            }))
+            )))
         }
         (method, path) => {
             tracing::warn!("hap: unhandled {method} {path}");
@@ -170,11 +178,9 @@ where
             error_tlv(6, HapError::Unknown)
         }
     };
-    Ok(RequestOutcome::response(OutboundResponse::Body {
-        status: StatusCode::OK,
-        content_type: "application/pairing+tlv8",
+    Ok(RequestOutcome::response(OutboundResponse::pairing_tlv(
         body,
-    }))
+    )))
 }
 
 async fn handle_pair_verify<A, S>(
@@ -190,11 +196,9 @@ where
     let outcome = conn.pair_verify.handle(body, &state);
     drop(state);
     match outcome {
-        HandleOutcome::Reply(body) => Ok(RequestOutcome::response(OutboundResponse::Body {
-            status: StatusCode::OK,
-            content_type: "application/pairing+tlv8",
+        HandleOutcome::Reply(body) => Ok(RequestOutcome::response(OutboundResponse::pairing_tlv(
             body,
-        })),
+        ))),
         HandleOutcome::Verified {
             reply,
             shared_secret,

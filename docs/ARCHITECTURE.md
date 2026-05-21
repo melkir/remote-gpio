@@ -52,7 +52,7 @@ other targets default to `fake`.
 | Telis GPIO     | `src/gpio.rs`    | Linux GPIO input/output mapping and LED debounce logic for the Telis driver.                   |
 | RTS protocol   | `src/rts/*`      | RTS frame encoder, rolling-code state, waveform builder, pigpiod socket client, CC1101 driver. |
 | HAP core       | `src/hap/*`      | Generic HAP protocol pieces: TLV, SRP, pair setup/verify, session encryption, HTTP framing.    |
-| HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, state paths, position cache, HAP startup.   |
+| HomeKit app    | `src/homekit/*`  | Somfy-specific HomeKit wiring: accessory database, target-write planning, position cache, HAP startup. |
 | CLI commands   | `src/commands/*` | Install, upgrade, doctor, serve, remote, logs, config, and HomeKit commands.                   |
 
 The important boundaries are `hap` versus `homekit` (protocol vs project), and
@@ -114,6 +114,10 @@ is in flight.
 4. Create `SomfyHapApp`, the Somfy-specific implementation of the HAP runtime trait.
 5. Start the generic HAP TCP server.
 6. Listen for `PositionUpdate` events from `RemoteControl` and mirror them into HomeKit events.
+
+`src/homekit/somfy.rs` stays as the HAP adapter. It delegates persisted blind
+position updates to `position_cache.rs` and HomeKit `TargetPosition` write
+normalization/coalescing to `target_writes.rs`.
 
 HomeKit has no direct physical position feedback from the blinds. The app keeps
 a best-effort cache:
@@ -177,6 +181,6 @@ automation associations.
 
 1. `src/remote.rs` for the command and concurrency model.
 2. `src/server.rs` for the web API, SSE stream, and WebSocket flow.
-3. `src/homekit/somfy.rs` for the HomeKit accessory model.
-4. `src/hap/server.rs` for the HAP request/session loop.
+3. `src/homekit/somfy.rs` for the HomeKit adapter, then `src/homekit/target_writes.rs` for write planning.
+4. `src/hap/server/mod.rs` and `src/hap/server/handlers.rs` for the HAP request/session loop.
 5. `docs/HARDWARE.md` for GPIO wiring and debounce details.
