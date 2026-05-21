@@ -17,7 +17,7 @@ use crate::hap::runtime::{
 use crate::homekit::position_cache::{PositionCache, SnappedPosition};
 use crate::homekit::reads::{build_accessories, read_characteristic};
 use crate::homekit::target_writes::{grouped_all_target, plan_target_writes, PendingTargetWrite};
-use crate::remote::{PositionUpdate, RemoteControl};
+use crate::remote::{Command, PositionUpdate, RemoteControl};
 
 pub struct SomfyHapApp {
     remote_control: Arc<RemoteControl>,
@@ -83,7 +83,7 @@ impl SomfyHapApp {
         }
 
         self.remote_control
-            .execute_on(Channel::ALL, snapped.command())
+            .execute_on(Channel::ALL, command_for_snapped(snapped))
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -104,7 +104,7 @@ impl SomfyHapApp {
         }
 
         self.remote_control
-            .execute_on(target.blind.channel, target.snapped.command())
+            .execute_on(target.blind.channel, command_for_snapped(target.snapped))
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -168,6 +168,13 @@ impl HapAccessoryApp for SomfyHapApp {
             outcome.statuses = statuses.into_iter().flatten().collect();
             Ok(outcome)
         })
+    }
+}
+
+fn command_for_snapped(snapped: SnappedPosition) -> Command {
+    match snapped {
+        SnappedPosition::Open => Command::Up,
+        SnappedPosition::Closed => Command::Down,
     }
 }
 

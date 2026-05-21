@@ -10,7 +10,6 @@ use crate::homekit::accessory_db::{
 };
 use crate::homekit::blinds::{find_blind, Blind, BLINDS};
 use crate::homekit::positions;
-use crate::remote::Command;
 use serde_json::json;
 
 /// HomeKit blind position after snapping a 0–100 request to an endpoint.
@@ -33,13 +32,6 @@ impl SnappedPosition {
         match self {
             Self::Closed => 0,
             Self::Open => 100,
-        }
-    }
-
-    pub(crate) fn command(self) -> Command {
-        match self {
-            Self::Open => Command::Up,
-            Self::Closed => Command::Down,
         }
     }
 }
