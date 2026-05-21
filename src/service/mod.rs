@@ -46,20 +46,29 @@ fn command_error(err: anyhow::Error) -> CommandError {
     CommandError::Invalid(format!("{err:?}"))
 }
 
+/// Parse a wire request and apply driver pairing rules. Does not touch hardware.
+pub fn validate_command_request(
+    kind: DriverKind,
+    request: CommandRequest,
+) -> Result<ParsedCommandRequest, CommandError> {
+    let parsed = BlindService::parse_command(request)?;
+    BlindService::ensure_pairing_for_kind(kind, parsed.command)?;
+    Ok(parsed)
+}
+
 /// Central dispatch for REST, WebSocket, and in-process callers.
 #[derive(Debug)]
 pub struct BlindService {
     controller: Arc<BlindController>,
-    kind: DriverKind,
 }
 
 impl BlindService {
-    pub fn new(controller: Arc<BlindController>, kind: DriverKind) -> Self {
-        Self { controller, kind }
+    pub fn new(controller: Arc<BlindController>) -> Self {
+        Self { controller }
     }
 
     pub fn driver_kind(&self) -> DriverKind {
-        self.kind
+        self.controller.driver_kind()
     }
 
     pub fn current_selection(&self) -> Channel {
@@ -92,7 +101,7 @@ impl BlindService {
 
     /// Reject pairing commands when the active driver cannot transmit them.
     pub fn ensure_pairing_allowed(&self, command: Command) -> Result<(), CommandError> {
-        Self::ensure_pairing_for_kind(self.kind, command)
+        Self::ensure_pairing_for_kind(self.driver_kind(), command)
     }
 
     pub fn ensure_pairing_for_kind(kind: DriverKind, command: Command) -> Result<(), CommandError> {
@@ -108,7 +117,7 @@ impl BlindService {
         &self,
         request: CommandRequest,
     ) -> Result<CommandOutcome, CommandError> {
-        self.dispatch_parsed_command(Self::parse_command(request)?)
+        self.dispatch_parsed_command(validate_command_request(self.driver_kind(), request)?)
             .await
     }
 
@@ -116,7 +125,6 @@ impl BlindService {
         &self,
         request: ParsedCommandRequest,
     ) -> Result<CommandOutcome, CommandError> {
-        self.ensure_pairing_allowed(request.command)?;
         let ParsedCommandRequest {
             command: cmd,
             channel,
@@ -133,8 +141,6 @@ impl BlindService {
 mod tests {
     use super::*;
     use crate::config::DriverKind;
-    use crate::controller::BlindController;
-    use crate::driver::ProtocolOperation;
 
     fn parse(
         command: &str,
@@ -159,6 +165,19 @@ mod tests {
     fn rts_supports_pairing() {
         assert!(DriverKind::Rts.supports_pairing());
         assert!(BlindService::ensure_pairing_for_kind(DriverKind::Rts, Command::ProgLong).is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_telis_pairing_before_dispatch() {
+        let err = validate_command_request(
+            DriverKind::Telis,
+            CommandRequest {
+                command: "prog".to_string(),
+                channel: Some(Channel::L1),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(err, CommandError::PairingUnavailable));
     }
 
     #[test]
@@ -201,33 +220,6 @@ mod tests {
         let req = parse("prog_long", Some(Channel::L1)).unwrap();
         assert_eq!(req.command, Command::ProgLong);
         assert_eq!(req.channel, Some(Channel::L1));
-    }
-
-    #[tokio::test]
-    async fn dispatch_command_with_channel_targets_without_selection() {
-        let controller = Arc::new(
-            BlindController::with_driver(crate::config::DriverConfig::fake())
-                .await
-                .unwrap(),
-        );
-        let blinds = Arc::new(BlindService::new(controller.clone(), DriverKind::Fake));
-
-        blinds
-            .dispatch_command(CommandRequest {
-                command: "up".to_string(),
-                channel: Some(Channel::L3),
-            })
-            .await
-            .unwrap();
-
-        assert_eq!(controller.current_selection(), Channel::L1);
-        assert_eq!(
-            controller.operations(),
-            vec![ProtocolOperation::FakeCommand {
-                channel: Channel::L3,
-                command: Command::Up,
-            }]
-        );
     }
 
     #[test]

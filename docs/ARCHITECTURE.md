@@ -116,11 +116,11 @@ The system has no motor position sensors. Position is an application-level infer
 
 The driver router is the hardware seam. Every driver exposes the same command operations and selected-channel stream, but each driver has different physical constraints:
 
-| Driver | Architecture Role | State Source |
-| ------ | ----------------- | ------------ |
-| `fake` | Development and CI backend with no hardware effects. | In-memory state. |
-| `telis` | Presses a wired Telis 4 remote and reads LEDs to observe selected channel. | Physical remote LEDs. |
-| `rts` | Acts as five virtual RTS remotes (`L1`-`L4`, `ALL`) through a CC1101 radio. | Persisted RTS state file. |
+| Driver  | Architecture Role                                                           | State Source              |
+| ------- | --------------------------------------------------------------------------- | ------------------------- |
+| `fake`  | Development and CI backend with no hardware effects.                        | In-memory state.          |
+| `telis` | Presses a wired Telis 4 remote and reads LEDs to observe selected channel.  | Physical remote LEDs.     |
+| `rts`   | Acts as five virtual RTS remotes (`L1`-`L4`, `ALL`) through a CC1101 radio. | Persisted RTS state file. |
 
 All drivers are compiled into the binary. The active driver is selected by `/etc/somfy/config.toml` at startup. Pi Linux defaults to Telis if no config exists; other targets default to fake.
 
@@ -201,11 +201,11 @@ These locks are correctness mechanisms, not trust boundaries. They prevent malfo
 
 Runtime state lives under `$STATE_DIRECTORY` when systemd manages the service. Release builds otherwise use `/var/lib/somfy`; debug builds can use local state for development.
 
-| File | Owner | Purpose |
-| ---- | ----- | ------- |
-| `rts.json` | RTS driver | Virtual remote IDs, selected RTS channel, and rolling-code reserves. |
-| `hap.json` | HAP state | HomeKit identity, setup data, long-term key, config number, and pairings. |
-| `positions.json` | HomeKit adapter | Last inferred HomeKit positions for each accessory. |
+| File             | Owner           | Purpose                                                                   |
+| ---------------- | --------------- | ------------------------------------------------------------------------- |
+| `rts.json`       | RTS driver      | Virtual remote IDs, selected RTS channel, and rolling-code reserves.      |
+| `hap.json`       | HAP state       | HomeKit identity, setup data, long-term key, config number, and pairings. |
+| `positions.json` | HomeKit adapter | Last inferred HomeKit positions for each accessory.                       |
 
 State files are written with a temp-file plus atomic rename pattern. Security-sensitive HomeKit state is stored with restrictive permissions. The service does not replay persisted positions into GPIO or RF on startup; position state is for client continuity, not physical reconciliation.
 
@@ -225,32 +225,32 @@ The release artifact is one binary:
 
 ## Architectural Decisions
 
-| Decision | Why It Exists | Tradeoff |
-| -------- | ------------- | -------- |
-| Runtime driver selection | One UI/API can support wired Telis, direct RTS, and development without rebuilding. | Driver-specific behavior must be normalized at the application boundary. |
-| Telis LEDs as selection truth | The physical remote may be changed outside the app, so LEDs are the most accurate state source. | Selection changes require debounce logic and GPIO input wiring. |
-| RTS write-ahead rolling codes | Prevents replay after crashes or partial transmissions. | Crashes can intentionally burn unused reserved codes. |
-| Native HAP server | Removes Homebridge and Node from the appliance. | The repo owns HAP protocol, crypto, pairing, and event semantics. |
-| pigpiod for RTS timing | 640 microsecond Manchester half-symbols need timing outside the async runtime. | The Pi must run a local pigpiod daemon locked to loopback. |
-| Inferred positions | Gives HomeKit and the UI useful state without motor encoders. | State means "last commanded endpoint", not measured blind position. |
+| Decision                      | Why It Exists                                                                                   | Tradeoff                                                                 |
+| ----------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
+| Runtime driver selection      | One UI/API can support wired Telis, direct RTS, and development without rebuilding.             | Driver-specific behavior must be normalized at the application boundary. |
+| Telis LEDs as selection truth | The physical remote may be changed outside the app, so LEDs are the most accurate state source. | Selection changes require debounce logic and GPIO input wiring.          |
+| RTS write-ahead rolling codes | Prevents replay after crashes or partial transmissions.                                         | Crashes can intentionally burn unused reserved codes.                    |
+| Native HAP server             | Removes Homebridge and Node from the appliance.                                                 | The repo owns HAP protocol, crypto, pairing, and event semantics.        |
+| pigpiod for RTS timing        | 640 microsecond Manchester half-symbols need timing outside the async runtime.                  | The Pi must run a local pigpiod daemon locked to loopback.               |
+| Inferred positions            | Gives HomeKit and the UI useful state without motor encoders.                                   | State means "last commanded endpoint", not measured blind position.      |
 
 ## Code Map
 
 This section is a pointer into the implementation, not the architecture itself.
 
-| Area | Primary Paths |
-| ---- | ------------- |
-| CLI and operator commands | `src/cli.rs`, `src/commands/` |
-| HTTP, SSE, WebSocket, static assets | `src/server.rs`, `src/embed.rs` |
-| Request validation and pairing gates | `src/service/` |
-| Operation queue, targeting, position events | `src/controller.rs` |
-| Shared command and channel types | `src/core/` |
-| Config resolution and validation | `src/config.rs` |
-| Driver routing and implementations | `src/driver/`, `src/gpio.rs`, `src/rts/` |
-| HomeKit application adapter | `src/homekit/` |
-| HAP protocol stack | `src/hap/` |
-| Frontend PWA | `app/` |
-| systemd and deployment helpers | `src/systemd.rs`, `src/deploy/`, `assets/` |
+| Area                                        | Primary Paths                              |
+| ------------------------------------------- | ------------------------------------------ |
+| CLI and operator commands                   | `src/cli.rs`, `src/commands/`              |
+| HTTP, SSE, WebSocket, static assets         | `src/server.rs`, `src/embed.rs`            |
+| Request validation and pairing gates        | `src/service/`                             |
+| Operation queue, targeting, position events | `src/controller.rs`                        |
+| Shared command and channel types            | `src/core/`                                |
+| Config resolution and validation            | `src/config.rs`                            |
+| Driver routing and implementations          | `src/driver/`, `src/gpio.rs`, `src/rts/`   |
+| HomeKit application adapter                 | `src/homekit/`                             |
+| HAP protocol stack                          | `src/hap/`                                 |
+| Frontend PWA                                | `app/`                                     |
+| systemd and deployment helpers              | `src/systemd.rs`, `src/deploy/`, `assets/` |
 
 ## Related Docs
 

@@ -1,7 +1,8 @@
 use anyhow::{bail, Result};
 use tokio::sync::{broadcast, Mutex};
 
-use crate::driver::{infer_position, CommandOutcome, CommandRouter, SelectedChannelRx};
+use crate::config::DriverKind;
+use crate::driver::{CommandOutcome, CommandRouter, SelectedChannelRx};
 
 pub use crate::core::{Channel, Command};
 
@@ -15,6 +16,7 @@ pub struct PositionUpdate {
 #[derive(Debug)]
 pub struct BlindController {
     router: CommandRouter,
+    driver_kind: DriverKind,
     operation_lock: Mutex<()>,
     /// Fan-out of completed Up/Down commands. This is a transient event stream
     /// used to mirror inferred blind position into HomeKit.
@@ -23,13 +25,19 @@ pub struct BlindController {
 
 impl BlindController {
     pub async fn with_driver(config: crate::config::DriverConfig) -> Result<Self> {
+        let driver_kind = config.kind;
         let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             router,
+            driver_kind,
             operation_lock: Mutex::new(()),
             position_tx,
         })
+    }
+
+    pub fn driver_kind(&self) -> DriverKind {
+        self.driver_kind
     }
 
     /// Return the latest known channel selector state.
@@ -105,6 +113,14 @@ impl BlindController {
     }
 }
 
+fn infer_position(command: Command) -> Option<u8> {
+    match command {
+        Command::Up => Some(100),
+        Command::Down => Some(0),
+        Command::Stop | Command::Select | Command::Prog | Command::ProgLong => None,
+    }
+}
+
 fn fan_out_channels(channel: Channel) -> &'static [Channel] {
     match channel {
         Channel::ALL => &[
@@ -126,6 +142,15 @@ mod tests {
     use super::*;
     use std::sync::Arc;
     use tokio::time::{timeout, Duration};
+
+    #[test]
+    fn position_inference_only_tracks_directional_extremes() {
+        assert_eq!(infer_position(Command::Up), Some(100));
+        assert_eq!(infer_position(Command::Down), Some(0));
+        assert_eq!(infer_position(Command::Stop), None);
+        assert_eq!(infer_position(Command::Select), None);
+        assert_eq!(infer_position(Command::Prog), None);
+    }
 
     #[test]
     fn fan_out_targets_only_self_for_single_channels() {
@@ -159,6 +184,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(controller.current_selection(), Channel::L1);
+        assert_eq!(controller.driver_kind(), DriverKind::Fake);
         assert_eq!(
             controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {

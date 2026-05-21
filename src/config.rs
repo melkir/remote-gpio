@@ -4,7 +4,6 @@ use anyhow::{bail, Context, Result};
 use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
@@ -138,7 +137,6 @@ impl DriverConfig {
 pub struct AppConfig {
     pub driver: DriverKind,
     pub homekit: bool,
-    pub server: ServerOptions,
     pub gpio: GpioOptions,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
@@ -149,25 +147,9 @@ impl Default for AppConfig {
         Self {
             driver: DriverKind::default_for_target(),
             homekit: false,
-            server: ServerOptions::default(),
             gpio: GpioOptions::default(),
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
-        }
-    }
-}
-
-/// HTTP bind address for the web UI and API.
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default, deny_unknown_fields)]
-pub struct ServerOptions {
-    pub bind: String,
-}
-
-impl Default for ServerOptions {
-    fn default() -> Self {
-        Self {
-            bind: "127.0.0.1:5002".to_string(),
         }
     }
 }
@@ -222,13 +204,6 @@ pub fn to_toml(config: &AppConfig) -> Result<String> {
 }
 
 pub fn validate(config: &AppConfig) -> Result<()> {
-    config.server.bind.parse::<SocketAddr>().with_context(|| {
-        format!(
-            "server.bind must be an IP socket address, got `{}`",
-            config.server.bind
-        )
-    })?;
-
     if config.rts.gpio.gdo0 > MAX_BCM_GPIO {
         bail!("rts.gpio.gdo0 must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
     }
@@ -272,13 +247,6 @@ homekit = false
     }
 
     #[test]
-    fn server_bind_defaults_to_loopback() {
-        let config: AppConfig = toml::from_str("driver = \"fake\"\n").unwrap();
-        assert_eq!(config.server.bind, "127.0.0.1:5002");
-        validate(&config).unwrap();
-    }
-
-    #[test]
     fn resolve_accepts_minimal_fake_config() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("config.toml");
@@ -299,20 +267,6 @@ homekit = false
             err.to_string().contains("parsing"),
             "expected TOML parse failure: {err}"
         );
-    }
-
-    #[test]
-    fn validates_server_bind_address() {
-        let mut config = AppConfig {
-            server: ServerOptions {
-                bind: "not-a-socket".into(),
-            },
-            ..AppConfig::default()
-        };
-        assert!(validate(&config).is_err());
-
-        config.server.bind = "0.0.0.0:5002".into();
-        validate(&config).unwrap();
     }
 
     #[test]

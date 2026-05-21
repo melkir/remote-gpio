@@ -6,7 +6,7 @@ use super::Status;
 use crate::config::RtsOptions;
 use crate::driver::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
-use crate::homekit::config;
+use crate::persist;
 
 pub fn gpio_chip(options: &GpioOptions) -> Check {
     readable_file("gpio_chip_accessible", "GPIO", &options.chip)
@@ -56,7 +56,7 @@ fn pigpiod() -> Check {
 }
 
 fn rts_state_file() -> Check {
-    let path = config::state_dir().join(crate::rts::state::STATE_FILE);
+    let path = persist::state_dir().join(crate::rts::state::STATE_FILE);
     let display = path.display().to_string();
     if !path.exists() {
         return Check::new("rts_state_file", "RTS state")

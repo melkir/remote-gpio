@@ -9,7 +9,7 @@ use crate::deploy::{
     atomic_write_if_changed, command_exists, enable_somfy, require_root, restart_somfy,
     run_command, BIN_PATH, BIN_PREV, UNIT_PATH,
 };
-use crate::homekit::config;
+use crate::persist;
 use crate::systemd;
 
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
@@ -255,9 +255,9 @@ fn install_polkit_rule() -> Result<()> {
 }
 
 fn prepare_state_dir(user: &nix::unistd::User) -> Result<()> {
-    let dir = Path::new(config::SYSTEM_STATE_DIR);
+    let dir = Path::new(persist::SYSTEM_STATE_DIR);
     fs::create_dir_all(dir)
-        .with_context(|| format!("creating HomeKit state directory {}", dir.display()))?;
+        .with_context(|| format!("creating state directory {}", dir.display()))?;
     fs::set_permissions(dir, fs::Permissions::from_mode(0o700))
         .with_context(|| format!("setting permissions on {}", dir.display()))?;
     chown_path(dir, user).with_context(|| format!("setting owner on {}", dir.display()))?;

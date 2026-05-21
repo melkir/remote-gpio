@@ -33,12 +33,7 @@ pub(crate) enum ProtocolOperation {
 }
 
 #[derive(Debug)]
-pub(crate) struct CommandRouter {
-    executor: DriverExecutor,
-}
-
-#[derive(Debug)]
-enum DriverExecutor {
+pub(crate) enum CommandRouter {
     Fake(FakeDriver),
     Telis(TelisDriver),
     Rts(Box<RtsDriver>),
@@ -46,84 +41,63 @@ enum DriverExecutor {
 
 impl CommandRouter {
     pub async fn new(config: DriverConfig) -> Result<Self> {
-        let executor = match config.kind {
-            DriverKind::Fake => DriverExecutor::Fake(FakeDriver::new(Channel::L1)),
-            DriverKind::Telis => {
-                DriverExecutor::Telis(TelisDriver::new(config.gpio, config.telis).await?)
-            }
-            DriverKind::Rts => DriverExecutor::Rts(Box::new(RtsDriver::new(config.rts).await?)),
-        };
-
-        Ok(Self { executor })
+        Ok(match config.kind {
+            DriverKind::Fake => Self::Fake(FakeDriver::new(Channel::L1)),
+            DriverKind::Telis => Self::Telis(TelisDriver::new(config.gpio, config.telis).await?),
+            DriverKind::Rts => Self::Rts(Box::new(RtsDriver::new(config.rts).await?)),
+        })
     }
 
     /// UI-style command dispatch. Telis/Fake may use `channel` to select or target
     /// before acting; RTS uses persisted selection for directional commands (use
     /// [`Self::execute_on`] to transmit on a specific channel without selecting).
     pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
-        match &self.executor {
-            DriverExecutor::Fake(driver) => driver.execute(command, channel).await,
-            DriverExecutor::Telis(driver) => driver.execute(command, channel).await,
-            DriverExecutor::Rts(driver) => driver.execute(command, channel).await,
+        match self {
+            Self::Fake(driver) => driver.execute(command, channel).await,
+            Self::Telis(driver) => driver.execute(command, channel).await,
+            Self::Rts(driver) => driver.execute(command, channel).await,
         }
     }
 
     /// Send `command` on `channel`. Native for RTS (addressed RF); Telis selects
     /// the physical LED row first; Fake records the target channel directly.
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
-        match &self.executor {
-            DriverExecutor::Fake(driver) => driver.execute_on(channel, command).await,
-            DriverExecutor::Telis(driver) => driver.execute_on(channel, command).await,
-            DriverExecutor::Rts(driver) => driver.execute_on(channel, command).await,
+        match self {
+            Self::Fake(driver) => driver.execute_on(channel, command).await,
+            Self::Telis(driver) => driver.execute_on(channel, command).await,
+            Self::Rts(driver) => driver.execute_on(channel, command).await,
         }
     }
 
     pub fn selected_channel(&self) -> Channel {
-        match &self.executor {
-            DriverExecutor::Fake(driver) => driver.selected_channel(),
-            DriverExecutor::Telis(driver) => driver.selected_channel(),
-            DriverExecutor::Rts(driver) => driver.selected_channel(),
+        match self {
+            Self::Fake(driver) => driver.selected_channel(),
+            Self::Telis(driver) => driver.selected_channel(),
+            Self::Rts(driver) => driver.selected_channel(),
         }
     }
 
     pub fn subscribe_selected_channel(&self) -> SelectedChannelRx {
-        match &self.executor {
-            DriverExecutor::Fake(driver) => driver.subscribe_selected_channel(),
-            DriverExecutor::Telis(driver) => driver.subscribe_selected_channel(),
-            DriverExecutor::Rts(driver) => driver.subscribe_selected_channel(),
+        match self {
+            Self::Fake(driver) => driver.subscribe_selected_channel(),
+            Self::Telis(driver) => driver.subscribe_selected_channel(),
+            Self::Rts(driver) => driver.subscribe_selected_channel(),
         }
     }
 
     #[cfg(test)]
     pub(crate) fn operations(&self) -> Vec<ProtocolOperation> {
-        match &self.executor {
-            DriverExecutor::Fake(driver) => driver.operations(),
+        match self {
+            Self::Fake(driver) => driver.operations(),
             #[allow(unreachable_patterns)]
             _ => unreachable!("operations() requires the fake driver"),
         }
     }
 }
 
-pub fn infer_position(command: Command) -> Option<u8> {
-    match command {
-        Command::Up => Some(100),
-        Command::Down => Some(0),
-        Command::Stop | Command::Select | Command::Prog | Command::ProgLong => None,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn position_inference_only_tracks_directional_extremes() {
-        assert_eq!(infer_position(Command::Up), Some(100));
-        assert_eq!(infer_position(Command::Down), Some(0));
-        assert_eq!(infer_position(Command::Stop), None);
-        assert_eq!(infer_position(Command::Select), None);
-        assert_eq!(infer_position(Command::Prog), None);
-    }
 
     #[tokio::test]
     async fn rts_prog_transmits_pairing_waveform_without_changing_selection() {
@@ -166,9 +140,7 @@ mod tests {
         )
         .await
         .unwrap();
-        let router = CommandRouter {
-            executor: DriverExecutor::Rts(Box::new(rts_driver)),
-        };
+        let router = CommandRouter::Rts(Box::new(rts_driver));
 
         router.execute_on(Channel::L3, Command::Prog).await.unwrap();
 

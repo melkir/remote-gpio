@@ -15,11 +15,9 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         bail!("doctor reported blocking failures; refusing to start");
     }
 
-    let driver_kind = resolved_config.config.driver;
     let controller =
         Arc::new(BlindController::with_driver(resolved_config.config.driver_config()).await?);
-    let blinds = Arc::new(BlindService::new(controller.clone(), driver_kind));
-    let bind = resolved_config.config.server.bind.clone();
+    let blinds = Arc::new(BlindService::new(controller.clone()));
     let shared_state = Arc::new(AppState::new(blinds));
 
     let hap_handles = if resolved_config.config.homekit {
@@ -38,7 +36,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
     };
 
     tokio::select! {
-        res = serve(shared_state, &bind) => res,
+        res = serve(shared_state) => res,
         sig = wait_for_shutdown() => {
             tracing::info!("received {sig}, shutting down");
             if let Some(handles) = hap_handles {
