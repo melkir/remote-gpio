@@ -133,11 +133,12 @@ mod platform {
     pub async fn watch_inputs(chip: &str, config: &TelisGpioOptions) -> Result<Channel> {
         let offsets: Vec<u32> = Channel::INDIVIDUALS
             .iter()
-            .map(|ch| {
-                ch.led_gpio(config)
-                    .expect("individual channels have LED GPIO") as u32
-            })
+            .filter_map(|ch| ch.led_gpio(config))
+            .map(u32::from)
             .collect();
+        if offsets.len() != Channel::INDIVIDUALS.len() {
+            anyhow::bail!("missing Telis LED GPIO mapping for one or more channels");
+        }
 
         let req = Request::builder()
             .on_chip(chip)
