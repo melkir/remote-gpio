@@ -97,7 +97,16 @@ mod tests {
     #[test]
     fn server_runtime_layer_does_not_import_somfy_modules() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hap/server");
-        for name in ["mod.rs", "handlers.rs", "transport.rs", "state.rs"] {
+        let files = [
+            "mod.rs",
+            "transport.rs",
+            "state.rs",
+            "handlers/mod.rs",
+            "handlers/characteristics.rs",
+            "handlers/events.rs",
+            "handlers/pairing.rs",
+        ];
+        for name in files {
             let source = std::fs::read_to_string(format!("{root}/{name}")).unwrap();
             assert!(!source.contains(concat!("crate::", "gpio")), "{name}");
             assert!(!source.contains(concat!("crate::", "remote")), "{name}");

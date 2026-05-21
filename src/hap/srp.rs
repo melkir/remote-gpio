@@ -28,6 +28,7 @@ const G_VAL: u32 = 5;
 const USERNAME: &[u8] = b"Pair-Setup";
 
 fn group_n() -> BigUint {
+    #[expect(clippy::expect_used, reason = "RFC 5054 N constant is valid hex")]
     BigUint::parse_bytes(N_HEX.as_bytes(), 16).expect("valid N constant")
 }
 

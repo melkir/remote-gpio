@@ -1,19 +1,25 @@
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
 use serde::Serialize;
+use std::path::PathBuf;
 
 use crate::cli::RemoteCommand;
+use crate::config;
+use crate::driver::{DriverKind, TELIS_PROG_UNAVAILABLE};
 use crate::gpio::Channel;
 
 const SERVICE_BASE_URL: &str = "http://127.0.0.1:5002";
 
-pub async fn run(command: RemoteCommand) -> Result<()> {
+pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
     match command {
         RemoteCommand::Up { channel } => post_command("up", channel, false).await,
         RemoteCommand::Down { channel } => post_command("down", channel, false).await,
         RemoteCommand::Stop { channel } => post_command("stop", channel, false).await,
         RemoteCommand::Select { channel } => post_command("select", Some(channel), false).await,
-        RemoteCommand::Prog { channel, long } => post_command("prog", Some(channel), long).await,
+        RemoteCommand::Prog { channel, long } => {
+            ensure_prog_driver(config_path)?;
+            post_command("prog", Some(channel), long).await
+        }
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,
     }
@@ -26,6 +32,14 @@ struct CommandRequest {
     channel: Option<Channel>,
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     long: bool,
+}
+
+fn ensure_prog_driver(config_path: Option<PathBuf>) -> Result<()> {
+    let resolved = config::resolve(config_path)?;
+    if resolved.config.driver == DriverKind::Telis {
+        bail!("{TELIS_PROG_UNAVAILABLE}");
+    }
+    Ok(())
 }
 
 async fn post_command(command: &'static str, channel: Option<Channel>, long: bool) -> Result<()> {

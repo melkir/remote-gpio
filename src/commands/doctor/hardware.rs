@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use super::check::{read_write_file, readable_file, Check};
 use super::Status;
-use crate::driver::{pigpiod_addrs, RtsOptions, PIGPIOD_ADDR};
+use crate::driver::{pigpiod_addr_list, pigpiod_addrs, RtsOptions, PIGPIOD_PORT};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 use crate::homekit::config;
 
@@ -22,7 +22,10 @@ pub fn rts_checks(options: &RtsOptions) -> Vec<Check> {
         read_write_file("rts_spi_device", "RTS SPI", &options.spi_device),
         rts_gdo0(options.gpio.gdo0),
         pigpiod(),
-        Check::new("pigpiod_localhost_only", "pigpiod local").detail("fixed local endpoint"),
+        Check::new("pigpiod_localhost_only", "pigpiod local").detail(format!(
+            "loopback only ({}, port {PIGPIOD_PORT})",
+            pigpiod_addr_list()
+        )),
         rts_state_file(),
     ]
 }
@@ -47,7 +50,7 @@ fn pigpiod() -> Check {
         Some(addr) => Check::new("pigpiod", "pigpiod").detail(addr),
         None => Check::new("pigpiod", "pigpiod")
             .status(Status::Blocking)
-            .detail(format!("{PIGPIOD_ADDR}: Connection refused")),
+            .detail(format!("{}: Connection refused", pigpiod_addr_list())),
     }
 }
 

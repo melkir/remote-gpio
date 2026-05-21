@@ -1,7 +1,13 @@
+//! Somfy CLI: drives blinds on a Raspberry Pi via GPIO or RTS radio.
+//!
+//! Uses a single-threaded Tokio runtime so HTTP, WebSocket, and HomeKit work
+//! share one task queue on resource-constrained hardware.
+
 use anyhow::Result;
 use clap::Parser;
 use somfy::cli::{Cli, Command};
 
+/// Single-threaded runtime: blind commands are serialized through the driver layer.
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<()> {
     somfy::logging::init();
@@ -32,7 +38,7 @@ async fn main() -> Result<()> {
         }
         Command::Uninstall => somfy::commands::uninstall::run().await,
         Command::Restart => somfy::commands::restart::run(),
-        Command::Remote { command } => somfy::commands::remote::run(command).await,
+        Command::Remote { command } => somfy::commands::remote::run(command, config_path).await,
         Command::Homekit { command } => {
             let resolved_config = somfy::config::resolve(config_path)?;
             somfy::commands::homekit::run(command, &resolved_config)

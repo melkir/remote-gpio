@@ -6,6 +6,11 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
 
 ### Raspberry Pi ↔ Somfy Telis 4
 
+The Telis path treats the physical remote as the source of truth. The Pi taps
+the Up/Stop/Down/Select contacts and watches the four LED lines to learn which
+channel is selected. It does not use the remote for RTS pairing; `prog` is an
+RTS-driver command.
+
 - **Outputs (Pi → Somfy):** simulate button presses (active-low pulses).
 - **Inputs (Somfy → Pi):** read the LED selection state.
 - **Power:** shared 3.3V and GND — no level shifting needed.
@@ -20,7 +25,6 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
 | 35     | GPIO19 | Output    | STOP        | Stop movement         |
 | 33     | GPIO13 | Output    | DOWN        | Lower blinds          |
 | 31     | GPIO6  | Output    | SELECT      | Select next blind     |
-| 29     | GPIO5  | Output    | PROG        | Optional Prog button  |
 | 40     | GPIO21 | Input     | LED1        | Selection indicator 1 |
 | 38     | GPIO20 | Input     | LED2        | Selection indicator 2 |
 | 36     | GPIO16 | Input     | LED3        | Selection indicator 3 |
@@ -37,7 +41,6 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
   │ Pin 33 (GPIO13)│ ────────────────▶ │ DOWN        │
   │ Pin 35 (GPIO19)│ ────────────────▶ │ STOP        │
   │ Pin 31 (GPIO6) │ ────────────────▶ │ SELECT      │
-  │ Pin 29 (GPIO5) │ ────────────────▶ │ PROG        │
   │ Pin 40 (GPIO21)│ ◀──────────────── │ LED1        │
   │ Pin 38 (GPIO20)│ ◀──────────────── │ LED2        │
   │ Pin 36 (GPIO16)│ ◀──────────────── │ LED3        │
@@ -49,44 +52,17 @@ A deeper look at the two physical setups `somfy` supports — the wired Telis 4 
 
 #### Output Pulses
 
-Outputs are driven as active-low pulses. The code asserts the line for ~60ms, then releases — mimicking a button tap.
-
-```rust
-pub async fn trigger_output(chip: &str, output: Output) -> Result<()> {
-    let req = Request::builder()
-        .on_chip(chip)
-        .with_line(output as u32)
-        .as_output(Value::Active)
-        .as_active_low()
-        .request()?;
-
-    tokio::time::sleep(Duration::from_millis(60)).await;
-    req.set_lone_value(Value::Inactive)?;
-    Ok(())
-}
-```
+Outputs are active-low button taps. The driver asserts the configured GPIO for
+about 60 ms, then releases it, which is long enough for the Telis remote to see a
+press without holding the button. Implementation: `gpio::trigger_output` in
+`src/gpio.rs` (maps `TelisButton` to BCM pins from config).
 
 #### Input Debouncing
 
-The driver watches input lines with edge detection, collecting up to 16 events within a 300ms window:
+The driver watches LED lines with edge detection, collecting up to 16 events within a 300 ms window (`gpio::watch_inputs`):
 
-- **Multiple rapid edges:** selection is `ALL` (group mode — LEDs blink).
-- **Single edge:** maps to `L1`–`L4`.
-
-```rust
-let timeout_duration = Duration::from_millis(300);
-let deadline = tokio::time::Instant::now() + timeout_duration;
-while event_count < 16 {
-    match tokio::time::timeout_at(deadline, events.next()).await {
-        Ok(Some(Ok(event))) => {
-            last_event = Some(event.offset);
-            event_count += 1;
-        }
-        _ => break,
-    };
-}
-// 16+ edges in 300ms = ALL, otherwise map last edge to L1-L4
-```
+- **16+ edges in 300 ms:** selection is `ALL` (group mode — LEDs blink).
+- **Otherwise:** the last edge maps to `L1`–`L4` via `channel_from_gpio`.
 
 ## CC1101 RTS driver
 
@@ -108,69 +84,47 @@ A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
 
 ### Software path
 
-The Pi drives the CC1101 in async serial OOK mode and uses `pigpiod` waveforms to clock the Somfy pulse train onto GDO0. Each press emits four frames (one initial + three repeats), Manchester-encoded with 640 µs half-symbols. `Prog --long` extends the burst to 20 frames so the motor enters pair-listen when the Pi is the master remote.
+`RtsDriver::transmit` follows the same high-level sequence for every press:
 
-```
-RtsDriver::transmit(channel, command)
-  -> reserve rolling code (atomic write to rts.json on block boundaries)
-  -> encode 7-byte RTS frame (key, command/checksum, rolling code BE, remote ID BE)
-  -> obfuscate (XOR cascade)
-  -> build pigpio gpioPulse_t list
-  -> CC1101 SRES + STX
-  -> WVNEW / WVAG / WVCRE / WVTX, poll WVBSY, WVDEL
-  -> CC1101 SIDLE
-  -> commit rolling code in memory
-```
+1. Reserve the next rolling code for the target channel.
+2. Encode and obfuscate the 7-byte RTS frame.
+3. Build a pigpiod waveform on GDO0.
+4. Put the CC1101 into TX while pigpiod clocks the pulse train.
+5. Commit the in-memory rolling code only after a successful transmission.
 
-CC1101, pigpiod TCP, and GDO0 are configured once at driver startup; per-press cost is just waveform upload + transmit. Stale waves from a prior crash are cleared with `WVCLR` during init.
+Frame layout, Manchester timings, and pigpiod commands are kept in
+[RTS_DRIVER.md](RTS_DRIVER.md) so this hardware page can stay focused on setup.
 
-When the resolved config selects the RTS driver, `sudo somfy install`
-provisions the runtime dependency by installing the `pigpio` package, writing a
-systemd drop-in that starts `pigpiod -l`, and enabling `pigpiod`.
+CC1101, pigpiod, and GDO0 are initialized once at driver startup (`WVCLR` clears
+stale waves). With `driver = "rts"`, `sudo somfy install` provisions `pigpiod -l`
+(loopback only).
 
 ### Configuration
 
-Hardware settings should come from built-in defaults or `/etc/somfy/config.toml`,
-not repeated CLI flags or environment variables. Built-in driver defaults are
-target-aware: Raspberry Pi Linux builds select `telis`, while local development
-and CI-style non-Pi builds select `fake`. A config file always wins.
+Settings live in `/etc/somfy/config.toml` (or `--config`). Built-in defaults are
+target-aware: Pi Linux → `telis`, other targets → `fake`. A config file always
+wins, and `somfy config set-driver rts` is the preferred way to switch because
+it also installs/configures RTS prerequisites.
 
-```toml
-driver = "rts"
-homekit = true
-
-[server]
-# Loopback by default. cloudflared can proxy this local endpoint.
-bind = "127.0.0.1:5002"
-
-[rts]
-spi_device = "/dev/spidev0.0"
-
-[rts.gpio]
-gdo0 = 18
-
-[gpio]
-chip = "/dev/gpiochip0"
-
-[telis.gpio]
-up = 26
-stop = 19
-down = 13
-select = 6
-led1 = 21
-led2 = 20
-led3 = 16
-led4 = 12
-# prog = 5
+```bash
+somfy config show   # resolved TOML after validation
+somfy config path
 ```
 
-`somfy doctor` validates SPI access, GDO0 BCM range, local pigpiod
-reachability, and `rts.json` schema. The pigpiod endpoint is fixed to
-`127.0.0.1:8888`; pigpiod is unauthenticated and must stay loopback-only.
+`somfy doctor` checks deployment health (systemd unit, GPIO access, updates, deployed
+SHA) and driver-specific probes (SPI, GDO0, pigpiod on loopback port `8888`,
+`rts.json`). pigpiod is unauthenticated — it must stay loopback-only
+(`pigpiod -l`).
 
 ### Pairing
 
-Each channel is paired independently. Two flows depending on whether you have an existing real Somfy remote.
+Pairing requires `driver = "rts"` in config (`somfy config set-driver rts`). The
+Telis driver does not implement `prog`; if you are using the wired Telis setup,
+put the motor into pair-listen with a physical Somfy remote. If the Pi is meant
+to be the master RTS remote, use `--long`.
+
+Each channel is paired independently. There are two useful flows depending on
+whether you already have a paired remote.
 
 **Adding the Pi as a new remote (recommended).** Long-press the PROG button on an already-paired remote until the motor jogs (~5 s). Then within 2 minutes:
 
@@ -181,19 +135,21 @@ somfy remote up L1   # confirm direction
 
 The short 4-frame `prog` is enough — the motor is already in pair-listen.
 
-**Pi as the only / master remote.** When you do not have another paired remote, the Pi has to put the motor into pair-listen itself. Use `--long`, which extends the burst to 20 frames (above the empirical ~14-frame floor receivers need):
+**Pi as the only / master remote.** When you do not have another paired remote,
+the Pi has to put the motor into pair-listen itself. Use `--long`, which extends
+the burst to 20 frames:
 
 ```bash
 somfy remote prog L1 --long
 somfy remote up L1   # confirm direction
 ```
 
-The motor jogs to acknowledge it has registered the channel. Run the same command again to unregister.
+The motor jogs to acknowledge it has registered the channel. Run the same command
+again to unregister.
 
 `somfy remote prog <channel>` sends the RTS Prog frame for that virtual channel.
-The command does not press a wired Telis Prog button; without `--long` the motor
-must already be in programming mode (already-paired remote or motor's physical
-Prog control).
+With `driver = "telis"`, the CLI and service return an error pointing you at the
+RTS driver.
 
 `ALL` is a separate virtual remote — pair it with every motor that should react to all-channel commands.
 
@@ -238,7 +194,7 @@ The CC1101 register set in `src/rts/cc1101.rs` is a starting point and has **not
 ┌─────────────▼────────────┐ ┌──────────▼──────────────────────┐
 │ Telis 4 wired remote     │ │ CC1101 OOK @ 433.42 MHz         │
 │ Outputs: Up/Stop/Down/   │ │ Pi drives GDO0 with the full    │
-│   Select/Prog (60 ms     │ │ Somfy pulse train (Manchester,  │
+│   Select (60 ms pulses)  │ │ Somfy pulse train (Manchester,  │
 │   active-low pulses)     │ │ 640 µs half-symbols, 4 frames). │
 │ Inputs: LED1–4 with      │ │ Per-channel virtual remote ID + │
 │   300 ms edge debounce   │ │ rolling code in rts.json.       │

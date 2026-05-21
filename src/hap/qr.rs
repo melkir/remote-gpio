@@ -57,6 +57,7 @@ fn encode_base36(mut value: u64, width: usize) -> String {
         *slot = ALPHABET[(value % 36) as usize];
         value /= 36;
     }
+    #[expect(clippy::expect_used, reason = "base36 alphabet and padding are ASCII")]
     String::from_utf8(buf).expect("base36 alphabet is ascii")
 }
 

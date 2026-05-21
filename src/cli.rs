@@ -89,11 +89,11 @@ pub enum RemoteCommand {
     Stop { channel: Option<Channel> },
     /// Select a channel
     Select { channel: Channel },
-    /// Send the programming command for a channel
+    /// Pair or unpair an RTS virtual remote on a channel (requires `driver = "rts"`)
     Prog {
         channel: Channel,
-        /// Send a long-press burst (~20 frames). Use this when the Pi is the
-        /// master remote and needs to put the motor into pair-listen mode.
+        /// Send a long RF burst (~20 frames) so the motor enters pair-listen when
+        /// the Pi is the master remote (RTS driver only).
         #[arg(long)]
         long: bool,
     },

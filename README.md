@@ -28,9 +28,7 @@ Fresh bootstrap:
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Persistent hardware choices live in `/etc/somfy/config.toml` (see [Configuration](docs/HARDWARE.md#configuration)); the default driver is `telis`.
-
-HomeKit pairing is built in — see [HomeKit](#homekit) below.
+The script downloads the latest stable `somfy` binary for `armv7-unknown-linux-gnueabihf.2.31`, drops it in `/usr/local/bin`, and runs `somfy install` to write the systemd unit and start the service. Hardware and driver settings live in `/etc/somfy/config.toml` — see [docs/HARDWARE.md](docs/HARDWARE.md#configuration). The default driver on a Pi is `telis`.
 
 ### Upgrade
 
@@ -38,89 +36,109 @@ HomeKit pairing is built in — see [HomeKit](#homekit) below.
 sudo somfy upgrade
 ```
 
-The upgrade command pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
+Pulls the latest stable release, swaps the binary, refreshes the systemd unit, restarts the service, and rolls back if the new service fails to start.
 
 ### Drivers
 
-`somfy` ships three drivers, selected at runtime by `/etc/somfy/config.toml`:
+`somfy` ships one binary with three drivers. The active driver is chosen at
+startup from `/etc/somfy/config.toml`; changing it restarts the service because
+the hardware stack is constructed once.
 
-| Driver  | Hardware                  | Use case                                               |
-| ------- | ------------------------- | ------------------------------------------------------ |
-| `fake`  | none                      | Local dev — logs commands, no hardware.                |
-| `telis` | wired Pi ↔ Telis 4 remote | Original setup: GPIO drives the physical Telis remote. |
-| `rts`   | CC1101 433.42 MHz radio   | Pi acts as a virtual RTS remote, no Telis 4 needed.    |
-
-Switch driver in one command — rewrites the config, runs any new-driver prereqs (e.g. `pigpiod` for `rts`), and restarts the service:
+Switch drivers with:
 
 ```bash
-somfy config set-driver rts
+somfy config set-driver <fake|telis|rts>
 somfy doctor
 ```
 
-`install` adds the invoking user to the `somfy` group and drops a polkit rule, so day-to-day commands (`config set-driver`, `restart`, `homekit reset`) run without `sudo`. `install` and `upgrade` still need root because they touch `/usr/local/bin/somfy` and `/etc/systemd/system/`.
+`config set-driver` rewrites the config, runs any new-driver prerequisites
+(`pigpiod -l` for RTS), and restarts the unit.
 
-For RTS wiring, CC1101 register notes, and pairing, see [docs/HARDWARE.md](docs/HARDWARE.md#cc1101-rts-driver). Driver behavior shows up in service logs via `somfy logs --debug`.
+| Driver  | Hardware                  | Use case                                           |
+| ------- | ------------------------- | -------------------------------------------------- |
+| `fake`  | none                      | Local dev — logs commands, no hardware.            |
+| `telis` | wired Pi ↔ Telis 4 remote | GPIO drives the physical Telis remote.             |
+| `rts`   | CC1101 433.42 MHz radio   | Virtual RTS remote over the air (pairing, `prog`). |
+
+`install` adds the invoking user to the `somfy` group and installs the polkit
+rule used by day-to-day commands. `install` and `upgrade` still need root because
+they write `/usr/local/bin/somfy` and systemd units.
+
+Wiring, pairing, and bring-up: [docs/HARDWARE.md](docs/HARDWARE.md). Code
+structure: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### API
 
-Server listens on `127.0.0.1:5002` by default. This is compatible with a local tunnel such as cloudflared. To expose the API directly on the LAN, set `[server].bind = "0.0.0.0:5002"` in `/etc/somfy/config.toml`.
+Default bind: `127.0.0.1:5002`, which works well with a local tunnel such as
+cloudflared. Set `[server].bind = "0.0.0.0:5002"` only when you intentionally
+want the API reachable on the LAN.
 
-| Endpoint   | Method    | Description                                  |
-| ---------- | --------- | -------------------------------------------- |
-| `/ws`      | WebSocket | Real-time selection state + accepts commands |
-| `/events`  | GET       | SSE stream of channel selection changes      |
-| `/channel` | GET       | Last channel selection                       |
-| `/command` | POST      | Execute command                              |
+Endpoints:
+
+| Endpoint   | Method    | Description                             |
+| ---------- | --------- | --------------------------------------- |
+| `/events`  | GET       | SSE stream of channel selection changes |
+| `/command` | POST      | Execute command (JSON body)             |
+| `/channel` | GET       | Current channel selection (plain text)  |
+| `/ws`      | WebSocket | Live selection + commands               |
+
+Example commands:
 
 ```json
-{"command": "up"}
-{"command": "down"}
-{"command": "stop"}
-{"command": "up", "channel": "L3"}
-{"command": "select"}
-{"command": "select", "channel": "L3"}
-{"command": "prog", "channel": "L3"}
-{"command": "prog", "channel": "L3", "long": true}
+{"command":"up"}
+{"command":"up","channel":"L3"}
+{"command":"select","channel":"L3"}
+{"command":"prog","channel":"L3","long":true}
 ```
+
+`prog` requires `driver = "rts"` —
+see [RTS pairing](docs/HARDWARE.md#pairing). Request flow and concurrency:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#web-flow).
+
+CLI equivalents: `somfy remote --help`.
 
 ### HomeKit
 
-`somfy serve` runs a native HAP server on port `5010`, advertised via mDNS as a Bridge with one `WindowCovering` per LED selector (`L1`–`L4` + `ALL`). No Homebridge, no plugin, no Node — Siri, the Home app, and HomePod talk directly to the Rust binary.
+HomeKit is built into the Rust binary. The service runs a HAP bridge on port
+`5010`, advertises it with mDNS, and exposes one `WindowCovering` per channel.
+There is no Homebridge or Node process to install.
 
-Pair on first install:
+Pair with:
 
 ```bash
 somfy homekit status
 ```
 
-In the iOS Home app: **Add Accessory → scan the QR code** (or enter the setup code shown by the command). State (paired controllers, last-known position) lives under `/var/lib/somfy/`; `somfy upgrade` preserves it across binary swaps.
+The command prints the QR code and setup code used by the iOS Home app. Other
+pairing commands: `somfy homekit --help`. Protocol and persistence:
+[docs/HAP.md](docs/HAP.md).
 
-For pairing management, reset, and other HomeKit subcommands, ask the installed binary:
+### Configuration
+
+Resolved settings after defaults and validation:
 
 ```bash
-somfy homekit --help
+somfy config show    # full TOML
+somfy config path    # file path
 ```
 
-See [docs/HAP.md](docs/HAP.md) for the protocol implementation, persistence layout, and connection lifecycle.
+Hardware settings belong in config, not repeated CLI flags. That keeps
+`serve`, `doctor`, `install`, and `upgrade` looking at the same source of truth.
 
 ### Versioning
 
 - Push to `main` → CI cross-compiles for armv7 and refreshes a moving `main` prerelease.
-- Push a tag `vX.Y.Z` → CI publishes a stable release plus a `SHA256SUMS` file.
-- The binary embeds its git SHA and build date via `vergen`, so `somfy --version` and `somfy doctor` always report what's actually running.
+- Tag `vX.Y.Z` → stable release + `SHA256SUMS`.
+- `somfy --version` and `somfy doctor` report the embedded git SHA and build date.
 
-Release from a clean, up-to-date `main`:
+Release from a clean `main`: `mise run release --execute`. The Pi upgrades with `sudo somfy upgrade` (CI never SSHs to the device).
 
-```bash
-mise run release --execute
-```
+### Documentation
 
-CI never touches the Pi. Deployment is a pull from the device over SSH.
-
-### More
-
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — codebase tour, drivers, data flow.
-- [docs/HARDWARE.md](docs/HARDWARE.md) — wiring, GPIO timing, RTS bring-up.
-- [docs/RTS_DRIVER.md](docs/RTS_DRIVER.md) — RTS wire format, waveform, pigpiod commands.
-- [docs/HAP.md](docs/HAP.md) — HomeKit accessory protocol details.
-- [CLAUDE.md](CLAUDE.md) — repo layout and patterns for code changes.
+| Doc                                          | Contents                                              |
+| -------------------------------------------- | ----------------------------------------------------- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Code layout, drivers, concurrency, module map         |
+| [docs/HARDWARE.md](docs/HARDWARE.md)         | Wiring, GPIO/RTS setup, pairing, end-to-end data flow |
+| [docs/RTS_DRIVER.md](docs/RTS_DRIVER.md)     | RTS frame format, waveform, pigpiod                   |
+| [docs/HAP.md](docs/HAP.md)                   | HomeKit protocol and pairing lifecycle                |
+| [CLAUDE.md](CLAUDE.md)                       | Contributor/agent conventions                         |

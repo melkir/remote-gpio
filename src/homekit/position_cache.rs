@@ -134,28 +134,28 @@ impl PositionCache {
         snapped: SnappedPosition,
     ) -> Vec<CharacteristicEvent> {
         let mut positions = self.positions.lock().await;
-        if positions.get(&blind.aid).copied() == Some(snapped.as_u8()) {
+        let new_pos = snapped.as_u8();
+        if positions.get(&blind.aid).copied() == Some(new_pos) {
             return Vec::new();
         }
-        let before = positions.clone();
-        positions.insert(blind.aid, snapped.as_u8());
-        self.finish_update(&before, &positions)
+        positions.insert(blind.aid, new_pos);
+        self.finish_update(&[(blind.aid, new_pos)], &positions)
     }
 
     pub async fn apply_all(&self, snapped: SnappedPosition) -> Vec<CharacteristicEvent> {
         let mut positions = self.positions.lock().await;
-        if BLINDS
-            .iter()
-            .all(|blind| positions.get(&blind.aid).copied() == Some(snapped.as_u8()))
-        {
+        let new_pos = snapped.as_u8();
+        let mut changes = Vec::new();
+        for blind in BLINDS {
+            if positions.get(&blind.aid).copied() != Some(new_pos) {
+                positions.insert(blind.aid, new_pos);
+                changes.push((blind.aid, new_pos));
+            }
+        }
+        if changes.is_empty() {
             return Vec::new();
         }
-
-        let before = positions.clone();
-        for blind in BLINDS {
-            positions.insert(blind.aid, snapped.as_u8());
-        }
-        self.finish_update(&before, &positions)
+        self.finish_update(&changes, &positions)
     }
 
     pub async fn get(&self, aid: u64) -> Option<u8> {
@@ -164,7 +164,7 @@ impl PositionCache {
 
     fn finish_update(
         &self,
-        before: &HashMap<u64, u8>,
+        changes: &[(u64, u8)],
         positions: &HashMap<u64, u8>,
     ) -> Vec<CharacteristicEvent> {
         if self.persist {
@@ -172,9 +172,8 @@ impl PositionCache {
                 tracing::warn!("failed to persist positions: {e}");
             }
         }
-        positions
+        changes
             .iter()
-            .filter(|(aid, pos)| before.get(aid) != Some(pos))
             .flat_map(|(aid, pos)| position_events(*aid, *pos))
             .collect()
     }

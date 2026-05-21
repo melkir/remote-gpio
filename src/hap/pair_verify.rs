@@ -80,7 +80,10 @@ impl PairVerifySession {
             Some(b) if b.len() == 32 => b,
             _ => return HandleOutcome::Reply(error_response(2, HapError::Authentication)),
         };
-        let ios_pub_array: [u8; 32] = ios_pub_bytes.try_into().unwrap();
+        let ios_pub_array: [u8; 32] = match ios_pub_bytes.try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => return HandleOutcome::Reply(error_response(2, HapError::Authentication)),
+        };
 
         let accessory_secret = EphemeralSecret::random_from_rng(OsRng);
         let accessory_pub = XPub::from(&accessory_secret);
@@ -208,7 +211,10 @@ impl PairVerifySession {
         info.extend_from_slice(ios_pairing_id);
         info.extend_from_slice(&accessory_pub);
 
-        let sig_array: [u8; 64] = ios_signature.try_into().expect("length checked above");
+        let sig_array: [u8; 64] = match ios_signature.try_into() {
+            Ok(bytes) => bytes,
+            Err(_) => return HandleOutcome::Reply(error_response(4, HapError::Authentication)),
+        };
         let sig = ed25519_dalek::Signature::from_bytes(&sig_array);
         if ltpk.verify(&info, &sig).is_err() {
             tracing::warn!("pair-verify M3 iOS signature failed");

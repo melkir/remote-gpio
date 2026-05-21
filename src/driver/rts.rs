@@ -1,5 +1,5 @@
 use anyhow::{bail, Context, Result};
-use std::net::{IpAddr, SocketAddr, TcpStream};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
@@ -14,14 +14,34 @@ use crate::rts::pigpio::PigpioClient;
 use crate::rts::state::RtsStateStore;
 use crate::rts::waveform;
 
-pub(crate) const PIGPIOD_ADDR: &str = "127.0.0.1:8888";
-const PIGPIOD_ADDR_IPV6: &str = "[::1]:8888";
+/// pigpiod TCP port. The daemon is unauthenticated and must listen on loopback only.
+pub(crate) const PIGPIOD_PORT: u16 = 8888;
 
+/// Loopback socket addresses tried in order (IPv4, then IPv6).
 pub(crate) fn pigpiod_addrs() -> [SocketAddr; 2] {
     [
-        PIGPIOD_ADDR.parse().unwrap(),
-        PIGPIOD_ADDR_IPV6.parse().unwrap(),
+        SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), PIGPIOD_PORT),
+        SocketAddr::new(IpAddr::V6(Ipv6Addr::LOCALHOST), PIGPIOD_PORT),
     ]
+}
+
+pub(crate) fn pigpiod_addr_list() -> String {
+    pigpiod_addrs()
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn assert_pigpiod_endpoints_are_loopback() -> Result<()> {
+    for addr in pigpiod_addrs() {
+        if !addr.ip().is_loopback() {
+            bail!(
+                "internal error: pigpiod endpoint {addr} is not loopback; pigpiod must stay on 127.0.0.1 / ::1 (run `pigpiod -l`)"
+            );
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -41,7 +61,7 @@ impl Hardware {
 
 fn connect_and_init_pigpio(gdo0: u8) -> Result<PigpioClient<TcpStream>> {
     let mut pigpio = PigpioClient::connect(pigpiod_addrs().as_slice())
-        .with_context(|| format!("connecting to pigpiod at {PIGPIOD_ADDR}"))?;
+        .with_context(|| format!("connecting to pigpiod at {}", pigpiod_addr_list()))?;
     pigpio.set_output(gdo0)?;
     pigpio.write_level(gdo0, false)?;
     pigpio.wave_clear()?;
@@ -71,7 +91,7 @@ impl RtsDriver {
                 options.gpio.gdo0
             );
         }
-        require_loopback(PIGPIOD_ADDR)?;
+        assert_pigpiod_endpoints_are_loopback()?;
         let state = RtsStateStore::load_or_init_default()?;
         let selected_channel = state.selected_channel();
         let (sender, selected_rx) = watch::channel(selected_channel);
@@ -126,6 +146,8 @@ impl RtsDriver {
                 let channel = channel.unwrap_or_else(|| self.selected_channel().next());
                 self.set_selected_channel(channel).await
             }
+            // Directional commands use persisted logical selection, not `channel`.
+            // Call [`Self::execute_on`] to transmit on a specific RTS channel.
             Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
                 let channel = self.selected_channel();
                 self.execute_on(channel, command).await
@@ -160,7 +182,7 @@ impl RtsDriver {
         let (rolling_code, remote_id) = {
             let mut state = self.state.lock().await;
             let rolling_code = state.reserve_rolling_code(channel)?;
-            let remote_id = state.channel(channel).remote_id;
+            let remote_id = state.channel(channel)?.remote_id;
             (rolling_code, remote_id)
         };
 
@@ -255,7 +277,7 @@ async fn init_transmitter(options: RtsOptions) -> Result<Arc<dyn RtsTransmitter>
         );
         let pigpio = connect_and_init_pigpio(options.gpio.gdo0)?;
         tracing::info!(
-            address = PIGPIOD_ADDR,
+            addresses = %pigpiod_addr_list(),
             gdo0 = options.gpio.gdo0,
             "pigpiod connected and GDO0 initialized"
         );
@@ -300,7 +322,9 @@ fn transmit_blocking(
     hardware: Arc<StdMutex<Hardware>>,
     pulses: Vec<waveform::GpioPulse>,
 ) -> Result<()> {
-    let mut hw = hardware.lock().expect("RTS hardware mutex poisoned");
+    let mut hw = hardware
+        .lock()
+        .map_err(|_| anyhow::anyhow!("RTS hardware mutex poisoned"))?;
     match try_transmit(&mut hw, &pulses) {
         Err(err) if is_pigpio_io_error(&err) => {
             tracing::warn!(error = %err, "pigpiod io error; reconnecting and retrying once");
@@ -370,29 +394,19 @@ fn is_pigpio_io_error(err: &anyhow::Error) -> bool {
     })
 }
 
-pub(crate) fn require_loopback(addr: &str) -> Result<()> {
-    let socket: SocketAddr = addr
-        .parse()
-        .with_context(|| format!("parsing pigpiod address {addr}"))?;
-    let ip = match socket.ip() {
-        IpAddr::V4(v4) => IpAddr::V4(v4),
-        IpAddr::V6(v6) => v6
-            .to_ipv4_mapped()
-            .map(IpAddr::V4)
-            .unwrap_or(IpAddr::V6(v6)),
-    };
-    if !ip.is_loopback() {
-        bail!(
-            "pigpiod address {addr} is not loopback; pigpiod is unauthenticated and must be reached via 127.0.0.1 / ::1 (run `pigpiod -l`)"
-        );
-    }
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex as StdMutex;
+
+    #[test]
+    fn pigpiod_addrs_match_port_and_loopback() {
+        for addr in pigpiod_addrs() {
+            assert_eq!(addr.port(), PIGPIOD_PORT);
+            assert!(addr.ip().is_loopback());
+        }
+        assert_eq!(pigpiod_addr_list(), "127.0.0.1:8888, [::1]:8888");
+    }
 
     #[derive(Debug, Default)]
     struct RecordingTransmitter {

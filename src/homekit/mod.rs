@@ -24,10 +24,24 @@ pub fn setup_uri(state: &HapState) -> Result<String> {
     crate::hap::qr::setup_uri(state, config::HAP_CATEGORY)
 }
 
+/// Handles for the background HomeKit tasks started by [`start`].
+pub struct HomekitHandles {
+    _announcement: mdns::Announcement,
+    position_listener: tokio::task::JoinHandle<()>,
+    hap_server: tokio::task::JoinHandle<()>,
+}
+
+impl HomekitHandles {
+    pub fn abort(&self) {
+        self.position_listener.abort();
+        self.hap_server.abort();
+    }
+}
+
 /// Boot the project HomeKit subsystem. Loads or initializes persistent HAP
 /// state, prints the setup code, advertises via mDNS, and serves the HAP TCP
-/// port. Returns the mDNS announcement guard — drop it to stop advertising.
-pub async fn start(remote_control: Arc<RemoteControl>) -> Result<mdns::Announcement> {
+/// port.
+pub async fn start(remote_control: Arc<RemoteControl>) -> Result<HomekitHandles> {
     let store = store();
     let hap_state = store.load_or_init()?;
     let setup_uri = setup_uri(&hap_state)?;
@@ -48,14 +62,18 @@ pub async fn start(remote_control: Arc<RemoteControl>) -> Result<mdns::Announcem
     let runtime = Arc::new(HapRuntime::new(hap_state, store, app.clone(), events));
 
     let event_tx = runtime.event_sender();
-    tokio::spawn(async move {
+    let position_listener = tokio::spawn(async move {
         app.run_position_listener(event_tx, position_rx).await;
     });
 
-    tokio::spawn(async move {
+    let hap_server = tokio::spawn(async move {
         if let Err(e) = crate::hap::server::serve(runtime, config::HAP_PORT).await {
             tracing::error!("HAP server exited: {}", e);
         }
     });
-    Ok(announcement)
+    Ok(HomekitHandles {
+        _announcement: announcement,
+        position_listener,
+        hap_server,
+    })
 }

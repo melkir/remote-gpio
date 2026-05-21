@@ -63,7 +63,13 @@ pub fn plan_target_writes(
                 continue;
             }
         };
-        let blind = find_blind(write.id.aid.0).expect("blind checked above");
+        let Some(blind) = find_blind(write.id.aid.0) else {
+            statuses[index] = Some(CharacteristicWriteStatus::error(
+                write.id,
+                write_error_status(write.id),
+            ));
+            continue;
+        };
         let snapped = SnappedPosition::snap(value);
 
         targets.push(PendingTargetWrite {

@@ -10,7 +10,7 @@ For wiring, bring-up, and pairing flow, see [HARDWARE.md](HARDWARE.md#cc1101-rts
 - Modulation: ASK / OOK.
 - Encoding: Manchester. Rising edge = `1`, falling edge = `0`.
 - Payload: 56 bits, MSB first.
-- Per press: 4 total frames (1 initial + 3 repeats). `Prog --long` sends 20 frames (1 initial + 19 repeats) so the motor enters pair-listen when the Pi is the master remote. Both constants are fixed in `src/rts/waveform.rs`.
+- **Frames per press:** 4 by default (1 initial + 3 repeats); 20 for `prog --long` (`FRAME_COUNT_LONG` in `src/rts/waveform.rs`). Pairing procedure: [HARDWARE.md](HARDWARE.md#pairing).
 
 ## Frame Layout (7 bytes, unobfuscated)
 
@@ -119,8 +119,8 @@ The file is rewritten via tmp + atomic rename + fsync, mode `0600`, owned by the
 `pigpiod` owns the GDO0 timing because RTS uses 640 µs half-symbols while the same process serves HTTP/SSE/WS/HomeKit. Doing this from Rust async sleeps is not reliable enough.
 
 The driver speaks the pigpiod socket protocol directly (no `libpigpio` linkage).
-The endpoint is fixed to `127.0.0.1:8888`; pigpiod is unauthenticated and must
-stay loopback-only.
+It only tries loopback endpoints on port `8888` (`127.0.0.1`, then `::1`).
+pigpiod is unauthenticated, so this is a security boundary, not a preference.
 
 ### Commands used
 

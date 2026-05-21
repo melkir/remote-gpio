@@ -1,3 +1,5 @@
+//! TOML configuration loaded from `/etc/somfy/config.toml` (or `--config`).
+
 use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::net::SocketAddr;
@@ -6,8 +8,10 @@ use std::path::{Path, PathBuf};
 use crate::driver::{DriverConfig, DriverKind, RtsOptions, TelisOptions};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 
+/// Default system configuration path on the Pi.
 pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 
+/// Top-level application configuration.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct AppConfig {
@@ -32,6 +36,7 @@ impl Default for AppConfig {
     }
 }
 
+/// HTTP bind address for the web UI and API.
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(default, deny_unknown_fields)]
 pub struct ServerOptions {
@@ -47,6 +52,7 @@ impl Default for ServerOptions {
 }
 
 impl AppConfig {
+    /// Build the driver configuration snapshot used at startup.
     pub fn driver_config(&self) -> DriverConfig {
         DriverConfig {
             kind: self.driver,
@@ -57,6 +63,7 @@ impl AppConfig {
     }
 }
 
+/// Configuration file path plus parsed, validated settings.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedConfig {
     pub path: PathBuf,
@@ -68,6 +75,7 @@ pub fn default_path() -> PathBuf {
     PathBuf::from(SYSTEM_CONFIG_PATH)
 }
 
+/// Load and validate configuration from `path`, or the system default.
 pub fn resolve(path: Option<PathBuf>) -> Result<ResolvedConfig> {
     let path = path.unwrap_or_else(default_path);
     let config = load_or_default(&path)?;
@@ -117,11 +125,6 @@ pub fn validate(config: &AppConfig) -> Result<()> {
             bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
         }
     }
-    if let Some(gpio) = config.telis.gpio.prog {
-        if gpio > MAX_BCM_GPIO {
-            bail!("telis.gpio.prog must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
-        }
-    }
     Ok(())
 }
 
@@ -152,6 +155,29 @@ homekit = false
         let config: AppConfig = toml::from_str("driver = \"fake\"\n").unwrap();
         assert_eq!(config.server.bind, "127.0.0.1:5002");
         validate(&config).unwrap();
+    }
+
+    #[test]
+    fn resolve_accepts_minimal_fake_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "driver = \"fake\"\n").unwrap();
+
+        let resolved = resolve(Some(path)).unwrap();
+        assert_eq!(resolved.config.driver, DriverKind::Fake);
+    }
+
+    #[test]
+    fn resolve_rejects_unknown_driver() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "driver = \"nope\"\n").unwrap();
+
+        let err = resolve(Some(path)).unwrap_err();
+        assert!(
+            err.to_string().contains("parsing"),
+            "expected TOML parse failure: {err}"
+        );
     }
 
     #[test]
