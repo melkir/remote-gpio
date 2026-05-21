@@ -24,7 +24,7 @@ somfy homekit --help
 
 ## Wire layout
 
-- **Port `5010`** — dedicated TCP listener. Kept off `:5002` because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
+- **Port `5010`** — dedicated TCP listener. Kept separate from the loopback HTTP listener (`127.0.0.1:5002`) because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
 - **mDNS** — `_hap._tcp.local.` advertised via `mdns-sd`. TXT record carries `id`, `c#`, `s#`, `sf`, `ci=2` (Bridge), `md`, `pv=1.1`. The `Announcement` guard's `Drop` impl unregisters and shuts the daemon's worker threads.
 - **Accessory database** — Bridge (`aid=1`) plus 5 bridged `WindowCovering` accessories (`aid=2..6`), one per Somfy LED selector (`L1`–`L4`, `ALL`). IIDs are stable across runs; `config_number` must bump if the schema ever changes.
 

@@ -5,34 +5,27 @@ use std::path::PathBuf;
 use crate::cli::RemoteCommand;
 use crate::config::{self, ResolvedConfig};
 use crate::core::Channel;
+use crate::server::HTTP_BASE_URL;
 use crate::service::{validate_command_request, CommandRequest};
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
     let resolved = config::resolve(config_path)?;
-    let base_url = service_base_url(&resolved);
+    let base_url = HTTP_BASE_URL;
 
     match command {
-        RemoteCommand::Up { channel } => post_command(&base_url, "up", channel, &resolved).await,
-        RemoteCommand::Down { channel } => {
-            post_command(&base_url, "down", channel, &resolved).await
-        }
-        RemoteCommand::Stop { channel } => {
-            post_command(&base_url, "stop", channel, &resolved).await
-        }
+        RemoteCommand::Up { channel } => post_command(base_url, "up", channel, &resolved).await,
+        RemoteCommand::Down { channel } => post_command(base_url, "down", channel, &resolved).await,
+        RemoteCommand::Stop { channel } => post_command(base_url, "stop", channel, &resolved).await,
         RemoteCommand::Select { channel } => {
-            post_command(&base_url, "select", Some(channel), &resolved).await
+            post_command(base_url, "select", Some(channel), &resolved).await
         }
         RemoteCommand::Prog { channel, long } => {
             let cmd = if long { "prog_long" } else { "prog" };
-            post_command(&base_url, cmd, Some(channel), &resolved).await
+            post_command(base_url, cmd, Some(channel), &resolved).await
         }
-        RemoteCommand::Status => status(&base_url).await,
-        RemoteCommand::Watch => watch(&base_url).await,
+        RemoteCommand::Status => status(base_url).await,
+        RemoteCommand::Watch => watch(base_url).await,
     }
-}
-
-fn service_base_url(resolved: &ResolvedConfig) -> String {
-    format!("http://{}", resolved.config.server.bind)
 }
 
 async fn post_command(
