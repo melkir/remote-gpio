@@ -187,12 +187,7 @@ where
 
     pub fn publish_events(&self, events: Vec<CharacteristicEvent>) {
         if !events.is_empty() {
-            if let Err(e) = self.events.send(events) {
-                tracing::warn!(
-                    error = %e,
-                    "HAP characteristic event broadcast dropped (no subscribers or lagged)"
-                );
-            }
+            let _ = self.events.send(events);
         }
     }
 }

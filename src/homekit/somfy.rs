@@ -65,12 +65,7 @@ impl SomfyHapApp {
                         .apply_for_channel(update.channel, update.position)
                         .await;
                     if !changes.is_empty() {
-                        if let Err(e) = event_tx.send(changes) {
-                            tracing::warn!(
-                                error = %e,
-                                "HAP position event broadcast dropped (no subscribers or lagged)"
-                            );
-                        }
+                        let _ = event_tx.send(changes);
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {

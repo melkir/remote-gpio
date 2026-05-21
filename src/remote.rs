@@ -105,16 +105,10 @@ impl RemoteControl {
         let inferred_position = infer_position(command);
         if let Some(position) = inferred_position {
             for &target in fan_out_channels(channel) {
-                if let Err(e) = self.position_tx.send(PositionUpdate {
+                let _ = self.position_tx.send(PositionUpdate {
                     channel: target,
                     position,
-                }) {
-                    tracing::warn!(
-                        %target,
-                        error = %e,
-                        "position update broadcast dropped (no subscribers or lagged)"
-                    );
-                }
+                });
             }
         }
         CommandOutcome { inferred_position }
