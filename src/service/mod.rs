@@ -102,8 +102,8 @@ impl BlindService {
         Ok(())
     }
 
-    /// Validate and dispatch a command. `select` runs directly; directional commands
-    /// optionally select a channel first, then route to the controller.
+    /// Validate and dispatch a command. `select` changes selection; action commands
+    /// with an explicit channel target that channel directly.
     pub async fn dispatch_command(
         &self,
         request: CommandRequest,
@@ -121,24 +121,8 @@ impl BlindService {
             command: cmd,
             channel,
         } = request;
-        if cmd == Command::Select {
-            return self
-                .controller
-                .execute(cmd, channel)
-                .await
-                .context("executing select command")
-                .map_err(command_error);
-        }
-
-        if let Some(channel) = channel {
-            self.controller
-                .execute(Command::Select, Some(channel))
-                .await
-                .context("selecting channel before command")
-                .map_err(command_error)?;
-        }
         self.controller
-            .execute(cmd, None)
+            .execute_client_command(cmd, channel)
             .await
             .with_context(|| format!("executing {cmd:?} command"))
             .map_err(command_error)
@@ -220,7 +204,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dispatch_command_with_channel_selects_then_executes() {
+    async fn dispatch_command_with_channel_targets_without_selection() {
         let controller = Arc::new(
             BlindController::with_driver(crate::config::DriverConfig::fake())
                 .await
@@ -236,16 +220,13 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(controller.current_selection(), Channel::L3);
+        assert_eq!(controller.current_selection(), Channel::L1);
         assert_eq!(
             controller.operations(),
-            vec![
-                ProtocolOperation::TelisSelection(Channel::L3),
-                ProtocolOperation::FakeCommand {
-                    channel: Channel::L3,
-                    command: Command::Up,
-                },
-            ]
+            vec![ProtocolOperation::FakeCommand {
+                channel: Channel::L3,
+                command: Command::Up,
+            }]
         );
     }
 

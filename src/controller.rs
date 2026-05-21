@@ -1,5 +1,5 @@
 use anyhow::Result;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::driver::{infer_position, CommandOutcome, CommandRouter, SelectedChannelRx};
 
@@ -15,6 +15,7 @@ pub struct PositionUpdate {
 #[derive(Debug)]
 pub struct BlindController {
     router: CommandRouter,
+    operation_lock: Mutex<()>,
     /// Fan-out of completed Up/Down commands. This is a transient event stream
     /// used to mirror inferred blind position into HomeKit.
     position_tx: broadcast::Sender<PositionUpdate>,
@@ -26,6 +27,7 @@ impl BlindController {
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             router,
+            operation_lock: Mutex::new(()),
             position_tx,
         })
     }
@@ -56,7 +58,34 @@ impl BlindController {
         command: Command,
         channel: Option<Channel>,
     ) -> Result<CommandOutcome> {
+        let _guard = self.operation_lock.lock().await;
         self.router.execute(command, channel).await?;
+        let target = self.current_selection();
+        Ok(self.complete_command(target, command))
+    }
+
+    /// Run a client command as one logical operation. `Select` changes the
+    /// selected channel; action commands with an explicit channel target that
+    /// channel directly without changing logical selection when the driver
+    /// supports that distinction.
+    pub async fn execute_client_command(
+        &self,
+        command: Command,
+        channel: Option<Channel>,
+    ) -> Result<CommandOutcome> {
+        let _guard = self.operation_lock.lock().await;
+        if command == Command::Select {
+            self.router.execute(command, channel).await?;
+            let target = self.current_selection();
+            return Ok(self.complete_command(target, command));
+        }
+
+        if let Some(channel) = channel {
+            self.router.execute_on(channel, command).await?;
+            return Ok(self.complete_command(channel, command));
+        }
+
+        self.router.execute(command, None).await?;
         let target = self.current_selection();
         Ok(self.complete_command(target, command))
     }
@@ -65,6 +94,7 @@ impl BlindController {
     /// public selection state; Telis may update selection because targeting a
     /// channel requires moving the physical selector.
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
+        let _guard = self.operation_lock.lock().await;
         self.router.execute_on(channel, command).await?;
         Ok(self.complete_command(channel, command))
     }
@@ -125,6 +155,27 @@ mod tests {
                 Channel::L4,
                 Channel::ALL,
             ]
+        );
+    }
+
+    #[tokio::test]
+    async fn client_command_with_channel_targets_without_selection() {
+        let controller = BlindController::with_driver(crate::config::DriverConfig::fake())
+            .await
+            .unwrap();
+
+        controller
+            .execute_client_command(Command::Up, Some(Channel::L3))
+            .await
+            .unwrap();
+
+        assert_eq!(controller.current_selection(), Channel::L1);
+        assert_eq!(
+            controller.operations(),
+            vec![crate::driver::ProtocolOperation::FakeCommand {
+                channel: Channel::L3,
+                command: Command::Up,
+            }]
         );
     }
 }

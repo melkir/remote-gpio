@@ -22,15 +22,11 @@ use tower_http::trace::TraceLayer;
 /// Application state shared across all routes
 pub struct AppState {
     pub blinds: Arc<BlindService>,
-    command_semaphore: Arc<tokio::sync::Semaphore>,
 }
 
 impl AppState {
     pub fn new(blinds: Arc<BlindService>) -> Self {
-        Self {
-            blinds,
-            command_semaphore: Arc::new(tokio::sync::Semaphore::new(1)),
-        }
+        Self { blinds }
     }
 }
 
@@ -100,9 +96,6 @@ async fn handle_command(
     State(state): State<Arc<AppState>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
-    let Ok(_permit) = state.command_semaphore.acquire().await else {
-        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-    };
     match execute_command(&state, payload).await {
         Ok(_) => StatusCode::OK.into_response(),
         Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
@@ -143,7 +136,6 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
     let (mut sink, mut stream) = stream.split();
     let mut rx_channel = state.blinds.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
-    let command_slots = Arc::new(tokio::sync::Semaphore::new(1));
 
     // Send initial channel state.
     let selection = rx_channel.borrow().to_string();
@@ -179,11 +171,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                                 let channel = payload.channel;
                                 let state = state.clone();
                                 let client_name = client_name.clone();
-                                let command_slots = command_slots.clone();
                                 tokio::spawn(async move {
-                                    let Ok(_permit) = command_slots.acquire().await else {
-                                        return;
-                                    };
                                     match execute_command(&state, payload).await {
                                         Ok(_) => {
                                             tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)

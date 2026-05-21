@@ -42,7 +42,7 @@ Release from a clean `main`: `mise run release --execute`. The Pi upgrades with 
 
 | Doc                                          | Contents                                              |
 | -------------------------------------------- | ----------------------------------------------------- |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Code layout, drivers, concurrency, module map         |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System boundaries, runtime flows, drivers, tradeoffs  |
 | [docs/HARDWARE.md](docs/HARDWARE.md)         | Wiring, GPIO/RTS setup, pairing, end-to-end data flow |
 | [docs/RTS_DRIVER.md](docs/RTS_DRIVER.md)     | RTS frame format, waveform, pigpiod                   |
 | [docs/HAP.md](docs/HAP.md)                   | HomeKit protocol and pairing lifecycle                |
