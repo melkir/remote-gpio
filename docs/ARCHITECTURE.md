@@ -152,18 +152,21 @@ sequenceDiagram
   participant HK as HomeKit adapter
   participant Controller as Blind controller
   participant Driver as Active driver
-  participant Cache as Position cache
+  participant Cache as Controller position cache
 
   Home->>HAP: encrypted characteristic write
   HAP->>HK: target position update
-  HK->>Controller: execute on channel
+  HK->>Controller: set target position
+  Controller->>Cache: store target + moving state
+  Controller-->>HAP: EVENT target/moving notification
   Controller->>Driver: target channel directly
   Driver-->>Controller: success or error
-  HK->>Cache: persist inferred position
-  HAP-->>Home: EVENT notification
+  Controller->>Driver: stop after proportional travel time for interior targets
+  Controller->>Cache: persist estimated current position
+  Controller-->>HAP: EVENT current/stopped notification
 ```
 
-HomeKit exposes five `WindowCovering` accessories: `L1`-`L4` and `ALL`. Writes are snapped to endpoints because the motors provide no position feedback. A write that matches cached state is treated as a no-op, which prevents iOS from replaying stale target positions into physical movement after pairing or reconnect.
+HomeKit exposes four `WindowCovering` accessories: `L1`-`L4`. Percentage writes use the controller's shared estimated-position engine because the motors provide no position feedback. Each blind has independent open/close timings under `positioning`; the controller sends a direction command, waits for the proportional travel time, sends `stop` only for interior targets (`1..99`), and persists the estimated current position. A write that matches cached current state is treated as a no-op, which prevents iOS from replaying stale target positions into physical movement after pairing or reconnect.
 
 ### RTS Transmission
 
@@ -228,7 +231,7 @@ The release artifact is one binary:
 | RTS write-ahead rolling codes | Prevents replay after crashes or partial transmissions.                                         | Crashes can intentionally burn unused reserved codes.                    |
 | Native HAP server             | Removes Homebridge and Node from the appliance.                                                 | The repo owns HAP protocol, crypto, pairing, and event semantics.        |
 | pigpiod for RTS timing        | 640 microsecond Manchester half-symbols need timing outside the async runtime.                  | The Pi must run a local pigpiod daemon locked to loopback.               |
-| Inferred positions            | Gives HomeKit and the UI useful state without motor encoders.                                   | State means "last commanded endpoint", not measured blind position.      |
+| Inferred positions            | Gives HomeKit and the UI useful state without motor encoders.                                   | State is a timing-based estimate, not measured blind position.           |
 
 ## Code Map
 

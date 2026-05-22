@@ -65,7 +65,12 @@ where
         tokio::select! {
             req = reader.next_request() => {
                 let req = req?;
-                tracing::debug!("hap request: {} {}", req.method, req.path);
+                tracing::debug!(
+                    "hap request: {} {} body={}",
+                    req.method,
+                    req.path,
+                    format_request_body(&req.body),
+                );
                 let encrypted = writer.is_encrypted();
                 let outcome = handle_request(req, &ctx, &mut conn, encrypted).await?;
                 write_request_response(outcome.response, &mut reader, &mut writer, &mut conn).await?;
@@ -92,8 +97,37 @@ where
     Ok(())
 }
 
+fn format_request_body(body: &[u8]) -> String {
+    const MAX_JSON_BODY: usize = 2048;
+    const MAX_HEX_BYTES: usize = 32;
+
+    if body.is_empty() {
+        return "<empty>".to_string();
+    }
+
+    if let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) {
+        let mut text = value.to_string();
+        if text.len() > MAX_JSON_BODY {
+            text.truncate(MAX_JSON_BODY);
+            text.push_str("...");
+        }
+        return text;
+    }
+
+    let shown = body.len().min(MAX_HEX_BYTES);
+    let mut hex = String::with_capacity(shown * 2);
+    for byte in &body[..shown] {
+        use std::fmt::Write as _;
+        let _ = write!(&mut hex, "{byte:02x}");
+    }
+    let suffix = if body.len() > shown { "..." } else { "" };
+    format!("<{} bytes non-json hex={}{}>", body.len(), hex, suffix)
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     #[test]
     fn server_runtime_layer_does_not_import_somfy_modules() {
         let root = concat!(env!("CARGO_MANIFEST_DIR"), "/src/hap/server");
@@ -114,5 +148,18 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn formats_empty_json_and_binary_request_bodies() {
+        assert_eq!(format_request_body(b""), "<empty>");
+        assert_eq!(
+            format_request_body(br#"{"characteristics":[{"aid":2,"iid":10,"value":50}]}"#),
+            r#"{"characteristics":[{"aid":2,"iid":10,"value":50}]}"#
+        );
+        assert_eq!(
+            format_request_body(&[0x01, 0x02, 0xff]),
+            "<3 bytes non-json hex=0102ff>"
+        );
     }
 }

@@ -1,15 +1,13 @@
 //! Somfy HomeKit accessory adapter.
 //!
-//! This module wires the HAP trait implementation to the shared position cache,
-//! target-write planner, and blind controller.
+//! This module maps HomeKit characteristics onto the shared blind controller.
 
 use anyhow::anyhow;
 use serde_json::Value;
 use std::sync::Arc;
 use tokio::sync::broadcast;
 
-use crate::controller::{BlindController, PositionUpdate};
-use crate::core::{Channel, Command};
+use crate::controller::BlindController;
 use crate::hap::runtime::{
     CharacteristicEvent, CharacteristicId, CharacteristicRead, CharacteristicWrite,
     CharacteristicWriteOutcome, CharacteristicWriteStatus, HapAccessoryApp, HapFuture, HapStatus,
@@ -18,54 +16,36 @@ use crate::hap::runtime::{
 use crate::homekit::accessory_db::{
     self, BlindAccessory, BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE,
     IID_IDENTIFY, IID_MANUFACTURER, IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
-    IID_TARGET_POSITION, POSITION_STATE_STOPPED,
+    IID_TARGET_POSITION,
 };
-use crate::homekit::position_cache::{
-    effective_position, find_blind, PositionCache, SnappedPosition, BLINDS,
-};
-use crate::homekit::target_writes::{grouped_all_target, plan_target_writes, PendingTargetWrite};
+use crate::homekit::target_writes::{plan_target_writes, PendingTargetWrite};
+use crate::positioning::state::{find_blind, BlindPosition, PositionDelta, BLINDS, STATUS_STOPPED};
 
 pub struct SomfyHapApp {
     controller: Arc<BlindController>,
-    positions: PositionCache,
 }
 
 impl SomfyHapApp {
     pub fn new(controller: Arc<BlindController>) -> Self {
-        Self {
-            controller,
-            positions: PositionCache::new(),
-        }
+        Self { controller }
     }
 
     #[cfg(test)]
-    fn new_with_positions(
-        controller: Arc<BlindController>,
-        positions: std::collections::HashMap<u64, u8>,
-    ) -> Self {
-        Self {
-            controller,
-            positions: PositionCache::from_positions(positions),
-        }
+    fn new_for_test(controller: Arc<BlindController>) -> Self {
+        Self { controller }
     }
 
-    /// Mirror non-HAP command outcomes (REST, WS) into the HAP position cache.
-    /// HAP-originated writes already update the cache before the broadcast
-    /// lands here, so duplicates return no changes and emit no events.
     pub async fn run_position_listener(
         self: Arc<Self>,
         event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
-        mut rx: broadcast::Receiver<PositionUpdate>,
+        mut rx: broadcast::Receiver<Vec<PositionDelta>>,
     ) {
         loop {
             match rx.recv().await {
-                Ok(update) => {
-                    let changes = self
-                        .positions
-                        .apply_for_channel(update.channel, update.position)
-                        .await;
-                    if !changes.is_empty() {
-                        let _ = event_tx.send(changes);
+                Ok(deltas) => {
+                    let events = characteristic_events(&deltas);
+                    if !events.is_empty() {
+                        let _ = event_tx.send(events);
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -76,55 +56,53 @@ impl SomfyHapApp {
         }
     }
 
-    async fn execute_grouped_all(
+    async fn execute_targets(
         &self,
-        snapped: SnappedPosition,
+        targets: &[PendingTargetWrite],
     ) -> Result<Vec<CharacteristicEvent>, anyhow::Error> {
-        if self.positions.all_at_target(snapped).await {
-            tracing::debug!(
-                "PUT TargetPosition grouped value={}: cache hit, no-op",
-                snapped.as_u8()
-            );
-            return Ok(Vec::new());
-        }
-
-        self.controller
-            .execute_on(Channel::All, command_for_snapped(snapped))
+        let deltas = self
+            .controller
+            .set_target_positions(
+                targets
+                    .iter()
+                    .map(|target| (target.blind.aid, target.target))
+                    .collect(),
+            )
             .await
             .map_err(|e| anyhow!(e))?;
-
-        Ok(self.positions.apply_all(snapped).await)
+        Ok(characteristic_events(&deltas))
     }
+}
 
-    async fn execute_target(
-        &self,
-        target: PendingTargetWrite,
-    ) -> Result<Vec<CharacteristicEvent>, anyhow::Error> {
-        if self.positions.get(target.blind.aid).await == Some(target.snapped.as_u8()) {
-            tracing::debug!(
-                "PUT TargetPosition aid={} value={}: cache hit, no-op",
-                target.id.aid.0,
-                target.snapped.as_u8()
-            );
-            return Ok(Vec::new());
+fn characteristic_events(deltas: &[PositionDelta]) -> Vec<CharacteristicEvent> {
+    let mut events = Vec::new();
+    for delta in deltas {
+        if let Some(current) = delta.current {
+            events.push(CharacteristicEvent {
+                id: CharacteristicId::new(delta.aid, IID_CURRENT_POSITION),
+                value: serde_json::json!(current),
+            });
         }
-
-        self.controller
-            .execute_on(target.blind.channel, command_for_snapped(target.snapped))
-            .await
-            .map_err(|e| anyhow!(e))?;
-
-        Ok(self
-            .positions
-            .apply_blind(target.blind, target.snapped)
-            .await)
+        if let Some(target) = delta.target {
+            events.push(CharacteristicEvent {
+                id: CharacteristicId::new(delta.aid, IID_TARGET_POSITION),
+                value: serde_json::json!(target),
+            });
+        }
+        if let Some(status) = delta.status {
+            events.push(CharacteristicEvent {
+                id: CharacteristicId::new(delta.aid, IID_POSITION_STATE),
+                value: serde_json::json!(status),
+            });
+        }
     }
+    events
 }
 
 impl HapAccessoryApp for SomfyHapApp {
     fn accessories(&self) -> HapFuture<'_, Value> {
         Box::pin(async move {
-            let positions = self.positions.snapshot().await;
+            let positions = self.controller.position_snapshot().await;
             Ok(build_accessories(&positions))
         })
     }
@@ -134,14 +112,11 @@ impl HapAccessoryApp for SomfyHapApp {
         ids: &'a [CharacteristicId],
     ) -> HapFuture<'a, Vec<CharacteristicRead>> {
         Box::pin(async move {
-            let values = self
-                .positions
-                .with_positions(|positions| {
-                    ids.iter()
-                        .map(|id| read_characteristic(positions, *id))
-                        .collect()
-                })
-                .await;
+            let positions = self.controller.position_snapshot().await;
+            let values = ids
+                .iter()
+                .map(|id| read_characteristic(&positions, *id))
+                .collect();
             Ok(values)
         })
     }
@@ -156,19 +131,10 @@ impl HapAccessoryApp for SomfyHapApp {
             let mut outcome = CharacteristicWriteOutcome::default();
             let mut statuses = plan.statuses;
 
-            if let Some(snapped) = grouped_all_target(&plan.targets) {
-                outcome
-                    .events
-                    .extend(self.execute_grouped_all(snapped).await?);
-                for target in plan.targets {
-                    statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
-                }
-                outcome.statuses = statuses.into_iter().flatten().collect();
-                return Ok(outcome);
-            }
-
+            outcome
+                .events
+                .extend(self.execute_targets(&plan.targets).await?);
             for target in plan.targets {
-                outcome.events.extend(self.execute_target(target).await?);
                 statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
             }
             outcome.statuses = statuses.into_iter().flatten().collect();
@@ -177,10 +143,7 @@ impl HapAccessoryApp for SomfyHapApp {
     }
 }
 
-fn read_characteristic(
-    positions: &std::collections::HashMap<u64, u8>,
-    id: CharacteristicId,
-) -> CharacteristicRead {
+fn read_characteristic(positions: &[BlindPosition], id: CharacteristicId) -> CharacteristicRead {
     let aid = id.aid.0;
     let iid = id.iid.0;
     let value = if aid == BRIDGE_AID {
@@ -202,10 +165,9 @@ fn read_characteristic(
             IID_NAME => serde_json::json!(blind.name),
             IID_SERIAL => serde_json::json!(blind.serial),
             IID_FIRMWARE => serde_json::json!(env!("CARGO_PKG_VERSION")),
-            IID_CURRENT_POSITION | IID_TARGET_POSITION => {
-                serde_json::json!(effective_position(positions, aid))
-            }
-            IID_POSITION_STATE => serde_json::json!(POSITION_STATE_STOPPED),
+            IID_CURRENT_POSITION => serde_json::json!(position_for_aid(positions, aid).current),
+            IID_TARGET_POSITION => serde_json::json!(position_for_aid(positions, aid).target),
+            IID_POSITION_STATE => serde_json::json!(position_for_aid(positions, aid).status),
             _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
         }
     } else {
@@ -214,7 +176,20 @@ fn read_characteristic(
     CharacteristicRead::success(id, value)
 }
 
-fn build_accessories(positions: &[(u64, u8)]) -> Value {
+fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
+    positions
+        .iter()
+        .copied()
+        .find(|position| position.aid == aid)
+        .unwrap_or(BlindPosition {
+            aid,
+            current: 100,
+            target: 100,
+            status: STATUS_STOPPED,
+        })
+}
+
+fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> Value {
     let blinds: Vec<BlindAccessory<'_>> = BLINDS
         .iter()
         .map(|blind| BlindAccessory {
@@ -223,19 +198,12 @@ fn build_accessories(positions: &[(u64, u8)]) -> Value {
             serial: blind.serial,
             position: positions
                 .iter()
-                .find(|(aid, _)| *aid == blind.aid)
-                .map(|(_, pos)| *pos)
+                .find(|pos| pos.aid == blind.aid)
+                .map(|pos| pos.current)
                 .unwrap_or(100),
         })
         .collect();
     accessory_db::build_accessories(&blinds)
-}
-
-fn command_for_snapped(snapped: SnappedPosition) -> Command {
-    match snapped {
-        SnappedPosition::Open => Command::Up,
-        SnappedPosition::Closed => Command::Down,
-    }
 }
 
 #[cfg(test)]
@@ -244,11 +212,54 @@ mod tests {
     use crate::core::{Channel, Command};
     use serde_json::json;
     use std::collections::HashMap;
+    use tokio::time::Duration;
+
+    fn test_positioning(ms: u64) -> crate::config::PositioningOptions {
+        let timing = crate::config::BlindTimingOptions {
+            open_ms: ms,
+            close_ms: ms,
+        };
+        crate::config::PositioningOptions {
+            l1: timing.clone(),
+            l2: timing.clone(),
+            l3: timing.clone(),
+            l4: timing,
+        }
+    }
+
+    async fn wait_for_current(app: &SomfyHapApp, aid: u64, expected: u8) {
+        for _ in 0..20 {
+            if app.controller.position_for_aid(aid).await.current == expected {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(app.controller.position_for_aid(aid).await.current, expected);
+    }
+
+    async fn fake_controller(ms: u64) -> Arc<BlindController> {
+        let positions = [(2, 100), (3, 100), (4, 100), (5, 100)]
+            .into_iter()
+            .collect::<HashMap<_, _>>();
+        Arc::new(
+            BlindController::with_driver_and_positions_for_test(
+                crate::config::DriverConfig::fake(),
+                test_positioning(ms),
+                positions,
+            )
+            .await
+            .unwrap(),
+        )
+    }
 
     #[test]
     fn read_position_returns_cached_value() {
-        let mut positions = HashMap::new();
-        positions.insert(2, 0);
+        let positions = [BlindPosition {
+            aid: 2,
+            current: 0,
+            target: 0,
+            status: STATUS_STOPPED,
+        }];
 
         let read = read_characteristic(&positions, CharacteristicId::new(2, IID_CURRENT_POSITION));
 
@@ -258,7 +269,32 @@ mod tests {
 
     #[test]
     fn accessories_expose_four_blinds() {
-        let body = build_accessories(&[(2, 100), (3, 100), (4, 100), (5, 100)]);
+        let body = build_accessories(&[
+            crate::positioning::state::BlindPosition {
+                aid: 2,
+                current: 100,
+                target: 100,
+                status: STATUS_STOPPED,
+            },
+            crate::positioning::state::BlindPosition {
+                aid: 3,
+                current: 100,
+                target: 100,
+                status: STATUS_STOPPED,
+            },
+            crate::positioning::state::BlindPosition {
+                aid: 4,
+                current: 100,
+                target: 100,
+                status: STATUS_STOPPED,
+            },
+            crate::positioning::state::BlindPosition {
+                aid: 5,
+                current: 100,
+                target: 100,
+                status: STATUS_STOPPED,
+            },
+        ]);
         let aids = body["accessories"]
             .as_array()
             .unwrap()
@@ -270,18 +306,56 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn full_individual_write_batch_sends_one_all_driver_command() {
-        let controller = Arc::new(
-            BlindController::with_driver(crate::config::DriverConfig::fake())
-                .await
-                .unwrap(),
+    async fn target_position_starts_motion_and_stops_after_timed_percentage() {
+        let controller = fake_controller(2).await;
+        let app = SomfyHapApp::new_for_test(controller.clone());
+        let writes = vec![CharacteristicWrite {
+            id: CharacteristicId::new(2, IID_TARGET_POSITION),
+            value: Some(json!(50)),
+            ev: None,
+        }];
+        let mut subscriptions = Subscriptions::default();
+
+        let outcome = app
+            .write_characteristics(writes, &mut subscriptions)
+            .await
+            .unwrap();
+
+        assert!(outcome.all_success());
+        assert_eq!(
+            controller.operations(),
+            vec![crate::driver::ProtocolOperation::FakeCommand {
+                channel: Channel::L1,
+                command: Command::Down,
+            }]
         );
-        let app = SomfyHapApp::new_with_positions(controller.clone(), HashMap::new());
+        assert_eq!(app.controller.position_for_aid(2).await.current, 100);
+        wait_for_current(&app, 2, 50).await;
+        assert_eq!(
+            controller.operations(),
+            vec![
+                crate::driver::ProtocolOperation::FakeCommand {
+                    channel: Channel::L1,
+                    command: Command::Down,
+                },
+                crate::driver::ProtocolOperation::FakeCommand {
+                    channel: Channel::L1,
+                    command: Command::Stop,
+                },
+            ]
+        );
+        assert_eq!(app.controller.position_for_aid(2).await.current, 50);
+    }
+
+    #[tokio::test]
+    async fn full_individual_write_batch_sends_one_all_start_command() {
+        let controller = fake_controller(10).await;
+        let app = SomfyHapApp::new_for_test(controller.clone());
         let writes = [2, 3, 4, 5]
             .into_iter()
             .map(|aid| CharacteristicWrite {
                 id: CharacteristicId::new(aid, IID_TARGET_POSITION),
-                value: Some(json!(100)),
+                value: Some(json!(50)),
                 ev: None,
             })
             .collect::<Vec<_>>();
@@ -293,48 +367,85 @@ mod tests {
             .unwrap();
 
         assert!(outcome.all_success());
-        assert_eq!(outcome.statuses.len(), 4);
         assert_eq!(
             controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {
                 channel: Channel::All,
-                command: Command::Up,
+                command: Command::Down,
             }]
         );
     }
 
     #[tokio::test]
-    async fn cache_hit_does_not_break_full_batch_coalesce() {
-        let controller = Arc::new(
-            BlindController::with_driver(crate::config::DriverConfig::fake())
-                .await
-                .unwrap(),
-        );
-        let mut positions = HashMap::new();
-        positions.insert(2, 100);
-        let app = SomfyHapApp::new_with_positions(controller.clone(), positions);
-        let writes = [2, 3, 4, 5]
-            .into_iter()
-            .map(|aid| CharacteristicWrite {
-                id: CharacteristicId::new(aid, IID_TARGET_POSITION),
-                value: Some(json!(100)),
-                ev: None,
-            })
-            .collect::<Vec<_>>();
+    async fn endpoint_target_does_not_send_timed_stop() {
+        let controller = fake_controller(2).await;
+        let app = SomfyHapApp::new_for_test(controller.clone());
         let mut subscriptions = Subscriptions::default();
 
-        let outcome = app
-            .write_characteristics(writes, &mut subscriptions)
-            .await
-            .unwrap();
+        app.write_characteristics(
+            vec![CharacteristicWrite {
+                id: CharacteristicId::new(2, IID_TARGET_POSITION),
+                value: Some(json!(0)),
+                ev: None,
+            }],
+            &mut subscriptions,
+        )
+        .await
+        .unwrap();
+        wait_for_current(&app, 2, 0).await;
 
-        assert!(outcome.all_success());
         assert_eq!(
             controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {
-                channel: Channel::All,
-                command: Command::Up,
+                channel: Channel::L1,
+                command: Command::Down,
             }]
         );
+        assert_eq!(app.controller.position_for_aid(2).await.current, 0);
+    }
+
+    #[tokio::test]
+    async fn writing_current_position_cancels_pending_motion() {
+        let controller = fake_controller(20).await;
+        let app = SomfyHapApp::new_for_test(controller.clone());
+        let mut subscriptions = Subscriptions::default();
+
+        app.write_characteristics(
+            vec![CharacteristicWrite {
+                id: CharacteristicId::new(2, IID_TARGET_POSITION),
+                value: Some(json!(0)),
+                ev: None,
+            }],
+            &mut subscriptions,
+        )
+        .await
+        .unwrap();
+        app.write_characteristics(
+            vec![CharacteristicWrite {
+                id: CharacteristicId::new(2, IID_TARGET_POSITION),
+                value: Some(json!(100)),
+                ev: None,
+            }],
+            &mut subscriptions,
+        )
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(25)).await;
+
+        assert_eq!(
+            controller.operations(),
+            vec![
+                crate::driver::ProtocolOperation::FakeCommand {
+                    channel: Channel::L1,
+                    command: Command::Down,
+                },
+                crate::driver::ProtocolOperation::FakeCommand {
+                    channel: Channel::L1,
+                    command: Command::Stop,
+                },
+            ]
+        );
+        assert_eq!(app.controller.position_for_aid(2).await.current, 100);
+        assert_eq!(app.controller.position_for_aid(2).await.target, 100);
     }
 }

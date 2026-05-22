@@ -19,6 +19,7 @@ pub(crate) mod hap;
 pub(crate) mod homekit;
 pub mod logging;
 pub(crate) mod persist;
+pub(crate) mod positioning;
 pub(crate) mod rts;
 pub(crate) mod server;
 pub(crate) mod service;

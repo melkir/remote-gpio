@@ -2,6 +2,8 @@
 
 use serde_json::{json, Value};
 
+use crate::positioning::state::STATUS_STOPPED;
+
 pub(crate) const BRIDGE_AID: u64 = 1;
 
 pub(crate) const IID_AINFO_SERVICE: u64 = 1;
@@ -17,8 +19,6 @@ pub(crate) const IID_TARGET_POSITION: u64 = 10;
 pub(crate) const IID_POSITION_STATE: u64 = 11;
 pub(crate) const IID_BRIDGE_PROTO_SERVICE: u64 = 8;
 pub(crate) const IID_BRIDGE_VERSION: u64 = 9;
-
-pub(crate) const POSITION_STATE_STOPPED: u8 = 2;
 
 pub(crate) struct BlindAccessory<'a> {
     pub aid: u64,
@@ -93,7 +93,7 @@ fn window_covering_service(position: u8) -> Value {
             char_uint8(
                 IID_POSITION_STATE,
                 "72",
-                POSITION_STATE_STOPPED,
+                STATUS_STOPPED,
                 &["pr", "ev"],
                 2,
             ),
