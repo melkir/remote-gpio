@@ -324,7 +324,7 @@ mod tests {
         let controller = fake_controller(10).await;
         let hook_calls = Arc::new(AtomicUsize::new(0));
         let hook_calls_for_hook = hook_calls.clone();
-        controller.attach_position_listener(Arc::new(move |_| {
+        controller.attach_position_listener(Arc::new(move |_deltas| {
             hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
         }));
         let app = SomfyHapApp::new_for_test(controller);

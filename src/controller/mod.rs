@@ -14,16 +14,13 @@ use crate::positioning::motion_tasks::MotionTasks;
 use crate::positioning::state::{find_blind, BlindPosition, PositionCache, PositionDelta};
 
 /// Callback for position target/current changes (HomeKit EVENT push, tests, future API clients).
-pub type PositionListener = Arc<dyn Fn(Vec<PositionDelta>) + Send + Sync>;
+pub type PositionListener = Arc<dyn Fn(&[PositionDelta]) + Send + Sync>;
 
 /// Driver-agnostic control of channel selection, button presses, and position events.
 pub struct BlindController {
     router: CommandRouter,
     driver_kind: DriverKind,
-    #[cfg(test)]
     pub(crate) operation_lock: Mutex<()>,
-    #[cfg(not(test))]
-    operation_lock: Mutex<()>,
     positions: Arc<PositionCache>,
     timings: MotionTimings,
     motion_tasks: MotionTasks,
@@ -101,7 +98,7 @@ impl BlindController {
         self.router.subscribe_selected_channel()
     }
 
-    fn emit_position_deltas(&self, deltas: Vec<PositionDelta>) {
+    fn emit_position_deltas(&self, deltas: &[PositionDelta]) {
         if deltas.is_empty() {
             return;
         }
@@ -184,7 +181,7 @@ impl BlindController {
                 );
             }
         }
-        self.emit_position_deltas(deltas.clone());
+        self.emit_position_deltas(&deltas);
         Ok(deltas)
     }
 
@@ -210,7 +207,7 @@ impl BlindController {
             );
             self.schedule_completion(movement).await;
         }
-        self.emit_position_deltas(deltas.clone());
+        self.emit_position_deltas(&deltas);
         Ok(deltas)
     }
 
@@ -268,7 +265,7 @@ impl BlindController {
         if let Some(position) = inferred_position {
             self.motion_tasks.cancel_channel(channel).await;
             let deltas = self.positions.apply_for_channel(channel, position).await;
-            self.emit_position_deltas(deltas);
+            self.emit_position_deltas(&deltas);
         }
         CommandOutcome { inferred_position }
     }
@@ -311,7 +308,7 @@ impl BlindController {
                 .positions
                 .apply_blind_current(movement.blind, movement.target)
                 .await;
-            controller.emit_position_deltas(deltas);
+            controller.emit_position_deltas(&deltas);
             controller
                 .motion_tasks
                 .remove_if_current(movement.blind.aid, generation)

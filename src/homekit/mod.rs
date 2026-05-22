@@ -79,8 +79,8 @@ fn attach_position_events(
     controller: &BlindController,
     event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
 ) {
-    controller.attach_position_listener(Arc::new(move |deltas: Vec<PositionDelta>| {
-        let events = somfy::position_characteristic_events(&deltas);
+    controller.attach_position_listener(Arc::new(move |deltas: &[PositionDelta]| {
+        let events = somfy::position_characteristic_events(deltas);
         if !events.is_empty() {
             tracing::debug!(count = events.len(), "hap position events published");
             let _ = event_tx.send(events);

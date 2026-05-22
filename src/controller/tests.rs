@@ -16,7 +16,7 @@ fn attach_listener(
     let captured_for_listener = captured.clone();
     controller.attach_position_listener(Arc::new(move |deltas| {
         calls_for_listener.fetch_add(1, Ordering::SeqCst);
-        *captured_for_listener.lock().unwrap() = deltas;
+        *captured_for_listener.lock().unwrap() = deltas.to_vec();
     }));
     (calls, captured)
 }

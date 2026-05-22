@@ -24,7 +24,7 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
     let shared_state = Arc::new(AppState::new(controller.clone()));
 
     let hap_handles = if resolved_config.config.homekit {
-        match homekit::start(controller).await {
+        match homekit::start(controller.clone()).await {
             Ok(handles) => Some(handles),
             Err(e) => {
                 tracing::warn!(
