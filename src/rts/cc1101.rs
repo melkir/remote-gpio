@@ -58,6 +58,7 @@ impl<S: SpiDevice> Cc1101<S> {
         Self { spi }
     }
 
+    #[cfg(test)]
     pub fn into_inner(self) -> S {
         self.spi
     }

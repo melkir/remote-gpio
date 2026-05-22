@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use crate::cli::RemoteCommand;
 use crate::config::{self, ResolvedConfig};
 use crate::core::Channel;
-use crate::server::HTTP_BASE_URL;
+use crate::server::base_url;
 use crate::service::{validate_command_request, CommandRequest};
 
 pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
@@ -39,7 +39,7 @@ async fn post_command(
     )?;
 
     let client = reqwest::Client::new();
-    let url = format!("{HTTP_BASE_URL}/command");
+    let url = format!("{}/command", base_url());
     let response = client
         .post(&url)
         .json(&CommandRequest {
@@ -60,7 +60,7 @@ async fn post_command(
 }
 
 async fn status() -> Result<()> {
-    let url = format!("{HTTP_BASE_URL}/channel");
+    let url = format!("{}/channel", base_url());
     let text = reqwest::get(&url)
         .await
         .with_context(|| format!("connecting to somfy service at {url}"))?
@@ -73,7 +73,7 @@ async fn status() -> Result<()> {
 }
 
 async fn watch() -> Result<()> {
-    let url = format!("{HTTP_BASE_URL}/events");
+    let url = format!("{}/events", base_url());
     let response = reqwest::get(&url)
         .await
         .with_context(|| format!("connecting to somfy service at {url}"))?

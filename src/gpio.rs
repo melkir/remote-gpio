@@ -21,6 +21,7 @@ impl Default for GpioOptions {
     }
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub fn channel_led_gpio(channel: Channel, config: &TelisGpioOptions) -> Option<u8> {
     match channel {
         Channel::L1 => Some(config.led1),
@@ -40,6 +41,7 @@ pub enum TelisButton {
     Up = 26,
 }
 
+#[cfg(any(target_os = "linux", test))]
 pub fn channel_from_gpio(offset: u32, config: &TelisGpioOptions) -> Result<Channel> {
     let gpio = offset as u8;
     for channel in &Channel::INDIVIDUALS {

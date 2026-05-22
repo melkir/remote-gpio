@@ -25,9 +25,7 @@ pub enum PairVerifyState {
         ios_pub: [u8; 32],
         session_key: [u8; 32],
     },
-    Done {
-        shared_secret: [u8; 32],
-    },
+    Done,
 }
 
 #[derive(Default)]
@@ -221,7 +219,7 @@ impl PairVerifySession {
             return HandleOutcome::Reply(error_response(4, HapError::Authentication));
         }
 
-        self.state = PairVerifyState::Done { shared_secret };
+        self.state = PairVerifyState::Done;
         tracing::info!("pair-verify complete: session established with {pairing_id_str}");
 
         HandleOutcome::Verified {

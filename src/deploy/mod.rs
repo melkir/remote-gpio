@@ -11,7 +11,6 @@ use crate::systemd;
 pub const BIN_PATH: &str = "/usr/local/bin/somfy";
 pub const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
 pub const UNIT_PATH: &str = "/etc/systemd/system/somfy.service";
-pub const BIN_DIR: &str = "/usr/local/bin";
 pub const STAGED_DOWNLOAD: &str = "/usr/local/bin/.somfy.download";
 
 pub fn require_root(command: &str) -> Result<()> {

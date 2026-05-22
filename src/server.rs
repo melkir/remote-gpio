@@ -20,8 +20,12 @@ use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::DefaultMakeSpan;
 use tower_http::trace::TraceLayer;
 
-pub const HTTP_BIND_ADDR: &str = "127.0.0.1:5002";
-pub const HTTP_BASE_URL: &str = "http://127.0.0.1:5002";
+pub(crate) const HTTP_HOST: &str = "127.0.0.1";
+pub(crate) const HTTP_PORT: u16 = 5002;
+
+pub(crate) fn base_url() -> String {
+    format!("http://{HTTP_HOST}:{HTTP_PORT}")
+}
 
 /// Application state shared across all routes
 pub struct AppState {
@@ -43,7 +47,7 @@ struct WsQueryParams {
 /// Starts the HTTP server with all routes and middleware
 pub async fn serve(shared_state: Arc<AppState>) -> Result<()> {
     let app = create_router(shared_state);
-    let listener = tokio::net::TcpListener::bind(HTTP_BIND_ADDR).await?;
+    let listener = tokio::net::TcpListener::bind((HTTP_HOST, HTTP_PORT)).await?;
     tracing::info!("Listening on http://{}", listener.local_addr()?);
 
     axum::serve(

@@ -48,6 +48,7 @@ impl<S: Read + Write> PigpioClient<S> {
         Self { stream }
     }
 
+    #[cfg(test)]
     pub fn into_inner(self) -> S {
         self.stream
     }

@@ -8,6 +8,7 @@ use anyhow::{bail, Result};
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum Tag {
     Method = 0x00,
     Identifier = 0x01,
@@ -28,6 +29,7 @@ pub enum Tag {
 
 #[repr(u8)]
 #[derive(Copy, Clone, Debug)]
+#[allow(dead_code)]
 pub enum HapError {
     Unknown = 0x01,
     Authentication = 0x02,
