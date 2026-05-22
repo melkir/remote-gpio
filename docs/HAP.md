@@ -10,7 +10,7 @@ Show the setup code and pairing QR:
 somfy homekit status
 ```
 
-In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with five `WindowCovering` tiles inside.
+In iOS Home → Add Accessory → scan the QR code. The Bridge appears as **Somfy XXXXXX** with four `WindowCovering` tiles inside.
 
 Pairing lifecycle commands are exposed by the CLI:
 
@@ -32,10 +32,10 @@ somfy homekit --help
 
 `$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`; otherwise defaults to `/var/lib/somfy` in release builds and `./hap-state` in debug builds; override with `SOMFY_STATE_DIR`):
 
-| File             | Owner                       | Contents                                                                                |
-| ---------------- | --------------------------- | --------------------------------------------------------------------------------------- |
-| `hap.json`       | `state.rs`                  | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers     |
-| `positions.json` | `homekit/position_cache.rs` | aid → last-known position (0 or 100). Reload is **read-only** — never replayed to GPIO. |
+| File             | Owner                  | Contents                                                                                 |
+| ---------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
+| `hap.json`       | `state.rs`             | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers      |
+| `positions.json` | `positioning/state.rs` | aid → last estimated position (0-100). Reload is **read-only** — never replayed to GPIO. |
 
 Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
 
@@ -49,7 +49,7 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 | Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                               |
 | Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.                                             |
 | HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser; `http::StatusCode` owns response status phrases. |
-| App wiring          | `src/homekit/mod.rs` wires Somfy config, mDNS advertisement, state store, position listener, and the generic HAP server.                               |
+| App wiring          | `src/homekit/mod.rs` wires mDNS advertisement, HAP state, controller position events, and the generic HAP server.                                      |
 
 ## Connection lifecycle
 
@@ -57,17 +57,33 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.
-3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<(u64, u8)>>`. After a successful `PUT`, the handler diffs the position map (including sibling propagation) and broadcasts changes; subscribers fan them out as `EVENT/1.0` frames over the same encrypted writer.
+3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<CharacteristicEvent>>`. The controller emits target/moving events immediately and completion events after the timed move; subscribers fan them out as `EVENT/1.0` frames over the same encrypted writer.
 
-EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits on `PositionState=2` + `CurrentPosition` matching `TargetPosition`) and what makes the **All Blinds** tile propagate live to the four siblings.
+EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits on `PositionState=2` + `CurrentPosition` matching `TargetPosition`) and what keeps grouped Home writes reflected on each individual blind tile.
 
 ## PUT semantics
 
 `handle_put_characteristics` distinguishes three shapes per entry:
 
 - `{aid, iid, ev: true|false}` — toggle subscription on the per-connection set. No GPIO action.
-- `{aid, iid, value: N}` where the snapped value (`< 50` → 0, `≥ 50` → 100) **matches the cached position** — no-op. iOS replays the last-known `TargetPosition` right after pairing; without this the bridge would fire UP on every registration.
-- `{aid, iid, value: N}` with a real change — funnels through the same `BlindController` command layer used by REST, WebSocket, and HAP. Then updates the cached position, propagates to siblings (or to ALL when all four match), persists `positions.json`, and broadcasts a change event.
+- `{aid, iid, value: N}` where `N` matches the estimated current position — no-op unless it cancels a pending timed move, in which case the controller sends `stop`.
+- `{aid, iid, value: N}` with a real change — asks the shared controller to move from the estimated current position to `N`. The controller sends `up` or `down`, emits `TargetPosition` plus moving `PositionState`, and for interior targets (`1..99`) sends `stop` after the configured proportional travel time. Endpoint targets (`0` or `100`) rely on the motor's own limits. Completion updates `CurrentPosition`, persists `positions.json`, and emits stopped events.
+
+## Timed positioning
+
+Somfy RTS/Telis motors do not report physical position, so percentages are estimated from configured travel time. The defaults are 10 seconds open and close for every blind. Override per blind:
+
+```toml
+[positioning.l1]
+open_ms = 8500
+close_ms = 9200
+
+[positioning.l2]
+open_ms = 7000
+close_ms = 8000
+```
+
+The controller supports different timings per blind. When Home writes all four blinds to the same direction in one batch, it can start them with one `ALL` command, then issue individual `stop` commands for interior targets at each blind's calculated completion time.
 
 ## Lifecycle
 

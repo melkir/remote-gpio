@@ -9,14 +9,14 @@ use crate::homekit::accessory_db::{
     BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE, IID_MANUFACTURER,
     IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
 };
-use crate::homekit::position_cache::{find_blind, Blind, SnappedPosition, BLINDS};
+use crate::positioning::state::{find_blind, Blind};
 
 #[derive(Copy, Clone, Debug)]
 pub struct PendingTargetWrite {
     pub index: usize,
     pub id: CharacteristicId,
     pub blind: &'static Blind,
-    pub snapped: SnappedPosition,
+    pub target: u8,
 }
 
 pub struct TargetWritePlan {
@@ -70,34 +70,15 @@ pub fn plan_target_writes(
             ));
             continue;
         };
-        let snapped = SnappedPosition::snap(value);
-
         targets.push(PendingTargetWrite {
             index,
             id: write.id,
             blind,
-            snapped,
+            target: value,
         });
     }
 
     TargetWritePlan { statuses, targets }
-}
-
-pub fn grouped_all_target(targets: &[PendingTargetWrite]) -> Option<SnappedPosition> {
-    let first = targets.first()?;
-    if !targets.iter().all(|target| target.snapped == first.snapped) {
-        return None;
-    }
-
-    let covers_all_individuals = BLINDS
-        .iter()
-        .all(|blind| targets.iter().any(|target| target.blind.aid == blind.aid));
-
-    if covers_all_individuals {
-        Some(first.snapped)
-    } else {
-        None
-    }
 }
 
 fn handle_subscription(
@@ -170,18 +151,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn full_individual_batch_groups_to_all_blinds() {
-        let targets = [2, 3, 4, 5]
-            .into_iter()
-            .map(|aid| pending_target(aid, SnappedPosition::Open))
-            .collect::<Vec<_>>();
-
-        let snapped = grouped_all_target(&targets).unwrap();
-
-        assert_eq!(snapped, SnappedPosition::Open);
-    }
-
-    #[test]
     fn unsupported_write_reports_protocol_status() {
         assert_eq!(
             write_error_status(CharacteristicId::new(2, IID_CURRENT_POSITION)),
@@ -191,36 +160,5 @@ mod tests {
             write_error_status(CharacteristicId::new(99, 99)),
             HapStatus::ResourceDoesNotExist
         );
-    }
-
-    #[test]
-    fn partial_individual_batch_does_not_group_to_all_blinds() {
-        let targets = [2, 3]
-            .into_iter()
-            .map(|aid| pending_target(aid, SnappedPosition::Open))
-            .collect::<Vec<_>>();
-
-        assert!(grouped_all_target(&targets).is_none());
-    }
-
-    #[test]
-    fn mixed_direction_batch_does_not_group_to_all_blinds() {
-        let targets = vec![
-            pending_target(2, SnappedPosition::Open),
-            pending_target(3, SnappedPosition::Open),
-            pending_target(4, SnappedPosition::Closed),
-            pending_target(5, SnappedPosition::Open),
-        ];
-
-        assert!(grouped_all_target(&targets).is_none());
-    }
-
-    fn pending_target(aid: u64, snapped: SnappedPosition) -> PendingTargetWrite {
-        PendingTargetWrite {
-            index: 0,
-            id: CharacteristicId::new(aid, IID_TARGET_POSITION),
-            blind: find_blind(aid).unwrap(),
-            snapped,
-        }
     }
 }

@@ -10,7 +10,6 @@ use crate::hap::runtime::HapRuntime;
 use crate::hap::state::{FileHapStore, HapState};
 
 mod accessory_db;
-mod position_cache;
 pub mod somfy;
 mod target_writes;
 

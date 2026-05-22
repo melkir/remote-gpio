@@ -110,6 +110,31 @@ impl Default for TelisGpioOptions {
     }
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct BlindTimingOptions {
+    pub open_ms: u64,
+    pub close_ms: u64,
+}
+
+impl Default for BlindTimingOptions {
+    fn default() -> Self {
+        Self {
+            open_ms: 10_000,
+            close_ms: 10_000,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct PositioningOptions {
+    pub l1: BlindTimingOptions,
+    pub l2: BlindTimingOptions,
+    pub l3: BlindTimingOptions,
+    pub l4: BlindTimingOptions,
+}
+
 /// Resolved driver settings passed to the driver router.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DriverConfig {
@@ -137,6 +162,7 @@ impl DriverConfig {
 pub struct AppConfig {
     pub driver: DriverKind,
     pub homekit: bool,
+    pub positioning: PositioningOptions,
     pub gpio: GpioOptions,
     pub rts: RtsOptions,
     pub telis: TelisOptions,
@@ -147,6 +173,7 @@ impl Default for AppConfig {
         Self {
             driver: DriverKind::default_for_target(),
             homekit: false,
+            positioning: PositioningOptions::default(),
             gpio: GpioOptions::default(),
             rts: RtsOptions::default(),
             telis: TelisOptions::default(),
@@ -221,6 +248,19 @@ pub(crate) fn validate(config: &AppConfig) -> Result<()> {
             bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
         }
     }
+    for (name, timing) in [
+        ("positioning.l1", &config.positioning.l1),
+        ("positioning.l2", &config.positioning.l2),
+        ("positioning.l3", &config.positioning.l3),
+        ("positioning.l4", &config.positioning.l4),
+    ] {
+        if timing.open_ms == 0 {
+            bail!("{name}.open_ms must be greater than 0");
+        }
+        if timing.close_ms == 0 {
+            bail!("{name}.close_ms must be greater than 0");
+        }
+    }
     Ok(())
 }
 
@@ -244,6 +284,46 @@ homekit = false
         )
         .unwrap();
         assert!(!config.homekit);
+    }
+
+    #[test]
+    fn parses_per_blind_positioning() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "fake"
+
+[positioning.l1]
+open_ms = 11000
+close_ms = 12000
+
+[positioning.l4]
+open_ms = 41000
+close_ms = 42000
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.positioning.l1.open_ms, 11_000);
+        assert_eq!(config.positioning.l1.close_ms, 12_000);
+        assert_eq!(config.positioning.l2.open_ms, 10_000);
+        assert_eq!(config.positioning.l4.open_ms, 41_000);
+        assert_eq!(config.positioning.l4.close_ms, 42_000);
+    }
+
+    #[test]
+    fn rejects_zero_positioning_timing() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "fake"
+
+[positioning.l2]
+open_ms = 0
+"#,
+        )
+        .unwrap();
+
+        let err = validate(&config).unwrap_err();
+        assert!(err.to_string().contains("positioning.l2.open_ms"));
     }
 
     #[test]

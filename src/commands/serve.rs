@@ -14,8 +14,13 @@ pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
         bail!("doctor reported blocking failures; refusing to start");
     }
 
-    let controller =
-        Arc::new(BlindController::with_driver(resolved_config.config.driver_config()).await?);
+    let controller = Arc::new(
+        BlindController::with_driver(
+            resolved_config.config.driver_config(),
+            resolved_config.config.positioning.clone(),
+        )
+        .await?,
+    );
     let shared_state = Arc::new(AppState::new(controller.clone()));
 
     let hap_handles = if resolved_config.config.homekit {
