@@ -194,6 +194,11 @@ The controller lock is the application-level ordering rule. Driver locks are int
 
 Selection notifications and position broadcasts are separate from operation and hardware locks, so observers can continue receiving state while a command is queued or executing.
 
+Live state uses two notification channels:
+
+- **Selection** — `watch` from the active driver through `BlindController::subscribe_selection()`; consumed by SSE `/events` and WebSocket.
+- **Positions** — `broadcast` from `BlindController` after inferred moves and timed HomeKit motion; consumed by tests via `subscribe_positions()`. When HomeKit is enabled, `homekit::start` installs a hook on the same emit path to translate deltas into HAP `CharacteristicEvent` frames (no background listener task).
+
 These locks are correctness mechanisms, not trust boundaries. They prevent malformed timing and state races; they do not authenticate clients.
 
 ## Persistence
