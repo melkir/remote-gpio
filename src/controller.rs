@@ -110,6 +110,10 @@ impl BlindController {
             let Some(blind) = find_blind(aid) else {
                 continue;
             };
+            let target = target.min(100);
+            if self.positions.get_target(aid).await == target {
+                continue;
+            }
             requests.push(MotionRequest {
                 blind,
                 current: self.positions.get_current(aid).await,
@@ -556,6 +560,47 @@ mod tests {
         assert!(rx.is_empty());
         assert_eq!(controller.operations(), Vec::new());
         assert_eq!(controller.position_for_aid(2).await.current, 50);
+        assert_eq!(controller.position_for_aid(2).await.target, 50);
+    }
+
+    #[tokio::test]
+    async fn target_position_matching_pending_target_is_noop() {
+        let controller = Arc::new(
+            BlindController::with_driver_and_positions_for_test(
+                crate::config::DriverConfig::fake(),
+                crate::config::PositioningOptions {
+                    l1: crate::config::BlindTimingOptions {
+                        open_ms: 50,
+                        close_ms: 50,
+                    },
+                    ..crate::config::PositioningOptions::default()
+                },
+                HashMap::from([(2, 100)]),
+            )
+            .await
+            .unwrap(),
+        );
+        controller
+            .set_target_positions(vec![(2, 50)])
+            .await
+            .unwrap();
+        let rx = controller.subscribe_positions();
+
+        let deltas = controller
+            .set_target_positions(vec![(2, 50)])
+            .await
+            .unwrap();
+
+        assert!(deltas.is_empty());
+        assert!(rx.is_empty());
+        assert_eq!(
+            controller.operations(),
+            vec![crate::driver::ProtocolOperation::FakeCommand {
+                channel: Channel::L1,
+                command: Command::Down,
+            }]
+        );
+        assert_eq!(controller.position_for_aid(2).await.current, 100);
         assert_eq!(controller.position_for_aid(2).await.target, 50);
     }
 }

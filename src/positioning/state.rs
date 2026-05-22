@@ -132,6 +132,11 @@ impl PositionCache {
             .await
     }
 
+    pub async fn get_target(&self, aid: u64) -> u8 {
+        self.with_state(|state| effective_target_position(state, aid))
+            .await
+    }
+
     pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {
         if matches!(channel, Channel::All) {
             return self.apply_all_current(pos).await;
