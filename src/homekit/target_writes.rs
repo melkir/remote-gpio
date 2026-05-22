@@ -149,6 +149,52 @@ fn supports_events(id: CharacteristicId) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn batch_target_writes_plan_four_blinds() {
+        let writes = [2, 3, 4, 5]
+            .into_iter()
+            .map(|aid| CharacteristicWrite {
+                id: CharacteristicId::new(aid, IID_TARGET_POSITION),
+                value: Some(json!(50)),
+                ev: None,
+            })
+            .collect::<Vec<_>>();
+        let mut subscriptions = crate::hap::runtime::Subscriptions::default();
+        let plan = plan_target_writes(writes, &mut subscriptions);
+
+        assert_eq!(plan.targets.len(), 4);
+        assert_eq!(
+            plan.targets
+                .iter()
+                .map(|target| target.blind.aid)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
+        assert!(plan
+            .targets
+            .iter()
+            .all(|target| target.target == 50 && target.id.iid.0 == IID_TARGET_POSITION));
+        assert_eq!(plan.statuses.len(), 4);
+        assert!(subscriptions.is_empty());
+    }
+
+    #[test]
+    fn subscription_toggle_does_not_plan_motion() {
+        let id = CharacteristicId::new(2, IID_CURRENT_POSITION);
+        let writes = vec![CharacteristicWrite {
+            id,
+            value: None,
+            ev: Some(true),
+        }];
+        let mut subscriptions = crate::hap::runtime::Subscriptions::default();
+
+        let plan = plan_target_writes(writes, &mut subscriptions);
+
+        assert!(plan.targets.is_empty());
+        assert!(subscriptions.contains(&id));
+    }
 
     #[test]
     fn unsupported_write_reports_protocol_status() {

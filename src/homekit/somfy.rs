@@ -186,6 +186,8 @@ mod tests {
     use crate::core::{Channel, Command};
     use serde_json::json;
     use std::collections::HashMap;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
     use tokio::time::Duration;
 
     fn test_positioning(ms: u64) -> crate::config::PositioningOptions {
@@ -319,6 +321,34 @@ mod tests {
             ]
         );
         assert_eq!(app.controller.position_for_aid(2).await.current, 50);
+    }
+
+    #[tokio::test]
+    async fn target_position_write_leaves_outcome_events_empty() {
+        let controller = fake_controller(10).await;
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls_for_hook = hook_calls.clone();
+        controller.attach_position_hook(Arc::new(move |_| {
+            hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
+        }));
+        let app = SomfyHapApp::new_for_test(controller);
+        let mut subscriptions = Subscriptions::default();
+
+        let outcome = app
+            .write_characteristics(
+                vec![CharacteristicWrite {
+                    id: CharacteristicId::new(2, IID_TARGET_POSITION),
+                    value: Some(json!(50)),
+                    ev: None,
+                }],
+                &mut subscriptions,
+            )
+            .await
+            .unwrap();
+
+        assert!(outcome.events.is_empty());
+        assert!(outcome.all_success());
+        assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

@@ -407,7 +407,8 @@ fn infer_position(command: Command) -> Option<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::{Arc, Mutex};
     use tokio::time::{timeout, Duration};
 
     fn controller_config() -> crate::config::PositioningOptions {
@@ -635,5 +636,67 @@ mod tests {
         );
         assert_eq!(controller.position_for_aid(2).await.current, 100);
         assert_eq!(controller.position_for_aid(2).await.target, 50);
+    }
+
+    #[tokio::test]
+    async fn position_hook_runs_once_per_non_empty_emit() {
+        let controller = Arc::new(
+            BlindController::with_driver_and_positions_for_test(
+                crate::config::DriverConfig::fake(),
+                controller_config(),
+                HashMap::from([(2, 100)]),
+            )
+            .await
+            .unwrap(),
+        );
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let hook_calls_for_hook = hook_calls.clone();
+        let captured_for_hook = captured.clone();
+        controller.attach_position_hook(Arc::new(move |deltas| {
+            hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
+            *captured_for_hook.lock().unwrap() = deltas;
+        }));
+        let mut rx = controller.subscribe_positions();
+
+        controller
+            .set_target_positions(vec![(2, 50)])
+            .await
+            .unwrap();
+
+        assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
+        let hooked = captured.lock().unwrap().clone();
+        assert!(!hooked.is_empty());
+        assert_eq!(hooked[0].target, Some(50));
+        let broadcasted = rx.try_recv().unwrap();
+        assert_eq!(broadcasted, hooked);
+    }
+
+    #[tokio::test]
+    async fn position_hook_not_called_when_emit_empty() {
+        let controller = Arc::new(
+            BlindController::with_driver_and_positions_for_test(
+                crate::config::DriverConfig::fake(),
+                controller_config(),
+                HashMap::from([(2, 50)]),
+            )
+            .await
+            .unwrap(),
+        );
+        let hook_calls = Arc::new(AtomicUsize::new(0));
+        let hook_calls_for_hook = hook_calls.clone();
+        controller.attach_position_hook(Arc::new(move |_| {
+            hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
+        }));
+        let mut rx = controller.subscribe_positions();
+
+        let deltas = controller
+            .set_target_positions(vec![(2, 50)])
+            .await
+            .unwrap();
+
+        assert!(deltas.is_empty());
+        assert_eq!(hook_calls.load(Ordering::SeqCst), 0);
+        assert!(rx.try_recv().is_err());
     }
 }
