@@ -18,7 +18,7 @@ const CHANNELS: [Channel; 5] = [
     Channel::L2,
     Channel::L3,
     Channel::L4,
-    Channel::ALL,
+    Channel::All,
 ];
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
@@ -279,9 +279,9 @@ mod tests {
         let mut store = RtsStateStore::load_or_init(&path, DEFAULT_RESERVE_SIZE).unwrap();
         assert_eq!(store.selected_channel(), Channel::L1);
 
-        store.set_selected_channel(Channel::ALL).unwrap();
+        store.set_selected_channel(Channel::All).unwrap();
         let store = RtsStateStore::load_or_init(&path, DEFAULT_RESERVE_SIZE).unwrap();
-        assert_eq!(store.selected_channel(), Channel::ALL);
+        assert_eq!(store.selected_channel(), Channel::All);
     }
 
     #[test]

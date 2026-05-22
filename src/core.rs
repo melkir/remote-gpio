@@ -19,7 +19,8 @@ pub enum Channel {
     L2,
     L3,
     L4,
-    ALL,
+    #[serde(rename = "ALL")]
+    All,
 }
 
 impl Channel {
@@ -31,8 +32,8 @@ impl Channel {
             Channel::L1 => Channel::L2,
             Channel::L2 => Channel::L3,
             Channel::L3 => Channel::L4,
-            Channel::L4 => Channel::ALL,
-            Channel::ALL => Channel::L1,
+            Channel::L4 => Channel::All,
+            Channel::All => Channel::L1,
         }
     }
 }
@@ -41,7 +42,7 @@ impl FromStr for Channel {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "ALL" => Ok(Channel::ALL),
+            "ALL" => Ok(Channel::All),
             _ => CHANNELS
                 .iter()
                 .find(|(_, name)| *name == s)
@@ -58,7 +59,7 @@ impl fmt::Display for Channel {
             Channel::L2 => write!(f, "L2"),
             Channel::L3 => write!(f, "L3"),
             Channel::L4 => write!(f, "L4"),
-            Channel::ALL => write!(f, "ALL"),
+            Channel::All => write!(f, "ALL"),
         }
     }
 }
@@ -111,7 +112,7 @@ mod tests {
         for (ch, name) in CHANNELS {
             assert_eq!(Channel::from_str(name).unwrap(), ch);
         }
-        assert_eq!(Channel::from_str("ALL").unwrap(), Channel::ALL);
+        assert_eq!(Channel::from_str("ALL").unwrap(), Channel::All);
     }
 
     #[test]
@@ -127,11 +128,20 @@ mod tests {
             Channel::L2,
             Channel::L3,
             Channel::L4,
-            Channel::ALL,
+            Channel::All,
         ] {
             let s = ch.to_string();
             assert_eq!(Channel::from_str(&s).unwrap(), ch);
         }
+    }
+
+    #[test]
+    fn channel_serde_preserves_all_spelling() {
+        assert_eq!(serde_json::to_string(&Channel::All).unwrap(), r#""ALL""#);
+        assert_eq!(
+            serde_json::from_str::<Channel>(r#""ALL""#).unwrap(),
+            Channel::All
+        );
     }
 
     #[test]

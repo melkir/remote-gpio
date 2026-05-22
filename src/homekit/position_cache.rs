@@ -126,7 +126,7 @@ impl PositionCache {
 
     pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<CharacteristicEvent> {
         let snapped = SnappedPosition::snap(pos);
-        if matches!(channel, Channel::ALL) {
+        if matches!(channel, Channel::All) {
             return self.apply_all(snapped).await;
         }
         let Some(blind) = BLINDS.iter().find(|b| b.channel == channel) else {

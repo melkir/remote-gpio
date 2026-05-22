@@ -89,7 +89,7 @@ impl SomfyHapApp {
         }
 
         self.controller
-            .execute_on(Channel::ALL, command_for_snapped(snapped))
+            .execute_on(Channel::All, command_for_snapped(snapped))
             .await
             .map_err(|e| anyhow!(e))?;
 
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(
             controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {
-                channel: Channel::ALL,
+                channel: Channel::All,
                 command: Command::Up,
             }]
         );
@@ -332,7 +332,7 @@ mod tests {
         assert_eq!(
             controller.operations(),
             vec![crate::driver::ProtocolOperation::FakeCommand {
-                channel: Channel::ALL,
+                channel: Channel::All,
                 command: Command::Up,
             }]
         );

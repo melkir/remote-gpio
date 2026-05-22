@@ -28,7 +28,7 @@ pub fn channel_led_gpio(channel: Channel, config: &TelisGpioOptions) -> Option<u
         Channel::L2 => Some(config.led2),
         Channel::L3 => Some(config.led3),
         Channel::L4 => Some(config.led4),
-        Channel::ALL => None,
+        Channel::All => None,
     }
 }
 
@@ -99,7 +99,7 @@ mod platform {
         let mut event_count = 0;
 
         // Threshold: 4 inputs × 2 edges (rising + falling) × 2 transitions = 16 events.
-        // When all LEDs are lit (Channel::ALL), every input toggles, producing many edges.
+        // When all LEDs are lit (Channel::All), every input toggles, producing many edges.
         const ALL_EVENTS_THRESHOLD: u32 = 16;
 
         let deadline = tokio::time::Instant::now() + timeout_duration;
@@ -121,7 +121,7 @@ mod platform {
                 .ok_or_else(|| anyhow::anyhow!("Timed out waiting for Telis LED GPIO edge"))?;
             channel_from_gpio(gpio, config)
         } else {
-            Ok(Channel::ALL)
+            Ok(Channel::All)
         }
     }
 
@@ -169,7 +169,7 @@ mod platform {
         Channel::L2,
         Channel::L3,
         Channel::L4,
-        Channel::ALL,
+        Channel::All,
     ];
 
     pub async fn watch_inputs(_chip: &str, _config: &TelisGpioOptions) -> Result<Channel> {

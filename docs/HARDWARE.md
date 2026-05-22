@@ -43,7 +43,7 @@ The driver watches LED lines with edge detection, collecting up to 16 events wit
 - **16+ edges in 300 ms:** selection is `ALL` (group mode — LEDs blink).
 - **Otherwise:** the last edge maps to `L1`–`L4` via `channel_from_gpio`.
 
-The Telis remote has four LEDs, not a separate fifth `ALL` line. The software models the blinking group pattern as `Channel::ALL`, which is why the API and HomeKit can expose `ALL` like any other target even though the wired remote only exposes it as LED activity.
+The Telis remote has four LEDs, not a separate fifth `ALL` line. The software models the blinking group pattern as `Channel::All`, which is why the API and HomeKit can expose `ALL` like any other target even though the wired remote only exposes it as LED activity.
 
 ## CC1101 RTS driver
 

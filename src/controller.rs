@@ -122,12 +122,12 @@ fn infer_position(command: Command) -> Option<u8> {
 
 fn fan_out_channels(channel: Channel) -> &'static [Channel] {
     match channel {
-        Channel::ALL => &[
+        Channel::All => &[
             Channel::L1,
             Channel::L2,
             Channel::L3,
             Channel::L4,
-            Channel::ALL,
+            Channel::All,
         ],
         Channel::L1 => &[Channel::L1],
         Channel::L2 => &[Channel::L2],
@@ -160,13 +160,13 @@ mod tests {
     #[test]
     fn fan_out_targets_all_paired_channels_for_all() {
         assert_eq!(
-            fan_out_channels(Channel::ALL),
+            fan_out_channels(Channel::All),
             &[
                 Channel::L1,
                 Channel::L2,
                 Channel::L3,
                 Channel::L4,
-                Channel::ALL,
+                Channel::All,
             ]
         );
     }
