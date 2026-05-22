@@ -6,8 +6,9 @@ use tokio::sync::broadcast;
 
 use crate::controller::BlindController;
 use crate::hap::mdns::{self, MdnsConfig};
-use crate::hap::runtime::HapRuntime;
+use crate::hap::runtime::{CharacteristicEvent, HapRuntime};
 use crate::hap::state::{FileHapStore, HapState};
+use crate::positioning::state::PositionDelta;
 
 mod accessory_db;
 pub mod somfy;
@@ -30,13 +31,11 @@ pub fn setup_uri(state: &HapState) -> Result<String> {
 /// Handles for the background HomeKit tasks started by [`start`].
 pub struct HomekitHandles {
     _announcement: mdns::Announcement,
-    position_listener: tokio::task::JoinHandle<()>,
     hap_server: tokio::task::JoinHandle<()>,
 }
 
 impl HomekitHandles {
     pub fn abort(&self) {
-        self.position_listener.abort();
         self.hap_server.abort();
     }
 }
@@ -60,14 +59,10 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     )?;
 
     let (events, _) = broadcast::channel(64);
-    let position_rx = controller.subscribe_positions();
-    let app = Arc::new(somfy::SomfyHapApp::new(controller));
-    let runtime = Arc::new(HapRuntime::new(hap_state, store, app.clone(), events));
+    let app = Arc::new(somfy::SomfyHapApp::new(controller.clone()));
+    let runtime = Arc::new(HapRuntime::new(hap_state, store, app, events));
 
-    let event_tx = runtime.event_sender();
-    let position_listener = tokio::spawn(async move {
-        app.run_position_listener(event_tx, position_rx).await;
-    });
+    attach_hap_position_events(&controller, runtime.event_sender());
 
     let hap_server = tokio::spawn(async move {
         if let Err(e) = crate::hap::server::serve(runtime, HAP_PORT).await {
@@ -76,7 +71,19 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     });
     Ok(HomekitHandles {
         _announcement: announcement,
-        position_listener,
         hap_server,
     })
+}
+
+fn attach_hap_position_events(
+    controller: &BlindController,
+    event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
+) {
+    controller.attach_position_hook(Arc::new(move |deltas: Vec<PositionDelta>| {
+        let events = somfy::position_characteristic_events(&deltas);
+        if !events.is_empty() {
+            tracing::debug!(count = events.len(), "hap position events published");
+            let _ = event_tx.send(events);
+        }
+    }));
 }

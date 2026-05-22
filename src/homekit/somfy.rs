@@ -5,7 +5,6 @@
 use anyhow::anyhow;
 use serde_json::Value;
 use std::sync::Arc;
-use tokio::sync::broadcast;
 
 use crate::controller::BlindController;
 use crate::hap::runtime::{
@@ -35,33 +34,8 @@ impl SomfyHapApp {
         Self { controller }
     }
 
-    pub async fn run_position_listener(
-        self: Arc<Self>,
-        event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
-        mut rx: broadcast::Receiver<Vec<PositionDelta>>,
-    ) {
-        loop {
-            match rx.recv().await {
-                Ok(deltas) => {
-                    let events = characteristic_events(&deltas);
-                    if !events.is_empty() {
-                        let _ = event_tx.send(events);
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!("position listener lagged by {n}");
-                }
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
-        }
-    }
-
-    async fn execute_targets(
-        &self,
-        targets: &[PendingTargetWrite],
-    ) -> Result<Vec<CharacteristicEvent>, anyhow::Error> {
-        let deltas = self
-            .controller
+    async fn execute_targets(&self, targets: &[PendingTargetWrite]) -> Result<(), anyhow::Error> {
+        self.controller
             .set_target_positions(
                 targets
                     .iter()
@@ -69,12 +43,13 @@ impl SomfyHapApp {
                     .collect(),
             )
             .await
-            .map_err(|e| anyhow!(e))?;
-        Ok(characteristic_events(&deltas))
+            .map(|_| ())
+            .map_err(|e| anyhow!(e))
     }
 }
 
-fn characteristic_events(deltas: &[PositionDelta]) -> Vec<CharacteristicEvent> {
+/// Map controller position deltas to HAP characteristic events for EVENT push.
+pub(crate) fn position_characteristic_events(deltas: &[PositionDelta]) -> Vec<CharacteristicEvent> {
     let mut events = Vec::new();
     for delta in deltas {
         if let Some(current) = delta.current {
@@ -131,9 +106,8 @@ impl HapAccessoryApp for SomfyHapApp {
             let mut outcome = CharacteristicWriteOutcome::default();
             let mut statuses = plan.statuses;
 
-            outcome
-                .events
-                .extend(self.execute_targets(&plan.targets).await?);
+            // Position EVENT push is hook-only via `emit_position_deltas` (see `homekit::start`).
+            self.execute_targets(&plan.targets).await?;
             for target in plan.targets {
                 statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
             }
