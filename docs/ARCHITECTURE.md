@@ -55,8 +55,7 @@ flowchart TB
   end
 
   subgraph application["Application core"]
-    service["Request validation · pairing gates"]
-    controller["Operation queue · targeting · position events"]
+    controller["Validation · operation queue · targeting · position events"]
     router["Driver router"]
   end
 
@@ -72,8 +71,7 @@ flowchart TB
   remote --> cli --> axum
   hk --> hap
 
-  axum --> service
-  service --> controller
+  axum --> controller
   hap --> controller
   controller --> router
   router --> telis
@@ -81,7 +79,7 @@ flowchart TB
   router --> fake
 ```
 
-HTTP, WebSocket, and the PWA enter through the same request-validation path before reaching the controller. HomeKit uses the same controller and driver router, but bypasses the HTTP-oriented service layer because HAP already has its own protocol semantics and accessory model.
+HTTP, WebSocket, and the PWA validate API requests before entering the controller. HomeKit uses the same controller and driver router, but applies its own protocol semantics and accessory model before dispatching commands.
 
 The CLI has two modes:
 
@@ -132,20 +130,18 @@ All drivers are compiled into the binary. The active driver is selected by `/etc
 sequenceDiagram
   participant UI as PWA / API client
   participant HTTP as HTTP or WS route
-  participant Service as Command service
   participant Controller as Blind controller
   participant Driver as Active driver
 
   UI->>HTTP: command + optional channel
-  HTTP->>Service: validate request shape and pairing support
-  Service->>Controller: execute client command
+  HTTP->>Controller: validate and execute client command
   Controller->>Driver: target channel or use selection
   Driver-->>Controller: success or error
   Controller-->>HTTP: result
   Controller-->>UI: selection / position events
 ```
 
-The service layer handles the client-facing request contract. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; movement commands without a channel use the current selection. Direct targeted controller calls reject `select` because selection is a client request, not a per-channel action.
+The HTTP and WebSocket routes handle the client-facing request contract before dispatching to the controller. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; movement commands without a channel use the current selection. Direct targeted controller calls reject `select` because selection is a client request, not a per-channel action.
 
 ### HomeKit Command
 
@@ -242,7 +238,7 @@ This section is a pointer into the implementation, not the architecture itself.
 | ------------------------------------------- | ------------------------------------------ |
 | CLI and operator commands                   | `src/cli.rs`, `src/commands/`              |
 | HTTP, SSE, WebSocket, static assets         | `src/server.rs`, `src/embed.rs`            |
-| Request validation and pairing gates        | `src/service/`                             |
+| HTTP command validation helper              | `src/service/`                             |
 | Operation queue, targeting, position events | `src/controller.rs`                        |
 | Shared command and channel types            | `src/core.rs`                              |
 | Config resolution and validation            | `src/config.rs`                            |
