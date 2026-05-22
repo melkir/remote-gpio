@@ -170,26 +170,13 @@ fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::controller::test_support::fake_four_blinds;
     use crate::core::{Channel, Command};
     use crate::positioning::state::STATUS_STOPPED;
     use serde_json::json;
-    use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::Arc;
     use tokio::time::Duration;
-
-    fn test_positioning(ms: u64) -> crate::config::PositioningOptions {
-        let timing = crate::config::BlindTimingOptions {
-            open_ms: ms,
-            close_ms: ms,
-        };
-        crate::config::PositioningOptions {
-            l1: timing.clone(),
-            l2: timing.clone(),
-            l3: timing.clone(),
-            l4: timing,
-        }
-    }
 
     async fn wait_for_current(app: &SomfyHapApp, aid: u64, expected: u8) {
         for _ in 0..20 {
@@ -199,21 +186,6 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(1)).await;
         }
         assert_eq!(app.controller.position_for_aid(aid).await.current, expected);
-    }
-
-    async fn fake_controller(ms: u64) -> Arc<BlindController> {
-        let positions = [(2, 100), (3, 100), (4, 100), (5, 100)]
-            .into_iter()
-            .collect::<HashMap<_, _>>();
-        Arc::new(
-            BlindController::with_driver_and_positions_for_test(
-                crate::config::DriverConfig::fake(),
-                test_positioning(ms),
-                positions,
-            )
-            .await
-            .unwrap(),
-        )
     }
 
     #[test]
@@ -271,7 +243,7 @@ mod tests {
 
     #[tokio::test]
     async fn target_position_starts_motion_and_stops_after_timed_percentage() {
-        let controller = fake_controller(2).await;
+        let controller = fake_four_blinds(2).await;
         let app = SomfyHapApp::new(controller.clone());
         let writes = vec![CharacteristicWrite {
             id: CharacteristicId::new(2, IID_TARGET_POSITION),
@@ -313,7 +285,7 @@ mod tests {
 
     #[tokio::test]
     async fn target_position_write_leaves_outcome_events_empty() {
-        let controller = fake_controller(10).await;
+        let controller = fake_four_blinds(10).await;
         let hook_calls = Arc::new(AtomicUsize::new(0));
         let hook_calls_for_hook = hook_calls.clone();
         controller.attach_position_listener(Arc::new(move |_deltas| {
@@ -341,7 +313,7 @@ mod tests {
 
     #[tokio::test]
     async fn full_individual_write_batch_sends_one_all_start_command() {
-        let controller = fake_controller(10).await;
+        let controller = fake_four_blinds(10).await;
         let app = SomfyHapApp::new(controller.clone());
         let writes = [2, 3, 4, 5]
             .into_iter()
@@ -370,7 +342,7 @@ mod tests {
 
     #[tokio::test]
     async fn endpoint_target_does_not_send_timed_stop() {
-        let controller = fake_controller(2).await;
+        let controller = fake_four_blinds(2).await;
         let app = SomfyHapApp::new(controller.clone());
         let mut subscriptions = Subscriptions::default();
 
@@ -398,7 +370,7 @@ mod tests {
 
     #[tokio::test]
     async fn writing_current_position_cancels_pending_motion() {
-        let controller = fake_controller(20).await;
+        let controller = fake_four_blinds(20).await;
         let app = SomfyHapApp::new(controller.clone());
         let mut subscriptions = Subscriptions::default();
 

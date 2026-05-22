@@ -324,4 +324,7 @@ fn infer_position(command: Command) -> Option<u8> {
 }
 
 #[cfg(test)]
+pub mod test_support;
+
+#[cfg(test)]
 mod tests;

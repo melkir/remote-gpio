@@ -1,4 +1,6 @@
+use super::test_support::{fake_controller, uniform_positioning_l1_ms};
 use super::*;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::time::{timeout, Duration};
@@ -90,21 +92,8 @@ async fn controller_operations_wait_behind_operation_lock() {
 
 #[tokio::test]
 async fn target_position_writes_wait_behind_operation_lock() {
-    let controller = Arc::new(
-        BlindController::with_driver_and_positions_for_test(
-            crate::config::DriverConfig::fake(),
-            crate::config::PositioningOptions {
-                l1: crate::config::BlindTimingOptions {
-                    open_ms: 50,
-                    close_ms: 50,
-                },
-                ..crate::config::PositioningOptions::default()
-            },
-            HashMap::from([(2, 100)]),
-        )
-        .await
-        .unwrap(),
-    );
+    let controller =
+        fake_controller(uniform_positioning_l1_ms(50), HashMap::from([(2, 100)])).await;
     let guard = controller.operation_lock.lock().await;
     let pending_controller = controller.clone();
 
@@ -149,21 +138,7 @@ async fn execute_on_rejects_select() {
 
 #[tokio::test]
 async fn target_position_updates_shared_position_model() {
-    let controller = Arc::new(
-        BlindController::with_driver_and_positions_for_test(
-            crate::config::DriverConfig::fake(),
-            crate::config::PositioningOptions {
-                l1: crate::config::BlindTimingOptions {
-                    open_ms: 2,
-                    close_ms: 2,
-                },
-                ..crate::config::PositioningOptions::default()
-            },
-            HashMap::from([(2, 100)]),
-        )
-        .await
-        .unwrap(),
-    );
+    let controller = fake_controller(uniform_positioning_l1_ms(2), HashMap::from([(2, 100)])).await;
 
     let deltas = controller
         .set_target_positions(vec![(2, 50)])
@@ -178,15 +153,7 @@ async fn target_position_updates_shared_position_model() {
 
 #[tokio::test]
 async fn target_position_matching_cached_current_is_noop() {
-    let controller = Arc::new(
-        BlindController::with_driver_and_positions_for_test(
-            crate::config::DriverConfig::fake(),
-            controller_config(),
-            HashMap::from([(2, 50)]),
-        )
-        .await
-        .unwrap(),
-    );
+    let controller = fake_controller(controller_config(), HashMap::from([(2, 50)])).await;
     let (listener_calls, _) = attach_listener(&controller);
 
     let deltas = controller
@@ -203,21 +170,8 @@ async fn target_position_matching_cached_current_is_noop() {
 
 #[tokio::test]
 async fn target_position_matching_pending_target_is_noop() {
-    let controller = Arc::new(
-        BlindController::with_driver_and_positions_for_test(
-            crate::config::DriverConfig::fake(),
-            crate::config::PositioningOptions {
-                l1: crate::config::BlindTimingOptions {
-                    open_ms: 50,
-                    close_ms: 50,
-                },
-                ..crate::config::PositioningOptions::default()
-            },
-            HashMap::from([(2, 100)]),
-        )
-        .await
-        .unwrap(),
-    );
+    let controller =
+        fake_controller(uniform_positioning_l1_ms(50), HashMap::from([(2, 100)])).await;
     controller
         .set_target_positions(vec![(2, 50)])
         .await
@@ -244,15 +198,7 @@ async fn target_position_matching_pending_target_is_noop() {
 
 #[tokio::test]
 async fn position_listener_runs_once_per_non_empty_emit() {
-    let controller = Arc::new(
-        BlindController::with_driver_and_positions_for_test(
-            crate::config::DriverConfig::fake(),
-            controller_config(),
-            HashMap::from([(2, 100)]),
-        )
-        .await
-        .unwrap(),
-    );
+    let controller = fake_controller(controller_config(), HashMap::from([(2, 100)])).await;
     let (listener_calls, captured) = attach_listener(&controller);
 
     controller
@@ -268,15 +214,7 @@ async fn position_listener_runs_once_per_non_empty_emit() {
 
 #[tokio::test]
 async fn position_listener_not_called_when_emit_empty() {
-    let controller = Arc::new(
-        BlindController::with_driver_and_positions_for_test(
-            crate::config::DriverConfig::fake(),
-            controller_config(),
-            HashMap::from([(2, 50)]),
-        )
-        .await
-        .unwrap(),
-    );
+    let controller = fake_controller(controller_config(), HashMap::from([(2, 50)])).await;
     let (listener_calls, _) = attach_listener(&controller);
 
     let deltas = controller
