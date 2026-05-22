@@ -63,19 +63,14 @@ pub fn plan_target_writes(
                 continue;
             }
         };
-        let Some(blind) = find_blind(write.id.aid.0) else {
-            statuses[index] = Some(CharacteristicWriteStatus::error(
-                write.id,
-                write_error_status(write.id),
-            ));
-            continue;
-        };
-        targets.push(PendingTargetWrite {
-            index,
-            id: write.id,
-            blind,
-            target: value,
-        });
+        if let Some(blind) = find_blind(write.id.aid.0) {
+            targets.push(PendingTargetWrite {
+                index,
+                id: write.id,
+                blind,
+                target: value,
+            });
+        }
     }
 
     TargetWritePlan { statuses, targets }

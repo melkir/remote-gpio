@@ -197,7 +197,7 @@ Selection notifications and position broadcasts are separate from operation and 
 Live state uses two notification channels:
 
 - **Selection** — `watch` from the active driver through `BlindController::subscribe_selection()`; consumed by SSE `/events` and WebSocket.
-- **Positions** — `broadcast` from `BlindController` after inferred moves and timed HomeKit motion; consumed by tests via `subscribe_positions()`. When HomeKit is enabled, `homekit::start` installs a hook on the same emit path to translate deltas into HAP `CharacteristicEvent` frames (no background listener task).
+- **Positions** — `BlindController::attach_position_listener` after inferred moves and timed HomeKit motion. When HomeKit is enabled, `homekit::start` registers a listener that translates deltas into HAP `CharacteristicEvent` frames (no background task).
 
 These locks are correctness mechanisms, not trust boundaries. They prevent malformed timing and state races; they do not authenticate clients.
 
@@ -209,7 +209,7 @@ Runtime state lives under `$STATE_DIRECTORY` when systemd manages the service. R
 | ---------------- | --------------- | ------------------------------------------------------------------------- |
 | `rts.json`       | RTS driver      | Virtual remote IDs, selected RTS channel, and rolling-code reserves.      |
 | `hap.json`       | HAP state       | HomeKit identity, setup data, long-term key, config number, and pairings. |
-| `positions.json` | HomeKit adapter | Last inferred HomeKit positions for each accessory.                       |
+| `positions.json` | Position cache (`positioning/state.rs`) | Last inferred blind positions per accessory (read-only on reload). |
 
 State files are written with a temp-file plus atomic rename pattern. Security-sensitive HomeKit state is stored with restrictive permissions. The service does not replay persisted positions into GPIO or RF on startup; position state is for client continuity, not physical reconciliation.
 

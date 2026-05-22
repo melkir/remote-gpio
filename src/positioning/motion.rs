@@ -78,16 +78,33 @@ pub struct BlindMovement {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MotionPlan {
-    pub starts: Vec<DriverStart>,
-    pub movements: Vec<BlindMovement>,
+pub enum MotionPlan {
+    /// No target changes were requested.
+    NoOp,
+    /// Timed travel: start driver commands, schedule proportional stop, then snap current.
+    Travel {
+        starts: Vec<DriverStart>,
+        movements: Vec<BlindMovement>,
+    },
+    /// Target already matches estimated current but in-flight motion must be cancelled and snapped.
+    CancelAndSnap { requests: Vec<MotionRequest> },
 }
 
 pub fn plan_motion(requests: &[MotionRequest]) -> MotionPlan {
+    if requests.is_empty() {
+        return MotionPlan::NoOp;
+    }
+
     let movements = requests
         .iter()
         .filter_map(|request| movement_for(*request))
         .collect::<Vec<_>>();
+
+    if movements.is_empty() {
+        return MotionPlan::CancelAndSnap {
+            requests: requests.to_vec(),
+        };
+    }
 
     let starts = if can_group_start(&movements) {
         vec![DriverStart {
@@ -104,7 +121,7 @@ pub fn plan_motion(requests: &[MotionRequest]) -> MotionPlan {
             .collect()
     };
 
-    MotionPlan { starts, movements }
+    MotionPlan::Travel { starts, movements }
 }
 
 fn movement_for(request: MotionRequest) -> Option<BlindMovement> {
@@ -163,17 +180,21 @@ mod tests {
             target: 60,
             timing: timing(30_000, 20_000),
         }]);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { starts, movements } = plan else {
+            return;
+        };
 
         assert_eq!(
-            plan.starts,
+            starts,
             vec![DriverStart {
                 channel: Channel::L1,
                 command: Command::Up,
             }]
         );
-        assert_eq!(plan.movements[0].duration, Duration::from_millis(15_000));
-        assert_eq!(plan.movements[0].status, STATUS_INCREASING);
-        assert!(plan.movements[0].stop_at_end);
+        assert_eq!(movements[0].duration, Duration::from_millis(15_000));
+        assert_eq!(movements[0].status, STATUS_INCREASING);
+        assert!(movements[0].stop_at_end);
     }
 
     #[test]
@@ -184,11 +205,15 @@ mod tests {
             target: 20,
             timing: timing(30_000, 10_000),
         }]);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { movements, .. } = plan else {
+            return;
+        };
 
-        assert_eq!(plan.movements[0].command, Command::Down);
-        assert_eq!(plan.movements[0].duration, Duration::from_millis(6_000));
-        assert_eq!(plan.movements[0].status, STATUS_DECREASING);
-        assert!(plan.movements[0].stop_at_end);
+        assert_eq!(movements[0].command, Command::Down);
+        assert_eq!(movements[0].duration, Duration::from_millis(6_000));
+        assert_eq!(movements[0].status, STATUS_DECREASING);
+        assert!(movements[0].stop_at_end);
     }
 
     #[test]
@@ -207,9 +232,13 @@ mod tests {
                 timing: timing(30_000, 20_000),
             },
         ]);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { movements, .. } = plan else {
+            return;
+        };
 
-        assert!(!plan.movements[0].stop_at_end);
-        assert!(!plan.movements[1].stop_at_end);
+        assert!(!movements[0].stop_at_end);
+        assert!(!movements[1].stop_at_end);
     }
 
     #[test]
@@ -225,15 +254,19 @@ mod tests {
             .collect::<Vec<_>>();
 
         let plan = plan_motion(&requests);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { starts, movements } = plan else {
+            return;
+        };
 
         assert_eq!(
-            plan.starts,
+            starts,
             vec![DriverStart {
                 channel: Channel::All,
                 command: Command::Up,
             }]
         );
-        assert_eq!(plan.movements.len(), 4);
+        assert_eq!(movements.len(), 4);
     }
 
     #[test]
@@ -252,9 +285,13 @@ mod tests {
                 timing: timing(20_000, 20_000),
             },
         ]);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { starts, .. } = plan else {
+            return;
+        };
 
         assert_eq!(
-            plan.starts,
+            starts,
             vec![
                 DriverStart {
                     channel: Channel::L1,
@@ -266,5 +303,22 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn matching_current_and_target_plans_cancel_and_snap() {
+        let plan = plan_motion(&[MotionRequest {
+            blind: &BLINDS[0],
+            current: 50,
+            target: 50,
+            timing: timing(20_000, 20_000),
+        }]);
+
+        assert!(matches!(plan, MotionPlan::CancelAndSnap { .. }));
+    }
+
+    #[test]
+    fn empty_requests_is_noop() {
+        assert!(matches!(plan_motion(&[]), MotionPlan::NoOp));
     }
 }

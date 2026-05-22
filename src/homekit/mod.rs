@@ -62,7 +62,7 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     let app = Arc::new(somfy::SomfyHapApp::new(controller.clone()));
     let runtime = Arc::new(HapRuntime::new(hap_state, store, app, events));
 
-    attach_hap_position_events(&controller, runtime.event_sender());
+    attach_position_events(&controller, runtime.event_sender());
 
     let hap_server = tokio::spawn(async move {
         if let Err(e) = crate::hap::server::serve(runtime, HAP_PORT).await {
@@ -75,11 +75,11 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     })
 }
 
-fn attach_hap_position_events(
+fn attach_position_events(
     controller: &BlindController,
     event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
 ) {
-    controller.attach_position_hook(Arc::new(move |deltas: Vec<PositionDelta>| {
+    controller.attach_position_listener(Arc::new(move |deltas: Vec<PositionDelta>| {
         let events = somfy::position_characteristic_events(&deltas);
         if !events.is_empty() {
             tracing::debug!(count = events.len(), "hap position events published");

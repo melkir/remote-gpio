@@ -64,6 +64,18 @@ pub struct BlindPosition {
     pub status: u8,
 }
 
+impl BlindPosition {
+    /// Default estimated state for an unknown or missing accessory.
+    pub fn default_for_aid(aid: u64) -> Self {
+        Self {
+            aid,
+            current: 100,
+            target: 100,
+            status: STATUS_STOPPED,
+        }
+    }
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct PositionDelta {
     pub aid: u64,
@@ -120,21 +132,6 @@ impl PositionCache {
                 status: effective_status(&state, b.aid),
             })
             .collect()
-    }
-
-    pub async fn with_state<R>(&self, f: impl FnOnce(&PositionState) -> R) -> R {
-        let guard = self.state.lock().await;
-        f(&guard)
-    }
-
-    pub async fn get_current(&self, aid: u64) -> u8 {
-        self.with_state(|state| effective_current_position(state, aid))
-            .await
-    }
-
-    pub async fn get_target(&self, aid: u64) -> u8 {
-        self.with_state(|state| effective_target_position(state, aid))
-            .await
     }
 
     pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {

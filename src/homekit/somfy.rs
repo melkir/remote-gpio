@@ -18,7 +18,7 @@ use crate::homekit::accessory_db::{
     IID_TARGET_POSITION,
 };
 use crate::homekit::target_writes::{plan_target_writes, PendingTargetWrite};
-use crate::positioning::state::{find_blind, BlindPosition, PositionDelta, BLINDS, STATUS_STOPPED};
+use crate::positioning::state::{find_blind, BlindPosition, PositionDelta, BLINDS};
 
 pub struct SomfyHapApp {
     controller: Arc<BlindController>,
@@ -106,7 +106,7 @@ impl HapAccessoryApp for SomfyHapApp {
             let mut outcome = CharacteristicWriteOutcome::default();
             let mut statuses = plan.statuses;
 
-            // Position EVENT push is hook-only via `emit_position_deltas` (see `homekit::start`).
+            // Position EVENT push is listener-only via `emit_position_deltas` (see `homekit::start`).
             self.execute_targets(&plan.targets).await?;
             for target in plan.targets {
                 statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
@@ -155,12 +155,7 @@ fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
         .iter()
         .copied()
         .find(|position| position.aid == aid)
-        .unwrap_or(BlindPosition {
-            aid,
-            current: 100,
-            target: 100,
-            status: STATUS_STOPPED,
-        })
+        .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
 }
 
 fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> Value {
@@ -184,6 +179,7 @@ fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> 
 mod tests {
     use super::*;
     use crate::core::{Channel, Command};
+    use crate::positioning::state::STATUS_STOPPED;
     use serde_json::json;
     use std::collections::HashMap;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -328,7 +324,7 @@ mod tests {
         let controller = fake_controller(10).await;
         let hook_calls = Arc::new(AtomicUsize::new(0));
         let hook_calls_for_hook = hook_calls.clone();
-        controller.attach_position_hook(Arc::new(move |_| {
+        controller.attach_position_listener(Arc::new(move |_| {
             hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
         }));
         let app = SomfyHapApp::new_for_test(controller);
