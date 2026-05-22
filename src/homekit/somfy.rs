@@ -29,11 +29,6 @@ impl SomfyHapApp {
         Self { controller }
     }
 
-    #[cfg(test)]
-    fn new_for_test(controller: Arc<BlindController>) -> Self {
-        Self { controller }
-    }
-
     async fn execute_targets(&self, targets: &[PendingTargetWrite]) -> Result<(), anyhow::Error> {
         self.controller
             .set_target_positions(
@@ -132,6 +127,7 @@ fn read_characteristic(positions: &[BlindPosition], id: CharacteristicId) -> Cha
             _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
         }
     } else if let Some(blind) = find_blind(aid) {
+        let pos = position_for_aid(positions, aid);
         match iid {
             IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
             IID_MANUFACTURER => serde_json::json!("Somfy"),
@@ -139,9 +135,9 @@ fn read_characteristic(positions: &[BlindPosition], id: CharacteristicId) -> Cha
             IID_NAME => serde_json::json!(blind.name),
             IID_SERIAL => serde_json::json!(blind.serial),
             IID_FIRMWARE => serde_json::json!(env!("CARGO_PKG_VERSION")),
-            IID_CURRENT_POSITION => serde_json::json!(position_for_aid(positions, aid).current),
-            IID_TARGET_POSITION => serde_json::json!(position_for_aid(positions, aid).target),
-            IID_POSITION_STATE => serde_json::json!(position_for_aid(positions, aid).status),
+            IID_CURRENT_POSITION => serde_json::json!(pos.current),
+            IID_TARGET_POSITION => serde_json::json!(pos.target),
+            IID_POSITION_STATE => serde_json::json!(pos.status),
             _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
         }
     } else {
@@ -165,11 +161,7 @@ fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> 
             aid: blind.aid,
             name: blind.name,
             serial: blind.serial,
-            position: positions
-                .iter()
-                .find(|pos| pos.aid == blind.aid)
-                .map(|pos| pos.current)
-                .unwrap_or(100),
+            position: position_for_aid(positions, blind.aid).current,
         })
         .collect();
     accessory_db::build_accessories(&blinds)
@@ -280,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn target_position_starts_motion_and_stops_after_timed_percentage() {
         let controller = fake_controller(2).await;
-        let app = SomfyHapApp::new_for_test(controller.clone());
+        let app = SomfyHapApp::new(controller.clone());
         let writes = vec![CharacteristicWrite {
             id: CharacteristicId::new(2, IID_TARGET_POSITION),
             value: Some(json!(50)),
@@ -327,7 +319,7 @@ mod tests {
         controller.attach_position_listener(Arc::new(move |_deltas| {
             hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
         }));
-        let app = SomfyHapApp::new_for_test(controller);
+        let app = SomfyHapApp::new(controller);
         let mut subscriptions = Subscriptions::default();
 
         let outcome = app
@@ -350,7 +342,7 @@ mod tests {
     #[tokio::test]
     async fn full_individual_write_batch_sends_one_all_start_command() {
         let controller = fake_controller(10).await;
-        let app = SomfyHapApp::new_for_test(controller.clone());
+        let app = SomfyHapApp::new(controller.clone());
         let writes = [2, 3, 4, 5]
             .into_iter()
             .map(|aid| CharacteristicWrite {
@@ -379,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn endpoint_target_does_not_send_timed_stop() {
         let controller = fake_controller(2).await;
-        let app = SomfyHapApp::new_for_test(controller.clone());
+        let app = SomfyHapApp::new(controller.clone());
         let mut subscriptions = Subscriptions::default();
 
         app.write_characteristics(
@@ -407,7 +399,7 @@ mod tests {
     #[tokio::test]
     async fn writing_current_position_cancels_pending_motion() {
         let controller = fake_controller(20).await;
-        let app = SomfyHapApp::new_for_test(controller.clone());
+        let app = SomfyHapApp::new(controller.clone());
         let mut subscriptions = Subscriptions::default();
 
         app.write_characteristics(

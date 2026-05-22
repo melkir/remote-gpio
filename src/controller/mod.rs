@@ -242,11 +242,6 @@ impl BlindController {
     /// targeting a channel requires moving the physical selector.
     #[cfg(test)]
     pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
-        self.execute_on_inner(channel, command).await
-    }
-
-    #[cfg(test)]
-    async fn execute_on_inner(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
         if command == Command::Select {
             anyhow::bail!("select is not a direct targeted command");
         }
