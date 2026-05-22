@@ -15,7 +15,7 @@ use crate::systemd;
 const UNIT_TEMPLATE: &str = include_str!("../../assets/somfy.service.tmpl");
 const PIGPIOD_OVERRIDE_PATH: &str = "/etc/systemd/system/pigpiod.service.d/somfy-localhost.conf";
 const PIGPIOD_OVERRIDE: &str = "[Service]\nExecStart=\nExecStart=/usr/bin/pigpiod -l\n";
-pub const POLKIT_RULE_PATH: &str = "/etc/polkit-1/rules.d/50-somfy.rules";
+pub(crate) const POLKIT_RULE_PATH: &str = "/etc/polkit-1/rules.d/50-somfy.rules";
 const POLKIT_RULE: &str = include_str!("../../assets/somfy-polkit.rules");
 const SOMFY_GROUP: &str = "somfy";
 

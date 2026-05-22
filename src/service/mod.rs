@@ -11,7 +11,7 @@ use crate::driver::{CommandOutcome, TELIS_PROG_UNAVAILABLE};
 
 /// Parsed command ready for dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct ParsedCommandRequest {
+pub(crate) struct ParsedCommandRequest {
     pub command: Command,
     pub channel: Option<Channel>,
 }
@@ -19,13 +19,13 @@ pub struct ParsedCommandRequest {
 /// HTTP/JSON command body (`POST /command`, WebSocket text, CLI remote POST).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-pub struct CommandRequest {
+pub(crate) struct CommandRequest {
     pub command: String,
     pub channel: Option<Channel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CommandError {
+pub(crate) enum CommandError {
     Invalid(String),
     PairingUnavailable,
 }
@@ -46,7 +46,7 @@ fn command_error(err: anyhow::Error) -> CommandError {
 }
 
 /// Validate a command request. Does not touch hardware.
-pub fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, CommandError> {
+fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, CommandError> {
     let CommandRequest { command, channel } = request;
     let cmd = Command::from_str(&command).map_err(|e| CommandError::Invalid(e.to_string()))?;
     let channel = match (cmd, channel) {
@@ -66,15 +66,15 @@ pub fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, Co
 }
 
 /// Reject pairing commands when the active driver cannot transmit them.
-pub fn ensure_pairing_for_kind(kind: DriverKind, command: Command) -> Result<(), CommandError> {
+fn ensure_pairing_for_kind(kind: DriverKind, command: Command) -> Result<(), CommandError> {
     if matches!(command, Command::Prog | Command::ProgLong) && !kind.supports_pairing() {
         return Err(CommandError::PairingUnavailable);
     }
     Ok(())
 }
 
-/// Parse a wire request and apply driver pairing rules. Does not touch hardware.
-pub fn validate_command_request(
+/// Parse a command request and apply driver pairing rules. Does not touch hardware.
+pub(crate) fn validate_command_request(
     kind: DriverKind,
     request: CommandRequest,
 ) -> Result<ParsedCommandRequest, CommandError> {
@@ -85,7 +85,7 @@ pub fn validate_command_request(
 
 /// Validate and dispatch a command. `select` changes selection; action commands
 /// with an explicit channel target that channel directly.
-pub async fn dispatch_command(
+pub(crate) async fn dispatch_command(
     controller: &BlindController,
     request: CommandRequest,
 ) -> Result<CommandOutcome, CommandError> {

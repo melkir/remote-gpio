@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 
 /// Default system configuration path on the Pi.
-pub const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
+const SYSTEM_CONFIG_PATH: &str = "/etc/somfy/config.toml";
 
 /// Runtime-selectable blind driver implementation.
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, ValueEnum)]
@@ -21,7 +21,7 @@ pub enum DriverKind {
 }
 
 impl DriverKind {
-    pub fn default_for_target() -> Self {
+    pub(crate) fn default_for_target() -> Self {
         if cfg!(all(
             target_os = "linux",
             any(target_arch = "arm", target_arch = "aarch64")
@@ -33,7 +33,7 @@ impl DriverKind {
     }
 
     /// Whether `prog` / `prog --long` can be transmitted (RTS RF pairing).
-    pub fn supports_pairing(self) -> bool {
+    pub(crate) fn supports_pairing(self) -> bool {
         !matches!(self, Self::Telis)
     }
 }
@@ -110,9 +110,9 @@ impl Default for TelisGpioOptions {
     }
 }
 
-/// Resolved driver settings passed to [`crate::driver::CommandRouter::new`].
+/// Resolved driver settings passed to the driver router.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DriverConfig {
+pub(crate) struct DriverConfig {
     pub kind: DriverKind,
     pub gpio: GpioOptions,
     pub rts: RtsOptions,
@@ -156,7 +156,7 @@ impl Default for AppConfig {
 
 impl AppConfig {
     /// Build the driver configuration snapshot used at startup.
-    pub fn driver_config(&self) -> DriverConfig {
+    pub(crate) fn driver_config(&self) -> DriverConfig {
         DriverConfig {
             kind: self.driver,
             gpio: self.gpio.clone(),
@@ -174,7 +174,7 @@ pub struct ResolvedConfig {
     pub file_present: bool,
 }
 
-pub fn default_path() -> PathBuf {
+fn default_path() -> PathBuf {
     PathBuf::from(SYSTEM_CONFIG_PATH)
 }
 
@@ -190,7 +190,7 @@ pub fn resolve(path: Option<PathBuf>) -> Result<ResolvedConfig> {
     })
 }
 
-pub fn load_or_default(path: &Path) -> Result<AppConfig> {
+fn load_or_default(path: &Path) -> Result<AppConfig> {
     if !path.exists() {
         return Ok(AppConfig::default());
     }
@@ -199,11 +199,11 @@ pub fn load_or_default(path: &Path) -> Result<AppConfig> {
     toml::from_str(&text).with_context(|| format!("parsing {}", path.display()))
 }
 
-pub fn to_toml(config: &AppConfig) -> Result<String> {
+pub(crate) fn to_toml(config: &AppConfig) -> Result<String> {
     toml::to_string_pretty(config).context("serializing resolved config")
 }
 
-pub fn validate(config: &AppConfig) -> Result<()> {
+pub(crate) fn validate(config: &AppConfig) -> Result<()> {
     if config.rts.gpio.gdo0 > MAX_BCM_GPIO {
         bail!("rts.gpio.gdo0 must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
     }
