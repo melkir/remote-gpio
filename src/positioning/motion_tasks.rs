@@ -47,7 +47,26 @@ impl MotionTasks {
 
     pub async fn cancel(&self, aid: u64) -> bool {
         let mut tasks = self.tasks.lock().await;
-        let Some(state) = tasks.get_mut(&aid) else {
+        Self::cancel_state(tasks.get_mut(&aid))
+    }
+
+    pub async fn cancel_channel(&self, channel: Channel) {
+        let aids: Vec<u64> = match channel {
+            Channel::All => BLINDS.iter().map(|blind| blind.aid).collect(),
+            _ => BLINDS
+                .iter()
+                .filter(|blind| blind.channel == channel)
+                .map(|blind| blind.aid)
+                .collect(),
+        };
+        let mut tasks = self.tasks.lock().await;
+        for aid in aids {
+            Self::cancel_state(tasks.get_mut(&aid));
+        }
+    }
+
+    fn cancel_state(state: Option<&mut MotionTaskState>) -> bool {
+        let Some(state) = state else {
             return false;
         };
         state.generation = state.generation.wrapping_add(1);
@@ -56,20 +75,6 @@ impl MotionTasks {
         };
         old.abort();
         true
-    }
-
-    pub async fn cancel_channel(&self, channel: Channel) {
-        let aids = match channel {
-            Channel::All => BLINDS.iter().map(|blind| blind.aid).collect::<Vec<_>>(),
-            _ => BLINDS
-                .iter()
-                .filter(|blind| blind.channel == channel)
-                .map(|blind| blind.aid)
-                .collect(),
-        };
-        for aid in aids {
-            self.cancel(aid).await;
-        }
     }
 
     pub async fn is_current(&self, aid: u64, generation: u64) -> bool {

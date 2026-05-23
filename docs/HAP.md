@@ -57,7 +57,7 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.
-3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<CharacteristicEvent>>`. When the controller publishes position deltas, a listener registered at `homekit::start` maps them to characteristic events on that broadcast channel; HAP connections fan matching subscriptions out as `EVENT/1.0` frames over the same encrypted writer.
+3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<CharacteristicEvent>>`. When the controller publishes position deltas, a sink installed at `homekit::start` maps them to characteristic events on that broadcast channel; HAP connections fan matching subscriptions out as `EVENT/1.0` frames over the same encrypted writer.
 
 EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits on `PositionState=2` + `CurrentPosition` matching `TargetPosition`) and what keeps grouped Home writes reflected on each individual blind tile.
 
@@ -67,7 +67,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 - `{aid, iid, ev: true|false}` — toggle subscription on the per-connection set. No GPIO action.
 - `{aid, iid, value: N}` where `N` matches the estimated current position — no-op unless it cancels a pending timed move, in which case the controller sends `stop`.
-- `{aid, iid, value: N}` with a real change — asks the shared controller to move from the estimated current position to `N`. The controller sends `up` or `down`, emits `TargetPosition` plus moving `PositionState`, and for interior targets (`1..99`) sends `stop` after the configured proportional travel time. Endpoint targets (`0` or `100`) rely on the motor's own limits. Completion updates `CurrentPosition`, persists `positions.json`, and emits stopped events. HAP EVENT frames for those updates are published only from the controller position listener (not duplicated on the PUT write outcome).
+- `{aid, iid, value: N}` with a real change — asks the shared controller to move from the estimated current position to `N`. The controller sends `up` or `down`, emits `TargetPosition` plus moving `PositionState`, and for interior targets (`1..99`) sends `stop` after the configured proportional travel time. Endpoint targets (`0` or `100`) rely on the motor's own limits. Completion updates `CurrentPosition`, persists `positions.json`, and emits stopped events. HAP EVENT frames for those updates are published only from the controller position sink (not duplicated on the PUT write outcome).
 
 ## Timed positioning
 

@@ -45,7 +45,15 @@ pub fn plan_target_writes(
             continue;
         }
 
-        if write.id.iid.0 != IID_TARGET_POSITION || find_blind(write.id.aid.0).is_none() {
+        let Some(blind) = find_blind(write.id.aid.0) else {
+            statuses[index] = Some(CharacteristicWriteStatus::error(
+                write.id,
+                write_error_status(write.id),
+            ));
+            continue;
+        };
+
+        if write.id.iid.0 != IID_TARGET_POSITION {
             statuses[index] = Some(CharacteristicWriteStatus::error(
                 write.id,
                 write_error_status(write.id),
@@ -63,14 +71,12 @@ pub fn plan_target_writes(
                 continue;
             }
         };
-        if let Some(blind) = find_blind(write.id.aid.0) {
-            targets.push(PendingTargetWrite {
-                index,
-                id: write.id,
-                blind,
-                target: value,
-            });
-        }
+        targets.push(PendingTargetWrite {
+            index,
+            id: write.id,
+            blind,
+            target: value,
+        });
     }
 
     TargetWritePlan { statuses, targets }

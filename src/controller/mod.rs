@@ -1,7 +1,8 @@
 use anyhow::Result;
+#[cfg(test)]
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex as StdMutex};
 use tokio::sync::{broadcast, Mutex};
 
 use crate::config::{DriverKind, PositioningOptions};
@@ -13,15 +14,19 @@ use crate::positioning::motion::{
 use crate::positioning::motion_tasks::MotionTasks;
 use crate::positioning::state::{find_blind, BlindPosition, PositionCache, PositionDelta};
 
+type PositionSink = Arc<dyn Fn(&[PositionDelta]) + Send + Sync>;
+
 /// Driver-agnostic control of channel selection, button presses, and position events.
 pub struct BlindController {
     router: CommandRouter,
     driver_kind: DriverKind,
-    pub(crate) operation_lock: Mutex<()>,
+    operation_lock: Mutex<()>,
     positions: Arc<PositionCache>,
     timings: MotionTimings,
     motion_tasks: MotionTasks,
     position_tx: broadcast::Sender<Arc<[PositionDelta]>>,
+    /// Optional sync fan-out (e.g. HomeKit HAP EVENT) installed once at startup.
+    position_sink: StdMutex<Option<PositionSink>>,
 }
 
 impl fmt::Debug for BlindController {
@@ -49,6 +54,7 @@ impl BlindController {
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
             position_tx,
+            position_sink: StdMutex::new(None),
         })
     }
 
@@ -69,7 +75,21 @@ impl BlindController {
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
             position_tx,
+            position_sink: StdMutex::new(None),
         })
+    }
+
+    /// Wire position deltas to a sync side channel (e.g. HomeKit EVENT push). Call once at startup.
+    pub fn set_position_sink(&self, sink: PositionSink) {
+        match self.position_sink.lock() {
+            Ok(mut guard) => *guard = Some(sink),
+            Err(_) => tracing::warn!("position sink mutex poisoned; side-channel events disabled"),
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn lock_operations_for_test(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.operation_lock.lock().await
     }
 
     pub fn driver_kind(&self) -> DriverKind {
@@ -87,16 +107,28 @@ impl BlindController {
         self.router.subscribe_selected_channel()
     }
 
-    /// Subscribe to target/current position changes (HomeKit, tests, future API clients).
+    /// Subscribe to target/current position changes (tests, future API clients).
+    #[allow(dead_code)] // exercised in tests; reserved for non-HomeKit observers
     pub fn subscribe_positions(&self) -> broadcast::Receiver<Arc<[PositionDelta]>> {
         self.position_tx.subscribe()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn emit_position_deltas_for_test(&self, deltas: &[PositionDelta]) {
+        self.emit_position_deltas(deltas);
     }
 
     fn emit_position_deltas(&self, deltas: &[PositionDelta]) {
         if deltas.is_empty() {
             return;
         }
-        let _ = self.position_tx.send(Arc::from(deltas));
+        let shared: Arc<[PositionDelta]> = Arc::from(deltas);
+        let _ = self.position_tx.send(shared.clone());
+        if let Ok(guard) = self.position_sink.lock() {
+            if let Some(sink) = guard.as_ref() {
+                sink(shared.as_ref());
+            }
+        }
     }
 
     pub async fn position_snapshot(&self) -> Vec<BlindPosition> {
@@ -135,10 +167,6 @@ impl BlindController {
     }
 
     async fn build_motion_requests(&self, targets: Vec<(u64, u8)>) -> Vec<MotionRequest> {
-        let snapshot = self.positions.snapshot().await;
-        let positions: HashMap<u64, BlindPosition> =
-            snapshot.into_iter().map(|p| (p.aid, p)).collect();
-
         let mut requests = Vec::with_capacity(targets.len());
         for (aid, target) in targets {
             let Some(blind) = find_blind(aid) else {
@@ -146,10 +174,7 @@ impl BlindController {
                 continue;
             };
             let target = target.min(100);
-            let position = positions
-                .get(&aid)
-                .copied()
-                .unwrap_or_else(|| BlindPosition::default_for_aid(aid));
+            let position = self.positions.position_for_aid(aid).await;
             if position.target == target {
                 continue;
             }
@@ -308,17 +333,17 @@ impl BlindController {
                 {
                     return;
                 }
-                controller
+                let deltas = controller
                     .positions
                     .apply_blind_current(movement.blind, movement.target)
-                    .await
+                    .await;
+                controller
+                    .motion_tasks
+                    .remove_if_current(movement.blind.aid, generation)
+                    .await;
+                deltas
             };
             controller.emit_position_deltas(&deltas);
-            let _guard = controller.operation_lock.lock().await;
-            controller
-                .motion_tasks
-                .remove_if_current(movement.blind.aid, generation)
-                .await;
         });
         self.motion_tasks
             .attach_handle(movement.blind.aid, generation, handle)

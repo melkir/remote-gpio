@@ -46,7 +46,7 @@ async fn controller_operations_wait_behind_operation_lock() {
             .await
             .unwrap(),
     );
-    let guard = controller.operation_lock.lock().await;
+    let guard = controller.lock_operations_for_test().await;
     let pending_controller = controller.clone();
 
     let operation = tokio::spawn(async move {
@@ -78,7 +78,7 @@ async fn controller_operations_wait_behind_operation_lock() {
 async fn target_position_writes_wait_behind_operation_lock() {
     let controller =
         fake_controller(uniform_positioning_l1_ms(50), HashMap::from([(2, 100)])).await;
-    let guard = controller.operation_lock.lock().await;
+    let guard = controller.lock_operations_for_test().await;
     let pending_controller = controller.clone();
 
     let operation =
@@ -194,6 +194,28 @@ async fn position_broadcast_runs_once_per_non_empty_emit() {
     assert!(!published.is_empty());
     assert_eq!(published[0].target, Some(50));
     assert!(position_rx.try_recv().is_err());
+}
+
+#[tokio::test]
+async fn position_broadcast_while_operation_lock_held() {
+    use crate::positioning::state::{PositionDelta, STATUS_INCREASING};
+
+    let controller = fake_controller(controller_config(), HashMap::from([(2, 100)])).await;
+    let mut position_rx = controller.subscribe_positions();
+    let _guard = controller.lock_operations_for_test().await;
+
+    controller.emit_position_deltas_for_test(&[PositionDelta {
+        aid: 2,
+        current: None,
+        target: Some(50),
+        status: Some(STATUS_INCREASING),
+    }]);
+
+    let published = tokio::time::timeout(Duration::from_millis(10), position_rx.recv())
+        .await
+        .expect("emit must not wait behind operation_lock")
+        .unwrap();
+    assert_eq!(published[0].target, Some(50));
 }
 
 #[tokio::test]

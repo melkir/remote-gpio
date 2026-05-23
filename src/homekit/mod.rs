@@ -31,13 +31,11 @@ pub fn setup_uri(state: &HapState) -> Result<String> {
 pub struct HomekitHandles {
     _announcement: mdns::Announcement,
     hap_server: tokio::task::JoinHandle<()>,
-    _position_events: tokio::task::JoinHandle<()>,
 }
 
 impl HomekitHandles {
     pub fn abort(&self) {
         self.hap_server.abort();
-        self._position_events.abort();
     }
 }
 
@@ -63,7 +61,7 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     let app = Arc::new(somfy::SomfyHapApp::new(controller.clone()));
     let runtime = Arc::new(HapRuntime::new(hap_state, store, app, events));
 
-    let position_events = spawn_position_events(controller, runtime.event_sender());
+    attach_hap_position_events(&controller, runtime.event_sender());
 
     let hap_server = tokio::spawn(async move {
         if let Err(e) = crate::hap::server::serve(runtime, HAP_PORT).await {
@@ -73,28 +71,18 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     Ok(HomekitHandles {
         _announcement: announcement,
         hap_server,
-        _position_events: position_events,
     })
 }
 
-fn spawn_position_events(
-    controller: Arc<BlindController>,
+fn attach_hap_position_events(
+    controller: &BlindController,
     event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
-) -> tokio::task::JoinHandle<()> {
-    let mut position_rx = controller.subscribe_positions();
-    tokio::spawn(async move {
-        loop {
-            match position_rx.recv().await {
-                Ok(deltas) => {
-                    let events = somfy::position_characteristic_events(deltas.as_ref());
-                    if !events.is_empty() {
-                        tracing::debug!(count = events.len(), "hap position events published");
-                        let _ = event_tx.send(events);
-                    }
-                }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
-                Err(broadcast::error::RecvError::Closed) => break,
-            }
+) {
+    controller.set_position_sink(Arc::new(move |deltas| {
+        let events = somfy::position_characteristic_events(deltas);
+        if !events.is_empty() {
+            tracing::debug!(count = events.len(), "hap position events published");
+            let _ = event_tx.send(events);
         }
-    })
+    }));
 }

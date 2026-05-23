@@ -101,7 +101,7 @@ impl HapAccessoryApp for SomfyHapApp {
             let mut outcome = CharacteristicWriteOutcome::default();
             let mut statuses = plan.statuses;
 
-            // Position EVENT push is via `subscribe_positions` (see `homekit::start`).
+            // Position EVENT push is via the position sink (see `homekit::start`).
             self.execute_targets(&plan.targets).await?;
             for target in plan.targets {
                 statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));

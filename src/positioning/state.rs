@@ -134,6 +134,16 @@ impl PositionCache {
             .collect()
     }
 
+    pub async fn position_for_aid(&self, aid: u64) -> BlindPosition {
+        let state = self.state.lock().await;
+        BlindPosition {
+            aid,
+            current: effective_current_position(&state, aid),
+            target: effective_target_position(&state, aid),
+            status: effective_status(&state, aid),
+        }
+    }
+
     pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {
         if matches!(channel, Channel::All) {
             return self.apply_all_current(pos).await;
