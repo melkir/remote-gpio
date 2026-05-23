@@ -1,8 +1,7 @@
 use anyhow::Result;
-#[cfg(test)]
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, Mutex as StdMutex};
+use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::config::{DriverKind, PositioningOptions};
@@ -14,8 +13,6 @@ use crate::positioning::motion::{
 use crate::positioning::motion_tasks::MotionTasks;
 use crate::positioning::state::{find_blind, BlindPosition, PositionCache, PositionDelta};
 
-type PositionSink = Arc<dyn Fn(&[PositionDelta]) + Send + Sync>;
-
 /// Driver-agnostic control of channel selection, button presses, and position events.
 pub struct BlindController {
     router: CommandRouter,
@@ -25,8 +22,6 @@ pub struct BlindController {
     timings: MotionTimings,
     motion_tasks: MotionTasks,
     position_tx: broadcast::Sender<Arc<[PositionDelta]>>,
-    /// Optional sync fan-out (e.g. HomeKit HAP EVENT) installed once at startup.
-    position_sink: StdMutex<Option<PositionSink>>,
 }
 
 impl fmt::Debug for BlindController {
@@ -54,7 +49,6 @@ impl BlindController {
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
             position_tx,
-            position_sink: StdMutex::new(None),
         })
     }
 
@@ -75,16 +69,7 @@ impl BlindController {
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
             position_tx,
-            position_sink: StdMutex::new(None),
         })
-    }
-
-    /// Wire position deltas to a sync side channel (e.g. HomeKit EVENT push). Call once at startup.
-    pub fn set_position_sink(&self, sink: PositionSink) {
-        match self.position_sink.lock() {
-            Ok(mut guard) => *guard = Some(sink),
-            Err(_) => tracing::warn!("position sink mutex poisoned; side-channel events disabled"),
-        }
     }
 
     #[cfg(test)]
@@ -107,8 +92,7 @@ impl BlindController {
         self.router.subscribe_selected_channel()
     }
 
-    /// Subscribe to target/current position changes (tests, future API clients).
-    #[allow(dead_code)] // exercised in tests; reserved for non-HomeKit observers
+    /// Subscribe to target/current position changes (HomeKit bridge, tests, future API clients).
     pub fn subscribe_positions(&self) -> broadcast::Receiver<Arc<[PositionDelta]>> {
         self.position_tx.subscribe()
     }
@@ -122,13 +106,7 @@ impl BlindController {
         if deltas.is_empty() {
             return;
         }
-        let shared: Arc<[PositionDelta]> = Arc::from(deltas);
-        let _ = self.position_tx.send(shared.clone());
-        if let Ok(guard) = self.position_sink.lock() {
-            if let Some(sink) = guard.as_ref() {
-                sink(shared.as_ref());
-            }
-        }
+        let _ = self.position_tx.send(Arc::from(deltas));
     }
 
     pub async fn position_snapshot(&self) -> Vec<BlindPosition> {
@@ -167,6 +145,10 @@ impl BlindController {
     }
 
     async fn build_motion_requests(&self, targets: Vec<(u64, u8)>) -> Vec<MotionRequest> {
+        let snapshot = self.positions.snapshot().await;
+        let positions: HashMap<u64, BlindPosition> =
+            snapshot.into_iter().map(|p| (p.aid, p)).collect();
+
         let mut requests = Vec::with_capacity(targets.len());
         for (aid, target) in targets {
             let Some(blind) = find_blind(aid) else {
@@ -174,7 +156,10 @@ impl BlindController {
                 continue;
             };
             let target = target.min(100);
-            let position = self.positions.position_for_aid(aid).await;
+            let position = positions
+                .get(&aid)
+                .copied()
+                .unwrap_or_else(|| BlindPosition::default_for_aid(aid));
             if position.target == target {
                 continue;
             }

@@ -31,11 +31,13 @@ pub fn setup_uri(state: &HapState) -> Result<String> {
 pub struct HomekitHandles {
     _announcement: mdns::Announcement,
     hap_server: tokio::task::JoinHandle<()>,
+    _position_events: tokio::task::JoinHandle<()>,
 }
 
 impl HomekitHandles {
     pub fn abort(&self) {
         self.hap_server.abort();
+        self._position_events.abort();
     }
 }
 
@@ -61,7 +63,7 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     let app = Arc::new(somfy::SomfyHapApp::new(controller.clone()));
     let runtime = Arc::new(HapRuntime::new(hap_state, store, app, events));
 
-    attach_hap_position_events(&controller, runtime.event_sender());
+    let position_events = spawn_position_events(controller, runtime.event_sender());
 
     let hap_server = tokio::spawn(async move {
         if let Err(e) = crate::hap::server::serve(runtime, HAP_PORT).await {
@@ -71,18 +73,53 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     Ok(HomekitHandles {
         _announcement: announcement,
         hap_server,
+        _position_events: position_events,
     })
 }
 
-fn attach_hap_position_events(
-    controller: &BlindController,
+fn spawn_position_events(
+    controller: Arc<BlindController>,
     event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
-) {
-    controller.set_position_sink(Arc::new(move |deltas| {
-        let events = somfy::position_characteristic_events(deltas);
-        if !events.is_empty() {
-            tracing::debug!(count = events.len(), "hap position events published");
-            let _ = event_tx.send(events);
+) -> tokio::task::JoinHandle<()> {
+    let mut position_rx = controller.subscribe_positions();
+    tokio::spawn(async move {
+        loop {
+            match position_rx.recv().await {
+                Ok(deltas) => {
+                    let events = somfy::position_characteristic_events(deltas.as_ref());
+                    if !events.is_empty() {
+                        tracing::debug!(count = events.len(), "hap position events published");
+                        let _ = event_tx.send(events);
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(broadcast::error::RecvError::Closed) => break,
+            }
         }
-    }));
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::homekit::accessory_db::IID_TARGET_POSITION;
+    use crate::testing::fixtures::fake_four_blinds;
+
+    #[tokio::test]
+    async fn position_bridge_maps_deltas_to_hap_events() {
+        let controller = fake_four_blinds(10).await;
+        let (hap_tx, mut hap_rx) = broadcast::channel(8);
+        let _bridge = spawn_position_events(controller.clone(), hap_tx);
+
+        controller
+            .set_target_positions(vec![(2, 50)])
+            .await
+            .unwrap();
+
+        let events = hap_rx.recv().await.unwrap();
+        assert!(!events.is_empty());
+        assert!(events
+            .iter()
+            .any(|event| event.id.aid.0 == 2 && event.id.iid.0 == IID_TARGET_POSITION));
+    }
 }

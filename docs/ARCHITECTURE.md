@@ -197,7 +197,7 @@ Selection notifications and position broadcasts are separate from operation and 
 Live state uses two notification channels:
 
 - **Selection** — `watch` from the active driver through `BlindController::subscribe_selection()`; consumed by SSE `/events` and WebSocket.
-- **Positions** — `BlindController::subscribe_positions` after inferred moves and timed HomeKit motion. Emits happen outside the operation lock. When HomeKit is enabled, `homekit::start` installs a sync sink on the same emit path to push HAP `CharacteristicEvent` frames (no background bridge task).
+- **Positions** — `BlindController::subscribe_positions` after inferred moves and timed HomeKit motion. Emits happen outside the operation lock. When HomeKit is enabled, `homekit::start` bridges that broadcast into HAP `CharacteristicEvent` frames.
 
 These locks are correctness mechanisms, not trust boundaries. They prevent malformed timing and state races; they do not authenticate clients.
 
