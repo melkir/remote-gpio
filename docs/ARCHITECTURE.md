@@ -197,7 +197,7 @@ Selection notifications and position broadcasts are separate from operation and 
 Live state uses two notification channels:
 
 - **Selection** — `watch` from the active driver through `BlindController::subscribe_selection()`; consumed by SSE `/events` and WebSocket.
-- **Positions** — `BlindController::subscribe_positions` after inferred moves and timed HomeKit motion. Emits happen outside the operation lock. When HomeKit is enabled, `homekit::start` bridges that broadcast into HAP `CharacteristicEvent` frames.
+- **Positions** — `BlindController::subscribe_positions` after inferred moves and timed HomeKit motion. Emits always happen outside the operation lock. The controller is transport-agnostic: it never calls into HAP directly. When HomeKit is enabled, `homekit::start` spawns a bridge task that subscribes to that broadcast, maps deltas to `CharacteristicEvent`, and forwards them to the HAP runtime event bus. Do not add a controller-side HAP sink or callback; that couples layers and was removed in favor of this single fan-out point. If the bridge falls behind, it logs and resyncs from `position_snapshot()` rather than dropping updates silently.
 
 These locks are correctness mechanisms, not trust boundaries. They prevent malformed timing and state races; they do not authenticate clients.
 
@@ -247,7 +247,7 @@ This section is a pointer into the implementation, not the architecture itself.
 | CLI and operator commands                   | `src/cli.rs`, `src/commands/`              |
 | HTTP, SSE, WebSocket, static assets         | `src/server.rs`, `src/embed.rs`            |
 | HTTP command validation helper              | `src/service/`                             |
-| Operation queue, targeting, position events | `src/controller.rs`                        |
+| Operation queue, targeting, position events | `src/controller/`                          |
 | Shared command and channel types            | `src/core.rs`                              |
 | Config resolution and validation            | `src/config.rs`                            |
 | Driver routing and implementations          | `src/driver/`, `src/gpio.rs`, `src/rts/`   |

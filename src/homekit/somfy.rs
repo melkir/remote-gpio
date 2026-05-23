@@ -2,7 +2,6 @@
 //!
 //! This module maps HomeKit characteristics onto the shared blind controller.
 
-use anyhow::anyhow;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -29,7 +28,7 @@ impl SomfyHapApp {
         Self { controller }
     }
 
-    async fn execute_targets(&self, targets: &[PendingTargetWrite]) -> Result<(), anyhow::Error> {
+    async fn execute_targets(&self, targets: &[PendingTargetWrite]) -> anyhow::Result<()> {
         self.controller
             .set_target_positions(
                 targets
@@ -39,7 +38,6 @@ impl SomfyHapApp {
             )
             .await
             .map(|_| ())
-            .map_err(|e| anyhow!(e))
     }
 }
 
@@ -204,25 +202,25 @@ mod tests {
     #[test]
     fn accessories_expose_four_blinds() {
         let body = build_accessories(&[
-            crate::positioning::state::BlindPosition {
+            BlindPosition {
                 aid: 2,
                 current: 100,
                 target: 100,
                 status: STATUS_STOPPED,
             },
-            crate::positioning::state::BlindPosition {
+            BlindPosition {
                 aid: 3,
                 current: 100,
                 target: 100,
                 status: STATUS_STOPPED,
             },
-            crate::positioning::state::BlindPosition {
+            BlindPosition {
                 aid: 4,
                 current: 100,
                 target: 100,
                 status: STATUS_STOPPED,
             },
-            crate::positioning::state::BlindPosition {
+            BlindPosition {
                 aid: 5,
                 current: 100,
                 target: 100,
@@ -405,7 +403,8 @@ mod tests {
                 },
             ]
         );
-        assert_eq!(app.controller.position_for_aid(2).await.current, 100);
-        assert_eq!(app.controller.position_for_aid(2).await.target, 100);
+        let pos = app.controller.position_for_aid(2).await;
+        assert_eq!(pos.current, 100);
+        assert_eq!(pos.target, 100);
     }
 }

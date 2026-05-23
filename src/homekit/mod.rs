@@ -8,6 +8,7 @@ use crate::controller::BlindController;
 use crate::hap::mdns::{self, MdnsConfig};
 use crate::hap::runtime::{CharacteristicEvent, HapRuntime};
 use crate::hap::state::{FileHapStore, HapState};
+use crate::positioning::state::PositionDelta;
 
 mod accessory_db;
 pub mod somfy;
@@ -84,16 +85,31 @@ fn spawn_position_events(
     let mut position_rx = controller.subscribe_positions();
     tokio::spawn(async move {
         loop {
-            match position_rx.recv().await {
-                Ok(deltas) => {
-                    let events = somfy::position_characteristic_events(deltas.as_ref());
-                    if !events.is_empty() {
-                        tracing::debug!(count = events.len(), "hap position events published");
-                        let _ = event_tx.send(events);
-                    }
+            let events = match position_rx.recv().await {
+                Ok(deltas) => somfy::position_characteristic_events(deltas.as_ref()),
+                Err(broadcast::error::RecvError::Lagged(skipped)) => {
+                    tracing::warn!(
+                        skipped,
+                        "position broadcast lagged; resyncing HAP position events from snapshot"
+                    );
+                    let positions = controller.position_snapshot().await;
+                    let deltas: Vec<PositionDelta> = positions
+                        .iter()
+                        .map(|pos| PositionDelta {
+                            aid: pos.aid,
+                            current: Some(pos.current),
+                            target: Some(pos.target),
+                            status: Some(pos.status),
+                        })
+                        .collect();
+                    somfy::position_characteristic_events(&deltas)
                 }
-                Err(broadcast::error::RecvError::Lagged(_)) => continue,
                 Err(broadcast::error::RecvError::Closed) => break,
+            };
+
+            if !events.is_empty() {
+                tracing::debug!(count = events.len(), "hap position events published");
+                let _ = event_tx.send(events);
             }
         }
     })
