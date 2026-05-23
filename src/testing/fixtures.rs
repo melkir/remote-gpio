@@ -1,4 +1,4 @@
-//! Shared fixtures for controller and HomeKit unit tests.
+//! Fake controllers and positioning presets for unit tests.
 
 use std::collections::HashMap;
 use std::sync::Arc;

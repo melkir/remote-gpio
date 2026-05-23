@@ -1,26 +1,10 @@
-use super::test_support::{fake_controller, uniform_positioning_l1_ms};
 use super::*;
+use crate::testing::fixtures::{fake_controller, uniform_positioning_l1_ms};
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
 use tokio::time::{timeout, Duration};
 
 fn controller_config() -> crate::config::PositioningOptions {
     crate::config::PositioningOptions::default()
-}
-
-fn attach_listener(
-    controller: &BlindController,
-) -> (Arc<AtomicUsize>, Arc<Mutex<Vec<PositionDelta>>>) {
-    let calls = Arc::new(AtomicUsize::new(0));
-    let captured = Arc::new(Mutex::new(Vec::new()));
-    let calls_for_listener = calls.clone();
-    let captured_for_listener = captured.clone();
-    controller.attach_position_listener(Arc::new(move |deltas| {
-        calls_for_listener.fetch_add(1, Ordering::SeqCst);
-        *captured_for_listener.lock().unwrap() = deltas.to_vec();
-    }));
-    (calls, captured)
 }
 
 #[test]
@@ -154,7 +138,7 @@ async fn target_position_updates_shared_position_model() {
 #[tokio::test]
 async fn target_position_matching_cached_current_is_noop() {
     let controller = fake_controller(controller_config(), HashMap::from([(2, 50)])).await;
-    let (listener_calls, _) = attach_listener(&controller);
+    let mut position_rx = controller.subscribe_positions();
 
     let deltas = controller
         .set_target_positions(vec![(2, 50)])
@@ -162,7 +146,7 @@ async fn target_position_matching_cached_current_is_noop() {
         .unwrap();
 
     assert!(deltas.is_empty());
-    assert_eq!(listener_calls.load(Ordering::SeqCst), 0);
+    assert!(position_rx.try_recv().is_err());
     assert_eq!(controller.operations(), Vec::new());
     assert_eq!(controller.position_for_aid(2).await.current, 50);
     assert_eq!(controller.position_for_aid(2).await.target, 50);
@@ -176,7 +160,7 @@ async fn target_position_matching_pending_target_is_noop() {
         .set_target_positions(vec![(2, 50)])
         .await
         .unwrap();
-    let (listener_calls, _) = attach_listener(&controller);
+    let mut position_rx = controller.subscribe_positions();
 
     let deltas = controller
         .set_target_positions(vec![(2, 50)])
@@ -184,7 +168,7 @@ async fn target_position_matching_pending_target_is_noop() {
         .unwrap();
 
     assert!(deltas.is_empty());
-    assert_eq!(listener_calls.load(Ordering::SeqCst), 0);
+    assert!(position_rx.try_recv().is_err());
     assert_eq!(
         controller.operations(),
         vec![crate::driver::ProtocolOperation::FakeCommand {
@@ -197,25 +181,25 @@ async fn target_position_matching_pending_target_is_noop() {
 }
 
 #[tokio::test]
-async fn position_listener_runs_once_per_non_empty_emit() {
+async fn position_broadcast_runs_once_per_non_empty_emit() {
     let controller = fake_controller(controller_config(), HashMap::from([(2, 100)])).await;
-    let (listener_calls, captured) = attach_listener(&controller);
+    let mut position_rx = controller.subscribe_positions();
 
     controller
         .set_target_positions(vec![(2, 50)])
         .await
         .unwrap();
 
-    assert_eq!(listener_calls.load(Ordering::SeqCst), 1);
-    let hooked = captured.lock().unwrap().clone();
-    assert!(!hooked.is_empty());
-    assert_eq!(hooked[0].target, Some(50));
+    let published = position_rx.recv().await.unwrap();
+    assert!(!published.is_empty());
+    assert_eq!(published[0].target, Some(50));
+    assert!(position_rx.try_recv().is_err());
 }
 
 #[tokio::test]
-async fn position_listener_not_called_when_emit_empty() {
+async fn position_broadcast_not_sent_when_emit_empty() {
     let controller = fake_controller(controller_config(), HashMap::from([(2, 50)])).await;
-    let (listener_calls, _) = attach_listener(&controller);
+    let mut position_rx = controller.subscribe_positions();
 
     let deltas = controller
         .set_target_positions(vec![(2, 50)])
@@ -223,5 +207,5 @@ async fn position_listener_not_called_when_emit_empty() {
         .unwrap();
 
     assert!(deltas.is_empty());
-    assert_eq!(listener_calls.load(Ordering::SeqCst), 0);
+    assert!(position_rx.try_recv().is_err());
 }

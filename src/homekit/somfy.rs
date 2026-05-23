@@ -101,7 +101,7 @@ impl HapAccessoryApp for SomfyHapApp {
             let mut outcome = CharacteristicWriteOutcome::default();
             let mut statuses = plan.statuses;
 
-            // Position EVENT push is listener-only via `emit_position_deltas` (see `homekit::start`).
+            // Position EVENT push is via `subscribe_positions` (see `homekit::start`).
             self.execute_targets(&plan.targets).await?;
             for target in plan.targets {
                 statuses[target.index] = Some(CharacteristicWriteStatus::success(target.id));
@@ -170,12 +170,10 @@ fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::controller::test_support::fake_four_blinds;
     use crate::core::{Channel, Command};
     use crate::positioning::state::STATUS_STOPPED;
+    use crate::testing::fixtures::fake_four_blinds;
     use serde_json::json;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-    use std::sync::Arc;
     use tokio::time::Duration;
 
     async fn wait_for_current(app: &SomfyHapApp, aid: u64, expected: u8) {
@@ -286,11 +284,7 @@ mod tests {
     #[tokio::test]
     async fn target_position_write_leaves_outcome_events_empty() {
         let controller = fake_four_blinds(10).await;
-        let hook_calls = Arc::new(AtomicUsize::new(0));
-        let hook_calls_for_hook = hook_calls.clone();
-        controller.attach_position_listener(Arc::new(move |_deltas| {
-            hook_calls_for_hook.fetch_add(1, Ordering::SeqCst);
-        }));
+        let mut position_rx = controller.subscribe_positions();
         let app = SomfyHapApp::new(controller);
         let mut subscriptions = Subscriptions::default();
 
@@ -308,7 +302,9 @@ mod tests {
 
         assert!(outcome.events.is_empty());
         assert!(outcome.all_success());
-        assert_eq!(hook_calls.load(Ordering::SeqCst), 1);
+        let published = position_rx.recv().await.unwrap();
+        assert!(!published.is_empty());
+        assert_eq!(published[0].target, Some(50));
     }
 
     #[tokio::test]

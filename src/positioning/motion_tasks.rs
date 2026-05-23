@@ -67,14 +67,8 @@ impl MotionTasks {
                 .map(|blind| blind.aid)
                 .collect(),
         };
-        let mut tasks = self.tasks.lock().await;
         for aid in aids {
-            if let Some(state) = tasks.get_mut(&aid) {
-                state.generation = state.generation.wrapping_add(1);
-                if let Some(handle) = state.handle.take() {
-                    handle.abort();
-                }
-            }
+            self.cancel(aid).await;
         }
     }
 

@@ -6,6 +6,9 @@
 
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
+#[cfg(test)]
+pub mod testing;
+
 pub mod cli;
 pub mod commands;
 pub mod config;

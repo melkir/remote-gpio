@@ -1,8 +1,8 @@
 use anyhow::Result;
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::{Arc, OnceLock};
-use tokio::sync::Mutex;
+use std::sync::Arc;
+use tokio::sync::{broadcast, Mutex};
 
 use crate::config::{DriverKind, PositioningOptions};
 use crate::core::{Channel, Command};
@@ -13,9 +13,6 @@ use crate::positioning::motion::{
 use crate::positioning::motion_tasks::MotionTasks;
 use crate::positioning::state::{find_blind, BlindPosition, PositionCache, PositionDelta};
 
-/// Callback for position target/current changes (HomeKit EVENT push, tests, future API clients).
-pub type PositionListener = Arc<dyn Fn(&[PositionDelta]) + Send + Sync>;
-
 /// Driver-agnostic control of channel selection, button presses, and position events.
 pub struct BlindController {
     router: CommandRouter,
@@ -24,28 +21,26 @@ pub struct BlindController {
     positions: Arc<PositionCache>,
     timings: MotionTimings,
     motion_tasks: MotionTasks,
-    position_listener: OnceLock<PositionListener>,
+    position_tx: broadcast::Sender<Arc<[PositionDelta]>>,
 }
 
 impl fmt::Debug for BlindController {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("BlindController")
             .field("driver_kind", &self.driver_kind)
-            .field(
-                "position_listener_attached",
-                &self.position_listener.get().is_some(),
-            )
+            .field("position_subscribers", &self.position_tx.receiver_count())
             .finish_non_exhaustive()
     }
 }
 
 impl BlindController {
-    pub async fn with_driver(
+    pub(crate) async fn with_driver(
         config: crate::config::DriverConfig,
         positioning: PositioningOptions,
     ) -> Result<Self> {
         let driver_kind = config.kind;
         let router = CommandRouter::new(config).await?;
+        let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             router,
             driver_kind,
@@ -53,15 +48,8 @@ impl BlindController {
             positions: Arc::new(PositionCache::new()),
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
-            position_listener: OnceLock::new(),
+            position_tx,
         })
-    }
-
-    /// Register a listener for position deltas. Call once at startup (e.g. HomeKit EVENT push).
-    pub fn attach_position_listener(&self, listener: PositionListener) {
-        if self.position_listener.set(listener).is_err() {
-            tracing::warn!("position listener already attached; ignoring duplicate");
-        }
     }
 
     #[cfg(test)]
@@ -72,6 +60,7 @@ impl BlindController {
     ) -> Result<Self> {
         let driver_kind = config.kind;
         let router = CommandRouter::new(config).await?;
+        let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
             router,
             driver_kind,
@@ -79,7 +68,7 @@ impl BlindController {
             positions: Arc::new(PositionCache::from_positions(positions)),
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
-            position_listener: OnceLock::new(),
+            position_tx,
         })
     }
 
@@ -98,13 +87,16 @@ impl BlindController {
         self.router.subscribe_selected_channel()
     }
 
+    /// Subscribe to target/current position changes (HomeKit, tests, future API clients).
+    pub fn subscribe_positions(&self) -> broadcast::Receiver<Arc<[PositionDelta]>> {
+        self.position_tx.subscribe()
+    }
+
     fn emit_position_deltas(&self, deltas: &[PositionDelta]) {
         if deltas.is_empty() {
             return;
         }
-        if let Some(listener) = self.position_listener.get() {
-            listener(deltas);
-        }
+        let _ = self.position_tx.send(Arc::from(deltas));
     }
 
     pub async fn position_snapshot(&self) -> Vec<BlindPosition> {
@@ -125,15 +117,21 @@ impl BlindController {
         self: &Arc<Self>,
         targets: Vec<(u64, u8)>,
     ) -> Result<Vec<PositionDelta>> {
-        let _guard = self.operation_lock.lock().await;
-        let requests = self.build_motion_requests(targets).await;
-        match plan_motion(&requests) {
-            MotionPlan::NoOp => Ok(Vec::new()),
-            MotionPlan::CancelAndSnap { requests } => self.cancel_inflight_and_snap(requests).await,
-            MotionPlan::Travel { starts, movements } => {
-                self.execute_travel(starts, movements).await
+        let deltas = {
+            let _guard = self.operation_lock.lock().await;
+            let requests = self.build_motion_requests(targets).await;
+            match plan_motion(&requests) {
+                MotionPlan::NoOp => Vec::new(),
+                MotionPlan::CancelAndSnap { requests } => {
+                    self.cancel_inflight_and_snap(requests).await?
+                }
+                MotionPlan::Travel { starts, movements } => {
+                    self.execute_travel(starts, movements).await?
+                }
             }
-        }
+        };
+        self.emit_position_deltas(&deltas);
+        Ok(deltas)
     }
 
     async fn build_motion_requests(&self, targets: Vec<(u64, u8)>) -> Vec<MotionRequest> {
@@ -144,6 +142,7 @@ impl BlindController {
         let mut requests = Vec::with_capacity(targets.len());
         for (aid, target) in targets {
             let Some(blind) = find_blind(aid) else {
+                tracing::warn!(aid, "ignoring position target for unknown accessory");
                 continue;
             };
             let target = target.min(100);
@@ -174,14 +173,13 @@ impl BlindController {
                 self.router
                     .execute_on(request.blind.channel, Command::Stop)
                     .await?;
-                deltas.extend(
-                    self.positions
-                        .apply_blind_current(request.blind, request.target)
-                        .await,
-                );
             }
+            deltas.extend(
+                self.positions
+                    .apply_blind_current(request.blind, request.target)
+                    .await,
+            );
         }
-        self.emit_position_deltas(&deltas);
         Ok(deltas)
     }
 
@@ -207,7 +205,6 @@ impl BlindController {
             );
             self.schedule_completion(movement).await;
         }
-        self.emit_position_deltas(&deltas);
         Ok(deltas)
     }
 
@@ -220,21 +217,23 @@ impl BlindController {
         command: Command,
         channel: Option<Channel>,
     ) -> Result<CommandOutcome> {
-        let _guard = self.operation_lock.lock().await;
-        if command == Command::Select {
-            self.router.execute(command, channel).await?;
-            let target = self.current_selection();
-            return Ok(self.complete_command(target, command).await);
-        }
-
-        if let Some(channel) = channel {
-            self.router.execute_on(channel, command).await?;
-            return Ok(self.complete_command(channel, command).await);
-        }
-
-        self.router.execute(command, None).await?;
-        let target = self.current_selection();
-        Ok(self.complete_command(target, command).await)
+        let (outcome, deltas) = {
+            let _guard = self.operation_lock.lock().await;
+            if command == Command::Select {
+                self.router.execute(command, channel).await?;
+                let target = self.current_selection();
+                self.complete_command(target, command).await
+            } else if let Some(channel) = channel {
+                self.router.execute_on(channel, command).await?;
+                self.complete_command(channel, command).await
+            } else {
+                self.router.execute(command, None).await?;
+                let target = self.current_selection();
+                self.complete_command(target, command).await
+            }
+        };
+        self.emit_position_deltas(&deltas);
+        Ok(outcome)
     }
 
     /// Run an action command directly on `channel`. RTS can do this without
@@ -245,9 +244,13 @@ impl BlindController {
         if command == Command::Select {
             anyhow::bail!("select is not a direct targeted command");
         }
-        let _guard = self.operation_lock.lock().await;
-        self.router.execute_on(channel, command).await?;
-        Ok(self.complete_command(channel, command).await)
+        let (outcome, deltas) = {
+            let _guard = self.operation_lock.lock().await;
+            self.router.execute_on(channel, command).await?;
+            self.complete_command(channel, command).await
+        };
+        self.emit_position_deltas(&deltas);
+        Ok(outcome)
     }
 
     #[cfg(test)]
@@ -255,14 +258,19 @@ impl BlindController {
         self.router.operations()
     }
 
-    async fn complete_command(&self, channel: Channel, command: Command) -> CommandOutcome {
+    async fn complete_command(
+        &self,
+        channel: Channel,
+        command: Command,
+    ) -> (CommandOutcome, Vec<PositionDelta>) {
         let inferred_position = infer_position(command);
-        if let Some(position) = inferred_position {
+        let deltas = if let Some(position) = inferred_position {
             self.motion_tasks.cancel_channel(channel).await;
-            let deltas = self.positions.apply_for_channel(channel, position).await;
-            self.emit_position_deltas(&deltas);
-        }
-        CommandOutcome { inferred_position }
+            self.positions.apply_for_channel(channel, position).await
+        } else {
+            Vec::new()
+        };
+        (CommandOutcome { inferred_position }, deltas)
     }
 
     async fn schedule_completion(self: &Arc<Self>, movement: BlindMovement) {
@@ -270,40 +278,43 @@ impl BlindController {
         let generation = self.motion_tasks.replace(movement.blind.aid, None).await;
         let handle = tokio::spawn(async move {
             tokio::time::sleep(movement.duration).await;
-            let _guard = controller.operation_lock.lock().await;
-            if !controller
-                .motion_tasks
-                .is_current(movement.blind.aid, generation)
-                .await
-            {
-                return;
-            }
-            if movement.stop_at_end {
-                if let Err(e) = controller
-                    .router
-                    .execute_on(movement.blind.channel, Command::Stop)
+            let deltas = {
+                let _guard = controller.operation_lock.lock().await;
+                if !controller
+                    .motion_tasks
+                    .is_current(movement.blind.aid, generation)
                     .await
                 {
-                    tracing::warn!(
-                        aid = movement.blind.aid,
-                        channel = %movement.blind.channel,
-                        "failed to stop timed motion: {e}"
-                    );
                     return;
                 }
-            }
-            if !controller
-                .motion_tasks
-                .is_current(movement.blind.aid, generation)
-                .await
-            {
-                return;
-            }
-            let deltas = controller
-                .positions
-                .apply_blind_current(movement.blind, movement.target)
-                .await;
+                if movement.stop_at_end {
+                    if let Err(e) = controller
+                        .router
+                        .execute_on(movement.blind.channel, Command::Stop)
+                        .await
+                    {
+                        tracing::warn!(
+                            aid = movement.blind.aid,
+                            channel = %movement.blind.channel,
+                            "failed to stop timed motion: {e}"
+                        );
+                        return;
+                    }
+                }
+                if !controller
+                    .motion_tasks
+                    .is_current(movement.blind.aid, generation)
+                    .await
+                {
+                    return;
+                }
+                controller
+                    .positions
+                    .apply_blind_current(movement.blind, movement.target)
+                    .await
+            };
             controller.emit_position_deltas(&deltas);
+            let _guard = controller.operation_lock.lock().await;
             controller
                 .motion_tasks
                 .remove_if_current(movement.blind.aid, generation)
@@ -322,9 +333,6 @@ fn infer_position(command: Command) -> Option<u8> {
         Command::Stop | Command::Select | Command::Prog | Command::ProgLong => None,
     }
 }
-
-#[cfg(test)]
-pub mod test_support;
 
 #[cfg(test)]
 mod tests;
