@@ -71,7 +71,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 ## Timed positioning
 
-Somfy RTS/Telis motors do not report physical position, so percentages are estimated from configured travel time. The defaults are 10 seconds open and close for every blind. Override per blind:
+Somfy RTS/Telis motors do not report physical position, so percentages are estimated from configured travel time. These timings are used by HomeKit target-position writes and by the shared `target` command path. The defaults are 10 seconds open and close for every blind. Override per blind:
 
 ```toml
 [positioning.l1]
@@ -83,7 +83,7 @@ open_ms = 7000
 close_ms = 8000
 ```
 
-The controller supports different timings per blind. When Home writes all four blinds to the same direction in one batch, it can start them with one `ALL` command, then issue individual `stop` commands for interior targets at each blind's calculated completion time.
+The controller supports different timings per blind. Interior targets (`1..99`) schedule a proportional `stop`; endpoint targets (`0` and `100`) rely on the motor's own limits. When all four blinds move in the same direction in one request, the controller can start them with one `ALL` command, then issue individual `stop` commands for interior targets at each blind's calculated completion time.
 
 ## Lifecycle
 

@@ -112,8 +112,13 @@ async fn handle_command(
 }
 
 async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
-    tracing::info!(command = %payload.command, ?payload.channel, "remote command received");
-    dispatch_command(state.controller.as_ref(), payload)
+    tracing::info!(
+        command = %payload.command,
+        ?payload.channel,
+        ?payload.value,
+        "remote command received"
+    );
+    dispatch_command(&state.controller, payload)
         .await
         .map_err(map_command_error)?;
     tracing::info!("remote command completed");
@@ -176,12 +181,20 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                             Ok(payload) => {
                                 let command = payload.command.clone();
                                 let channel = payload.channel;
+                                let value = payload.value;
                                 let state = state.clone();
                                 let client_name = client_name.clone();
                                 tokio::spawn(async move {
                                     match execute_command(&state, payload).await {
                                         Ok(_) => {
-                                            tracing::info!("[{}:{}] {} {:?}", client_name, port, command, channel)
+                                            tracing::info!(
+                                                "[{}:{}] {} {:?} value={:?}",
+                                                client_name,
+                                                port,
+                                                command,
+                                                channel,
+                                                value
+                                            )
                                         }
                                         Err(e) => {
                                             tracing::error!(

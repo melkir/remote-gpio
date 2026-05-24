@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use tokio::sync::Mutex;
 
 use crate::core::Channel;
-use crate::positioning::state::BLINDS;
+use crate::positioning::state::aids_for_channel;
 
 #[derive(Debug, Default)]
 pub(crate) struct MotionTasks {
@@ -51,14 +51,7 @@ impl MotionTasks {
     }
 
     pub async fn cancel_channel(&self, channel: Channel) {
-        let aids: Vec<u64> = match channel {
-            Channel::All => BLINDS.iter().map(|blind| blind.aid).collect(),
-            _ => BLINDS
-                .iter()
-                .filter(|blind| blind.channel == channel)
-                .map(|blind| blind.aid)
-                .collect(),
-        };
+        let aids = aids_for_channel(channel);
         let mut tasks = self.tasks.lock().await;
         for aid in aids {
             Self::cancel_state(tasks.get_mut(&aid));

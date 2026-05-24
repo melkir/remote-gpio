@@ -1,4 +1,4 @@
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{value_parser, Parser, Subcommand, ValueEnum};
 use std::path::PathBuf;
 
 use crate::config::DriverKind;
@@ -96,6 +96,12 @@ pub enum RemoteCommand {
         /// the Pi is the master remote (RTS driver only).
         #[arg(long)]
         long: bool,
+    },
+    /// Move a channel to a target position percentage (0 = closed, 100 = open)
+    Target {
+        #[arg(value_parser = value_parser!(u8).range(0..=100))]
+        position: u8,
+        channel: Option<Channel>,
     },
     /// Print current selected channel
     Status,
