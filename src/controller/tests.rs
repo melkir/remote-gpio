@@ -1,10 +1,12 @@
 use super::*;
+use crate::config::{DriverConfig, PositioningOptions};
+use crate::driver::ProtocolOperation;
 use crate::testing::fixtures::{fake_controller, uniform_positioning_l1_ms};
 use std::collections::HashMap;
 use tokio::time::{timeout, Duration};
 
-fn controller_config() -> crate::config::PositioningOptions {
-    crate::config::PositioningOptions::default()
+fn controller_config() -> PositioningOptions {
+    PositioningOptions::default()
 }
 
 #[test]
@@ -18,10 +20,9 @@ fn position_inference_only_tracks_directional_extremes() {
 
 #[tokio::test]
 async fn client_command_with_channel_targets_without_selection() {
-    let controller =
-        BlindController::with_driver(crate::config::DriverConfig::fake(), controller_config())
-            .await
-            .unwrap();
+    let controller = BlindController::with_driver(DriverConfig::fake(), controller_config())
+        .await
+        .unwrap();
 
     controller
         .execute(Command::Up, Some(Channel::L3))
@@ -32,7 +33,7 @@ async fn client_command_with_channel_targets_without_selection() {
     assert_eq!(controller.driver_kind(), DriverKind::Fake);
     assert_eq!(
         controller.operations(),
-        vec![crate::driver::ProtocolOperation::FakeCommand {
+        vec![ProtocolOperation::FakeCommand {
             channel: Channel::L3,
             command: Command::Up,
         }]
@@ -42,7 +43,7 @@ async fn client_command_with_channel_targets_without_selection() {
 #[tokio::test]
 async fn controller_operations_wait_behind_operation_lock() {
     let controller = Arc::new(
-        BlindController::with_driver(crate::config::DriverConfig::fake(), controller_config())
+        BlindController::with_driver(DriverConfig::fake(), controller_config())
             .await
             .unwrap(),
     );
@@ -67,7 +68,7 @@ async fn controller_operations_wait_behind_operation_lock() {
     operation.await.unwrap().unwrap();
     assert_eq!(
         controller.operations(),
-        vec![crate::driver::ProtocolOperation::FakeCommand {
+        vec![ProtocolOperation::FakeCommand {
             channel: Channel::L2,
             command: Command::Up,
         }]
@@ -96,7 +97,7 @@ async fn target_position_writes_wait_behind_operation_lock() {
     operation.await.unwrap().unwrap();
     assert_eq!(
         controller.operations(),
-        vec![crate::driver::ProtocolOperation::FakeCommand {
+        vec![ProtocolOperation::FakeCommand {
             channel: Channel::L1,
             command: Command::Down,
         }]
@@ -105,10 +106,9 @@ async fn target_position_writes_wait_behind_operation_lock() {
 
 #[tokio::test]
 async fn execute_on_rejects_select() {
-    let controller =
-        BlindController::with_driver(crate::config::DriverConfig::fake(), controller_config())
-            .await
-            .unwrap();
+    let controller = BlindController::with_driver(DriverConfig::fake(), controller_config())
+        .await
+        .unwrap();
 
     let err = controller
         .execute_on(Channel::L2, Command::Select)
@@ -171,7 +171,7 @@ async fn target_position_matching_pending_target_is_noop() {
     assert!(position_rx.try_recv().is_err());
     assert_eq!(
         controller.operations(),
-        vec![crate::driver::ProtocolOperation::FakeCommand {
+        vec![ProtocolOperation::FakeCommand {
             channel: Channel::L1,
             command: Command::Down,
         }]

@@ -13,6 +13,9 @@ use crate::rts::cc1101::Cc1101;
 use crate::rts::frame::{RtsCommand, RtsFrame};
 use crate::rts::pigpio::PigpioClient;
 use crate::rts::state::RtsStateStore;
+
+#[cfg(test)]
+use crate::rts::state::DEFAULT_RESERVE_SIZE;
 use crate::rts::waveform;
 
 /// pigpiod TCP port. The daemon is unauthenticated and must listen on loopback only.
@@ -128,8 +131,7 @@ impl RtsDriver {
         state_path: impl Into<std::path::PathBuf>,
         transmitter: Arc<dyn RtsTransmitter>,
     ) -> Result<Self> {
-        let state =
-            RtsStateStore::load_or_init(state_path, crate::rts::state::DEFAULT_RESERVE_SIZE)?;
+        let state = RtsStateStore::load_or_init(state_path, DEFAULT_RESERVE_SIZE)?;
         let selected_channel = state.selected_channel();
         let (sender, selected_rx) = watch::channel(selected_channel);
         Ok(Self::from_parts(
@@ -398,6 +400,7 @@ fn is_pigpio_io_error(err: &anyhow::Error) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rts::state::{RtsState, DEFAULT_RESERVE_SIZE, STATE_FILE};
     use std::sync::Mutex as StdMutex;
 
     #[test]
@@ -436,7 +439,7 @@ mod tests {
     #[tokio::test]
     async fn execute_on_transmits_waveform_and_reserves_rolling_code() {
         let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join(crate::rts::state::STATE_FILE);
+        let state_path = dir.path().join(STATE_FILE);
         let transmitter = Arc::new(RecordingTransmitter::default());
         let driver =
             RtsDriver::new_for_test(RtsOptions::default(), &state_path, transmitter.clone())
@@ -453,19 +456,19 @@ mod tests {
         assert!(transmissions[0].remote_id > 0);
         assert_eq!(transmissions[0].pulses.len(), 508);
 
-        let state: crate::rts::state::RtsState =
+        let state: RtsState =
             serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
         assert_eq!(state.selected_channel, Channel::L1);
         assert_eq!(
             state.channels.get(&Channel::L3).unwrap().reserved_until,
-            1 + crate::rts::state::DEFAULT_RESERVE_SIZE
+            1 + DEFAULT_RESERVE_SIZE
         );
     }
 
     #[tokio::test]
     async fn select_updates_persisted_rts_selection_without_transmitting() {
         let dir = tempfile::tempdir().unwrap();
-        let state_path = dir.path().join(crate::rts::state::STATE_FILE);
+        let state_path = dir.path().join(STATE_FILE);
         let transmitter = Arc::new(RecordingTransmitter::default());
         let driver =
             RtsDriver::new_for_test(RtsOptions::default(), &state_path, transmitter.clone())
@@ -479,7 +482,7 @@ mod tests {
 
         assert_eq!(driver.selected_channel(), Channel::L4);
         assert!(transmitter.transmissions().is_empty());
-        let state: crate::rts::state::RtsState =
+        let state: RtsState =
             serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
         assert_eq!(state.selected_channel, Channel::L4);
     }

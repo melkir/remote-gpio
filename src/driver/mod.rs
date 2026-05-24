@@ -98,6 +98,7 @@ impl CommandRouter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rts::state::{RtsState, DEFAULT_RESERVE_SIZE, STATE_FILE};
 
     #[tokio::test]
     async fn rts_prog_transmits_pairing_waveform_without_changing_selection() {
@@ -130,7 +131,7 @@ mod tests {
 
         let dir = tempfile::tempdir().unwrap();
         let events = Arc::new(StdMutex::new(Vec::new()));
-        let state_path = dir.path().join(crate::rts::state::STATE_FILE);
+        let state_path = dir.path().join(STATE_FILE);
         let rts_driver = rts::RtsDriver::new_for_test(
             RtsOptions::default(),
             &state_path,
@@ -148,12 +149,12 @@ mod tests {
             *events.lock().expect("recording events mutex"),
             vec![Event::RtsTransmit(Channel::L3, RtsCommand::Prog)]
         );
-        let state: crate::rts::state::RtsState =
+        let state: RtsState =
             serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
         assert_eq!(state.selected_channel, Channel::L1);
         assert_eq!(
             state.channels.get(&Channel::L3).unwrap().reserved_until,
-            1 + crate::rts::state::DEFAULT_RESERVE_SIZE
+            1 + DEFAULT_RESERVE_SIZE
         );
         assert_eq!(state.channels.get(&Channel::L1).unwrap().reserved_until, 1);
     }

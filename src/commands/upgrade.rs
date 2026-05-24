@@ -11,6 +11,7 @@ use std::time::Duration;
 use crate::cli::UpgradeChannel;
 use crate::commands::doctor;
 use crate::commands::install;
+use crate::config;
 use crate::deploy::{self, ServiceState, STAGED_DOWNLOAD};
 use crate::version;
 
@@ -110,8 +111,7 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
         }
     }
 
-    let resolved_config =
-        crate::config::resolve(None).context("loading config for unit refresh")?;
+    let resolved_config = config::resolve(None).context("loading config for unit refresh")?;
     let service_state = ServiceState::capture();
     let was_running = service_state.was_running();
 
