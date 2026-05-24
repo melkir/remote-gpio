@@ -1,9 +1,8 @@
 use anyhow::Result;
 
-use crate::commands::install;
 use crate::config::DriverKind;
 use crate::config::{self, ResolvedConfig};
-use crate::deploy::{atomic_write, restart_somfy};
+use crate::deploy::{atomic_write, prepare_driver_prereqs, restart_somfy};
 
 pub fn path(resolved: &ResolvedConfig) {
     println!("{}", resolved.path.display());
@@ -24,9 +23,7 @@ pub fn set_driver(resolved: &ResolvedConfig, kind: DriverKind) -> Result<()> {
     next.driver = kind;
     config::validate(&next)?;
 
-    if kind == DriverKind::Rts {
-        install::prepare_rts_prereqs()?;
-    }
+    prepare_driver_prereqs(kind)?;
 
     atomic_write(&resolved.path, &config::to_toml(&next)?)?;
     println!("wrote {} (driver={kind})", resolved.path.display());

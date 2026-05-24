@@ -7,7 +7,7 @@ use anyhow::Result;
 use check::Check;
 use serde::Serialize;
 
-use crate::config::{DriverKind, ResolvedConfig};
+use crate::config::ResolvedConfig;
 use crate::deploy;
 use crate::version;
 
@@ -174,11 +174,7 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
 
     let configured_driver = resolved_config.config.driver;
     checks.push(Check::new("configured_driver", "Driver").detail(configured_driver.to_string()));
-    match configured_driver {
-        DriverKind::Telis => checks.push(hardware::gpio_chip(&resolved_config.config.gpio)),
-        DriverKind::Rts => checks.extend(hardware::rts_checks(&resolved_config.config.rts)),
-        DriverKind::Fake => checks.push(hardware::fake_gpio_skipped()),
-    }
+    checks.extend(hardware::driver_checks(&resolved_config.config));
 
     checks.push(updates::check(network_timeout_ms).await);
 

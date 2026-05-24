@@ -3,33 +3,33 @@ use std::time::Duration;
 
 use super::check::{read_write_file, readable_file, Check};
 use super::Status;
-use crate::config::RtsOptions;
+use crate::config::{AppConfig, DriverKind};
 use crate::driver::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
-use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
+use crate::gpio::MAX_BCM_GPIO;
 use crate::persist;
 use crate::rts::state::{RtsState, SCHEMA_VERSION, STATE_FILE};
 
-pub fn gpio_chip(options: &GpioOptions) -> Check {
-    readable_file("gpio_chip_accessible", "GPIO", &options.chip)
-}
-
-pub fn fake_gpio_skipped() -> Check {
-    Check::new("gpio_chip_accessible", "GPIO")
-        .skipped()
-        .detail("fake driver selected")
-}
-
-pub fn rts_checks(options: &RtsOptions) -> Vec<Check> {
-    vec![
-        read_write_file("rts_spi_device", "RTS SPI", &options.spi_device),
-        rts_gdo0(options.gpio.gdo0),
-        pigpiod(),
-        Check::new("pigpiod_localhost_only", "pigpiod local").detail(format!(
-            "loopback only ({}, port {PIGPIOD_PORT})",
-            pigpiod_addr_list()
-        )),
-        rts_state_file(),
-    ]
+pub fn driver_checks(config: &AppConfig) -> Vec<Check> {
+    match config.driver {
+        DriverKind::Telis => vec![readable_file(
+            "gpio_chip_accessible",
+            "GPIO",
+            &config.gpio.chip,
+        )],
+        DriverKind::Rts => vec![
+            read_write_file("rts_spi_device", "RTS SPI", &config.rts.spi_device),
+            rts_gdo0(config.rts.gpio.gdo0),
+            pigpiod(),
+            Check::new("pigpiod_localhost_only", "pigpiod local").detail(format!(
+                "loopback only ({}, port {PIGPIOD_PORT})",
+                pigpiod_addr_list()
+            )),
+            rts_state_file(),
+        ],
+        DriverKind::Fake => vec![Check::new("gpio_chip_accessible", "GPIO")
+            .skipped()
+            .detail("fake driver selected")],
+    }
 }
 
 fn rts_gdo0(gpio: u8) -> Check {

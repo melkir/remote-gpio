@@ -1,6 +1,11 @@
 //! Shared paths and filesystem helpers for install/upgrade/doctor.
 
+pub(crate) mod rts_prereqs;
+
 use anyhow::{bail, Context, Result};
+
+use crate::config::DriverKind;
+
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
@@ -12,6 +17,14 @@ pub const BIN_PATH: &str = "/usr/local/bin/somfy";
 pub const BIN_PREV: &str = "/usr/local/bin/somfy.prev";
 pub const UNIT_PATH: &str = "/etc/systemd/system/somfy.service";
 pub const STAGED_DOWNLOAD: &str = "/usr/local/bin/.somfy.download";
+
+/// Install/host setup required before the configured driver can run.
+pub(crate) fn prepare_driver_prereqs(driver: DriverKind) -> Result<()> {
+    if driver == DriverKind::Rts {
+        rts_prereqs::prepare()?;
+    }
+    Ok(())
+}
 
 pub fn require_root(command: &str) -> Result<()> {
     if !nix::unistd::Uid::current().is_root() {
