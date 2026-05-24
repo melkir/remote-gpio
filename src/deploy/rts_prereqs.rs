@@ -71,7 +71,7 @@ fn configure_pigpiod_localhost() -> Result<()> {
         tracing::info!("{} already in sync", PIGPIOD_OVERRIDE_PATH);
     }
 
-    systemd::systemctl(&["enable", "--now", "pigpiod"])?;
+    systemd::systemctl(&["enable", "pigpiod"])?;
     systemd::systemctl(&["restart", "pigpiod"])?;
     Ok(())
 }
