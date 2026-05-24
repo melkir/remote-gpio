@@ -11,7 +11,9 @@ use crate::positioning::motion::{
     plan_motion, BlindMovement, DriverStart, MotionPlan, MotionRequest, MotionTimings,
 };
 use crate::positioning::motion_tasks::MotionTasks;
-use crate::positioning::state::{find_blind, BlindPosition, PositionCache, PositionDelta};
+use crate::positioning::state::{
+    find_blind, target_positions, BlindPosition, PositionCache, PositionDelta,
+};
 
 /// Driver-agnostic control of channel selection, button presses, and position events.
 pub struct BlindController {
@@ -121,6 +123,16 @@ impl BlindController {
             .into_iter()
             .find(|position| position.aid == aid)
             .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
+    }
+
+    pub async fn set_target_for_channel(
+        self: &Arc<Self>,
+        channel: Option<Channel>,
+        position: u8,
+    ) -> Result<Vec<PositionDelta>> {
+        let channel = channel.unwrap_or_else(|| self.current_selection());
+        self.set_target_positions(target_positions(channel, position))
+            .await
     }
 
     pub async fn set_target_positions(

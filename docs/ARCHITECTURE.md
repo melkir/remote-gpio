@@ -90,7 +90,7 @@ The CLI has two modes:
 
 ### Transport Boundary
 
-Command requests are expressed in terms of `Channel` and `Command`: `L1`-`L4`, `ALL`, and actions such as `up`, `down`, `stop`, `select`, `prog`, and `prog_long`. Transport adapters are responsible for parsing protocol-specific input and returning protocol-specific output, but they should not implement hardware behavior.
+Command requests are expressed in terms of `Channel` and command intent. Channels are `L1`-`L4` and `ALL`. Direct button commands are `up`, `down`, `stop`, `select`, `prog`, and `prog_long`; percentage positioning uses `target` with a `value` from `0` to `100`. Transport adapters are responsible for parsing protocol-specific input and returning protocol-specific output, but they should not implement hardware behavior.
 
 Live state is pushed through:
 
@@ -108,7 +108,7 @@ The application core owns the rules that should be consistent across clients:
 - when selection changes are broadcast;
 - how inferred position updates are generated after movement commands.
 
-The system has no motor position sensors. Position is an application-level inference: successful `up` maps to open (`100`), successful `down` maps to closed (`0`), and `ALL` fans out to the individual channels so HomeKit remains consistent.
+The system has no motor position sensors. Position is an application-level inference: successful `up` maps to open (`100`), successful `down` maps to closed (`0`), and `target` moves from the cached current position to the requested percentage using configured travel times. `ALL` fans out to the individual channels so HomeKit and API clients remain consistent.
 
 ### Driver Boundary
 
@@ -133,7 +133,7 @@ sequenceDiagram
   participant Controller as Blind controller
   participant Driver as Active driver
 
-  UI->>HTTP: command + optional channel
+  UI->>HTTP: command + optional channel/value
   HTTP->>Controller: validate and execute client command
   Controller->>Driver: target channel or use selection
   Driver-->>Controller: success or error
@@ -141,7 +141,7 @@ sequenceDiagram
   Controller-->>UI: selection / position events
 ```
 
-The HTTP and WebSocket routes handle the client-facing request contract before dispatching to the controller. `select` changes the public selected channel. Movement and pairing commands with an explicit channel target that channel directly; movement commands without a channel use the current selection. Direct targeted controller calls reject `select` because selection is a client request, not a per-channel action.
+The HTTP and WebSocket routes handle the client-facing request contract before dispatching to the controller. Direct button requests use `{"command":"up","channel":"L2"}`; `channel` is optional for `up`, `down`, `stop`, and `select`, and omitted movement commands use the current selection. Target-position requests use `{"command":"target","value":50}` or `{"command":"target","channel":"L2","value":50}`. `select` changes the public selected channel. Movement, pairing, and target commands with an explicit channel target that channel directly. Direct targeted controller calls reject `select` because selection is a client request, not a per-channel action.
 
 ### HomeKit Command
 
@@ -166,7 +166,7 @@ sequenceDiagram
   Controller-->>HAP: EVENT current/stopped notification
 ```
 
-HomeKit exposes four `WindowCovering` accessories: `L1`-`L4`. Percentage writes use the controller's shared estimated-position engine because the motors provide no position feedback. Each blind has independent open/close timings under `positioning`; the controller sends a direction command, waits for the proportional travel time, sends `stop` only for interior targets (`1..99`), and persists the estimated current position. A write that matches cached current state is treated as a no-op, which prevents iOS from replaying stale target positions into physical movement after pairing or reconnect.
+HomeKit exposes four `WindowCovering` accessories: `L1`-`L4`. The HomeKit adapter translates target-position characteristic writes into controller target-position requests, then publishes the resulting position deltas back as HAP events. HAP protocol details and write semantics live in [HAP.md](HAP.md).
 
 ### RTS Transmission
 

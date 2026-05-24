@@ -56,6 +56,24 @@ pub fn find_blind(aid: u64) -> Option<&'static Blind> {
     BLINDS.iter().find(|b| b.aid == aid)
 }
 
+pub fn aids_for_channel(channel: Channel) -> Vec<u64> {
+    match channel {
+        Channel::All => BLINDS.iter().map(|blind| blind.aid).collect(),
+        _ => BLINDS
+            .iter()
+            .filter(|blind| blind.channel == channel)
+            .map(|blind| blind.aid)
+            .collect(),
+    }
+}
+
+pub fn target_positions(channel: Channel, position: u8) -> Vec<(u64, u8)> {
+    aids_for_channel(channel)
+        .into_iter()
+        .map(|aid| (aid, position))
+        .collect()
+}
+
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlindPosition {
     pub aid: u64,
@@ -358,5 +376,20 @@ mod tests {
         let path = dir.path().join(POSITIONS_FILE);
         let loaded = load_positions_from(&path);
         assert!(loaded.is_empty());
+    }
+
+    #[test]
+    fn aids_for_channel_maps_channel_and_all() {
+        assert_eq!(aids_for_channel(Channel::L2), vec![3]);
+        assert_eq!(aids_for_channel(Channel::All), vec![2, 3, 4, 5]);
+    }
+
+    #[test]
+    fn target_positions_pairs_aids_with_position() {
+        assert_eq!(target_positions(Channel::L2, 25), vec![(3, 25)]);
+        assert_eq!(
+            target_positions(Channel::All, 10),
+            vec![(2, 10), (3, 10), (4, 10), (5, 10)]
+        );
     }
 }
