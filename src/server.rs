@@ -1,4 +1,5 @@
 use crate::controller::BlindController;
+use crate::embed;
 use crate::service::{dispatch_command, CommandError, CommandRequest};
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
@@ -70,7 +71,7 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
         .route("/events", get(handle_events))
         .route("/command", post(handle_command))
         .route("/ws", get(ws_handler))
-        .fallback(crate::embed::static_handler)
+        .fallback(embed::static_handler)
         .with_state(shared_state)
         .layer(cors)
         .layer(

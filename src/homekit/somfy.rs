@@ -152,7 +152,7 @@ fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
         .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
 }
 
-fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> Value {
+fn build_accessories(positions: &[BlindPosition]) -> Value {
     let blinds: Vec<BlindAccessory<'_>> = BLINDS
         .iter()
         .map(|blind| BlindAccessory {
@@ -169,6 +169,7 @@ fn build_accessories(positions: &[crate::positioning::state::BlindPosition]) -> 
 mod tests {
     use super::*;
     use crate::core::{Channel, Command};
+    use crate::driver::ProtocolOperation;
     use crate::positioning::state::STATUS_STOPPED;
     use crate::testing::fixtures::fake_four_blinds;
     use serde_json::json;
@@ -256,7 +257,7 @@ mod tests {
         assert!(outcome.all_success());
         assert_eq!(
             controller.operations(),
-            vec![crate::driver::ProtocolOperation::FakeCommand {
+            vec![ProtocolOperation::FakeCommand {
                 channel: Channel::L1,
                 command: Command::Down,
             }]
@@ -266,11 +267,11 @@ mod tests {
         assert_eq!(
             controller.operations(),
             vec![
-                crate::driver::ProtocolOperation::FakeCommand {
+                ProtocolOperation::FakeCommand {
                     channel: Channel::L1,
                     command: Command::Down,
                 },
-                crate::driver::ProtocolOperation::FakeCommand {
+                ProtocolOperation::FakeCommand {
                     channel: Channel::L1,
                     command: Command::Stop,
                 },
@@ -327,7 +328,7 @@ mod tests {
         assert!(outcome.all_success());
         assert_eq!(
             controller.operations(),
-            vec![crate::driver::ProtocolOperation::FakeCommand {
+            vec![ProtocolOperation::FakeCommand {
                 channel: Channel::All,
                 command: Command::Down,
             }]
@@ -354,7 +355,7 @@ mod tests {
 
         assert_eq!(
             controller.operations(),
-            vec![crate::driver::ProtocolOperation::FakeCommand {
+            vec![ProtocolOperation::FakeCommand {
                 channel: Channel::L1,
                 command: Command::Down,
             }]
@@ -393,11 +394,11 @@ mod tests {
         assert_eq!(
             controller.operations(),
             vec![
-                crate::driver::ProtocolOperation::FakeCommand {
+                ProtocolOperation::FakeCommand {
                     channel: Channel::L1,
                     command: Command::Down,
                 },
-                crate::driver::ProtocolOperation::FakeCommand {
+                ProtocolOperation::FakeCommand {
                     channel: Channel::L1,
                     command: Command::Stop,
                 },

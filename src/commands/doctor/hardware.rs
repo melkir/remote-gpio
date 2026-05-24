@@ -7,6 +7,7 @@ use crate::config::RtsOptions;
 use crate::driver::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 use crate::persist;
+use crate::rts::state::{RtsState, SCHEMA_VERSION, STATE_FILE};
 
 pub fn gpio_chip(options: &GpioOptions) -> Check {
     readable_file("gpio_chip_accessible", "GPIO", &options.chip)
@@ -56,7 +57,7 @@ fn pigpiod() -> Check {
 }
 
 fn rts_state_file() -> Check {
-    let path = persist::state_dir().join(crate::rts::state::STATE_FILE);
+    let path = persist::state_dir().join(STATE_FILE);
     let display = path.display().to_string();
     if !path.exists() {
         return Check::new("rts_state_file", "RTS state")
@@ -64,16 +65,15 @@ fn rts_state_file() -> Check {
             .detail(format!("{display} not yet created"));
     }
     match std::fs::read_to_string(&path) {
-        Ok(text) => match serde_json::from_str::<crate::rts::state::RtsState>(&text) {
-            Ok(state) if state.schema_version == crate::rts::state::SCHEMA_VERSION => {
+        Ok(text) => match serde_json::from_str::<RtsState>(&text) {
+            Ok(state) if state.schema_version == SCHEMA_VERSION => {
                 Check::new("rts_state_file", "RTS state").detail(display)
             }
             Ok(state) => Check::new("rts_state_file", "RTS state")
                 .status(Status::Blocking)
                 .detail(format!(
                     "{display}: schema_version {} unsupported (expected {})",
-                    state.schema_version,
-                    crate::rts::state::SCHEMA_VERSION
+                    state.schema_version, SCHEMA_VERSION
                 )),
             Err(e) => Check::new("rts_state_file", "RTS state")
                 .status(Status::Blocking)

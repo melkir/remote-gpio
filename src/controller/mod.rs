@@ -4,11 +4,11 @@ use std::fmt;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
-use crate::config::{DriverKind, PositioningOptions};
+use crate::config::{DriverConfig, DriverKind, PositioningOptions};
 use crate::core::{Channel, Command};
 use crate::driver::{CommandOutcome, CommandRouter, SelectedChannelRx};
 use crate::positioning::motion::{
-    plan_motion, BlindMovement, MotionPlan, MotionRequest, MotionTimings,
+    plan_motion, BlindMovement, DriverStart, MotionPlan, MotionRequest, MotionTimings,
 };
 use crate::positioning::motion_tasks::MotionTasks;
 use crate::positioning::state::{find_blind, BlindPosition, PositionCache, PositionDelta};
@@ -35,7 +35,7 @@ impl fmt::Debug for BlindController {
 
 impl BlindController {
     pub(crate) async fn with_driver(
-        config: crate::config::DriverConfig,
+        config: DriverConfig,
         positioning: PositioningOptions,
     ) -> Result<Self> {
         let driver_kind = config.kind;
@@ -54,7 +54,7 @@ impl BlindController {
 
     #[cfg(test)]
     pub(crate) async fn with_driver_and_positions_for_test(
-        config: crate::config::DriverConfig,
+        config: DriverConfig,
         positioning: PositioningOptions,
         positions: HashMap<u64, u8>,
     ) -> Result<Self> {
@@ -195,7 +195,7 @@ impl BlindController {
 
     async fn execute_travel(
         self: &Arc<Self>,
-        starts: Vec<crate::positioning::motion::DriverStart>,
+        starts: Vec<DriverStart>,
         movements: Vec<BlindMovement>,
     ) -> Result<Vec<PositionDelta>> {
         for movement in &movements {

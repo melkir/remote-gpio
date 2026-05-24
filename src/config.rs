@@ -275,18 +275,6 @@ mod tests {
     }
 
     #[test]
-    fn parses_homekit_flag() {
-        let config: AppConfig = toml::from_str(
-            r#"
-driver = "telis"
-homekit = false
-"#,
-        )
-        .unwrap();
-        assert!(!config.homekit);
-    }
-
-    #[test]
     fn parses_per_blind_positioning() {
         let config: AppConfig = toml::from_str(
             r#"

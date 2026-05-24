@@ -1,24 +1,21 @@
 use anyhow::{bail, Context, Result};
 use futures_util::StreamExt;
-use std::path::PathBuf;
 
 use crate::cli::RemoteCommand;
-use crate::config::{self, ResolvedConfig};
+use crate::config::ResolvedConfig;
 use crate::core::Channel;
 use crate::server::base_url;
 use crate::service::{validate_command_request, CommandRequest};
 
-pub async fn run(command: RemoteCommand, config_path: Option<PathBuf>) -> Result<()> {
-    let resolved = config::resolve(config_path)?;
-
+pub async fn run(command: RemoteCommand, resolved: &ResolvedConfig) -> Result<()> {
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel, &resolved).await,
-        RemoteCommand::Down { channel } => post_command("down", channel, &resolved).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel, &resolved).await,
-        RemoteCommand::Select { channel } => post_command("select", Some(channel), &resolved).await,
+        RemoteCommand::Up { channel } => post_command("up", channel, resolved).await,
+        RemoteCommand::Down { channel } => post_command("down", channel, resolved).await,
+        RemoteCommand::Stop { channel } => post_command("stop", channel, resolved).await,
+        RemoteCommand::Select { channel } => post_command("select", Some(channel), resolved).await,
         RemoteCommand::Prog { channel, long } => {
             let cmd = if long { "prog_long" } else { "prog" };
-            post_command(cmd, Some(channel), &resolved).await
+            post_command(cmd, Some(channel), resolved).await
         }
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,

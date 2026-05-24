@@ -8,6 +8,8 @@ use crate::controller::BlindController;
 use crate::hap::mdns::{self, MdnsConfig};
 use crate::hap::runtime::{CharacteristicEvent, HapRuntime};
 use crate::hap::state::{FileHapStore, HapState};
+use crate::hap::{qr, server};
+use crate::persist;
 use crate::positioning::state::PositionDelta;
 
 mod accessory_db;
@@ -21,11 +23,11 @@ pub const HAP_CATEGORY: &str = "2";
 pub const MDNS_NAME_PREFIX: &str = "Somfy";
 
 pub fn store() -> FileHapStore {
-    FileHapStore::new(crate::persist::state_dir())
+    FileHapStore::new(persist::state_dir())
 }
 
 pub fn setup_uri(state: &HapState) -> Result<String> {
-    crate::hap::qr::setup_uri(state, HAP_CATEGORY)
+    qr::setup_uri(state, HAP_CATEGORY)
 }
 
 /// Handles for the background HomeKit tasks started by [`start`].
@@ -67,7 +69,7 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
     let position_events = spawn_position_events(controller, runtime.event_sender());
 
     let hap_server = tokio::spawn(async move {
-        if let Err(e) = crate::hap::server::serve(runtime, HAP_PORT).await {
+        if let Err(e) = server::serve(runtime, HAP_PORT).await {
             tracing::error!("HAP server exited: {}", e);
         }
     });

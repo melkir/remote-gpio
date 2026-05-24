@@ -7,8 +7,8 @@ use anyhow::Result;
 use check::Check;
 use serde::Serialize;
 
-use crate::config::DriverKind;
-use crate::config::ResolvedConfig;
+use crate::config::{DriverKind, ResolvedConfig};
+use crate::deploy;
 use crate::version;
 
 #[derive(Copy, Clone, Debug, Serialize, PartialEq, Eq)]
@@ -146,7 +146,7 @@ pub async fn collect(resolved_config: &ResolvedConfig, network_timeout_ms: u64) 
     let rendered_unit = systemd::render_expected_unit(resolved_config);
     checks.push(systemd::unit_installed());
 
-    let on_disk = std::fs::read_to_string(crate::deploy::UNIT_PATH).ok();
+    let on_disk = std::fs::read_to_string(deploy::UNIT_PATH).ok();
     match (&on_disk, &rendered_unit) {
         (Some(disk), Some(expected)) => {
             checks.push(systemd::unit_in_sync(disk, expected));

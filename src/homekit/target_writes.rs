@@ -1,7 +1,7 @@
 //! HomeKit `TargetPosition` write planning and batch coalescing.
 
 use crate::hap::runtime::{
-    CharacteristicId, CharacteristicWrite, CharacteristicWriteStatus, HapStatus,
+    CharacteristicId, CharacteristicWrite, CharacteristicWriteStatus, HapStatus, Subscriptions,
 };
 use crate::homekit::accessory_db::IID_IDENTIFY;
 use crate::homekit::accessory_db::IID_TARGET_POSITION;
@@ -26,7 +26,7 @@ pub struct TargetWritePlan {
 
 pub fn plan_target_writes(
     writes: Vec<CharacteristicWrite>,
-    subscriptions: &mut crate::hap::runtime::Subscriptions,
+    subscriptions: &mut Subscriptions,
 ) -> TargetWritePlan {
     let mut statuses = Vec::new();
     let mut targets = Vec::new();
@@ -85,7 +85,7 @@ pub fn plan_target_writes(
 fn handle_subscription(
     id: CharacteristicId,
     enabled: bool,
-    subscriptions: &mut crate::hap::runtime::Subscriptions,
+    subscriptions: &mut Subscriptions,
 ) -> CharacteristicWriteStatus {
     if !is_known_characteristic(id) {
         return CharacteristicWriteStatus::error(id, HapStatus::ResourceDoesNotExist);
@@ -162,7 +162,7 @@ mod tests {
                 ev: None,
             })
             .collect::<Vec<_>>();
-        let mut subscriptions = crate::hap::runtime::Subscriptions::default();
+        let mut subscriptions = Subscriptions::default();
         let plan = plan_target_writes(writes, &mut subscriptions);
 
         assert_eq!(plan.targets.len(), 4);
@@ -189,7 +189,7 @@ mod tests {
             value: None,
             ev: Some(true),
         }];
-        let mut subscriptions = crate::hap::runtime::Subscriptions::default();
+        let mut subscriptions = Subscriptions::default();
 
         let plan = plan_target_writes(writes, &mut subscriptions);
 

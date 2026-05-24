@@ -7,7 +7,7 @@ use tokio::sync::Mutex;
 use crate::config::TelisOptions;
 use crate::core::{Channel, Command};
 use crate::driver::{SelectedChannelRx, TELIS_PROG_UNAVAILABLE};
-use crate::gpio::{GpioOptions, TelisButton};
+use crate::gpio::{trigger_output, watch_inputs, GpioOptions, TelisButton};
 
 const MAX_SELECT_CYCLES: usize = 8;
 
@@ -129,7 +129,7 @@ impl TelisTransport for GpioTelisTransport {
     fn press(&self, button: TelisButton) -> BoxFuture<'_, Result<()>> {
         let gpio = Arc::clone(&self.gpio);
         let telis = Arc::clone(&self.options);
-        Box::pin(async move { crate::gpio::trigger_output(&gpio.chip, button, &telis.gpio).await })
+        Box::pin(async move { trigger_output(&gpio.chip, button, &telis.gpio).await })
     }
 
     fn select(&self) -> BoxFuture<'_, Result<Channel>> {
@@ -139,14 +139,12 @@ impl TelisTransport for GpioTelisTransport {
             let chip = gpio.chip.clone();
             let button_map = telis.gpio.clone();
             tokio::spawn(async move {
-                if let Err(e) =
-                    crate::gpio::trigger_output(&chip, TelisButton::Select, &button_map).await
-                {
+                if let Err(e) = trigger_output(&chip, TelisButton::Select, &button_map).await {
                     tracing::error!("failed to trigger Telis select button: {e}");
                 }
             });
 
-            crate::gpio::watch_inputs(&gpio.chip, &telis.gpio).await
+            watch_inputs(&gpio.chip, &telis.gpio).await
         })
     }
 }
