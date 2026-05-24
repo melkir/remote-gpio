@@ -20,47 +20,28 @@ async fn main() -> Result<()> {
     let _ = rustls::crypto::ring::default_provider().install_default();
 
     let cli = Cli::parse();
-    let config_path = cli.config;
+    let resolved = config::resolve(cli.config)?;
     match cli.command.unwrap_or(Command::Serve) {
-        Command::Serve => {
-            let resolved_config = config::resolve(config_path)?;
-            commands::serve::run(resolved_config).await
-        }
-        Command::Install { user } => {
-            let resolved_config = config::resolve(config_path)?;
-            commands::install::run(user, &resolved_config)
-        }
+        Command::Serve => commands::serve::run(&resolved).await,
+        Command::Install { user } => commands::install::run(user, &resolved),
         Command::Upgrade {
             channel,
             version,
             check,
         } => commands::upgrade::run(channel, version, check).await,
-        Command::Doctor { json, verbose } => {
-            let resolved_config = config::resolve(config_path)?;
-            commands::doctor::run(json, verbose, &resolved_config).await
-        }
+        Command::Doctor { json, verbose } => commands::doctor::run(json, verbose, &resolved).await,
         Command::Uninstall => commands::uninstall::run().await,
         Command::Restart => commands::restart::run(),
-        Command::Remote { command } => commands::remote::run(command, config_path).await,
-        Command::Homekit { command } => {
-            let resolved_config = config::resolve(config_path)?;
-            commands::homekit::run(command, &resolved_config)
-        }
+        Command::Remote { command } => commands::remote::run(command, &resolved).await,
+        Command::Homekit { command } => commands::homekit::run(command, &resolved),
         Command::Logs(args) => commands::logs::run(args),
         Command::Config { command } => match command {
             ConfigCommand::Path => {
-                let resolved_config = config::resolve(config_path)?;
-                commands::config::path(&resolved_config);
+                commands::config::path(&resolved);
                 Ok(())
             }
-            ConfigCommand::Show => {
-                let resolved_config = config::resolve(config_path)?;
-                commands::config::show(&resolved_config)
-            }
-            ConfigCommand::SetDriver { kind } => {
-                let resolved_config = config::resolve(config_path)?;
-                commands::config::set_driver(&resolved_config, kind)
-            }
+            ConfigCommand::Show => commands::config::show(&resolved),
+            ConfigCommand::SetDriver { kind } => commands::config::set_driver(&resolved, kind),
         },
     }
 }

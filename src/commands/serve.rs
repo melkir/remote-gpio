@@ -7,8 +7,8 @@ use crate::controller::BlindController;
 use crate::homekit;
 use crate::server::{serve, AppState};
 
-pub async fn run(resolved_config: ResolvedConfig) -> Result<()> {
-    let report = doctor::collect(&resolved_config, 0).await;
+pub async fn run(resolved_config: &ResolvedConfig) -> Result<()> {
+    let report = doctor::collect(resolved_config, 0).await;
     report.print_summary();
     if report.has_blocking_failure() {
         bail!("doctor reported blocking failures; refusing to start");
