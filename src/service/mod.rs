@@ -145,24 +145,18 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_select_with_channel() {
-        let req = parse("select", Some(Channel::L2)).unwrap();
-        assert_eq!(req.command, Command::Select);
-        assert_eq!(req.channel, Some(Channel::L2));
-    }
-
-    #[test]
-    fn parse_accepts_select_without_channel() {
-        let req = parse("select", None).unwrap();
-        assert_eq!(req.command, Command::Select);
-        assert_eq!(req.channel, None);
-    }
-
-    #[test]
-    fn parse_accepts_directional_channel() {
-        let req = parse("up", Some(Channel::L1)).unwrap();
-        assert_eq!(req.command, Command::Up);
-        assert_eq!(req.channel, Some(Channel::L1));
+    fn parse_accepts_valid_commands() {
+        for (wire, expected, channel) in [
+            ("select", Command::Select, Some(Channel::L2)),
+            ("select", Command::Select, None),
+            ("up", Command::Up, Some(Channel::L1)),
+            ("prog", Command::Prog, Some(Channel::L1)),
+            ("prog_long", Command::ProgLong, Some(Channel::L1)),
+        ] {
+            let req = parse(wire, channel).unwrap();
+            assert_eq!(req.command, expected, "{wire}");
+            assert_eq!(req.channel, channel, "{wire}");
+        }
     }
 
     #[test]
@@ -173,33 +167,11 @@ mod tests {
     }
 
     #[test]
-    fn parse_accepts_prog_with_channel() {
-        let req = parse("prog", Some(Channel::L1)).unwrap();
-        assert_eq!(req.command, Command::Prog);
-        assert_eq!(req.channel, Some(Channel::L1));
-    }
-
-    #[test]
-    fn parse_accepts_prog_long_with_channel() {
-        let req = parse("prog_long", Some(Channel::L1)).unwrap();
-        assert_eq!(req.command, Command::ProgLong);
-        assert_eq!(req.channel, Some(Channel::L1));
-    }
-
-    #[test]
     fn command_request_accepts_channel_field() {
         let req: CommandRequest =
             serde_json::from_str(r#"{"command":"up","channel":"L1"}"#).unwrap();
 
         assert_eq!(req.command, "up");
-        assert_eq!(req.channel, Some(Channel::L1));
-    }
-
-    #[test]
-    fn command_request_accepts_prog_long() {
-        let req: CommandRequest =
-            serde_json::from_str(r#"{"command":"prog_long","channel":"L1"}"#).unwrap();
-        assert_eq!(req.command, "prog_long");
         assert_eq!(req.channel, Some(Channel::L1));
     }
 
