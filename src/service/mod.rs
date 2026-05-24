@@ -136,11 +136,10 @@ pub(crate) async fn dispatch_command(
             .with_context(|| format!("executing {cmd:?} command"))
             .map_err(command_error),
         ParsedCommandRequest::Position { channel, position } => {
-            let channel = channel.unwrap_or_else(|| controller.current_selection());
             controller
-                .set_target_for_channel(Some(channel), position)
+                .set_target_for_channel(channel, position)
                 .await
-                .with_context(|| format!("targeting {channel} to {position}%"))
+                .with_context(|| format!("executing target position to {position}%"))
                 .map_err(command_error)?;
             Ok(CommandOutcome {
                 inferred_position: None,
