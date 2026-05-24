@@ -3,7 +3,7 @@
 //! Reload is read-only: we never replay a saved position to GPIO.
 
 use anyhow::{Context, Result};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
 use tokio::sync::Mutex;
@@ -242,7 +242,7 @@ fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
 }
 
 fn save_positions_to(path: &Path, positions: &HashMap<u64, u8>) -> Result<()> {
-    let stringified: HashMap<String, u8> =
+    let stringified: BTreeMap<String, u8> =
         positions.iter().map(|(k, v)| (k.to_string(), *v)).collect();
     let bytes = serde_json::to_vec_pretty(&stringified)?;
     atomic_save_bytes(path, &bytes, false)
@@ -336,6 +336,20 @@ mod tests {
         save_positions_to(&path, &original).unwrap();
         let loaded = load_positions_from(&path);
         assert_eq!(loaded, original);
+    }
+
+    #[test]
+    fn positions_file_saves_in_stable_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(POSITIONS_FILE);
+        let positions = HashMap::from([(4, 37), (6, 50), (2, 0), (3, 101), (5, 100)]);
+
+        save_positions_to(&path, &positions).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "{\n  \"2\": 0,\n  \"3\": 101,\n  \"4\": 37,\n  \"5\": 100,\n  \"6\": 50\n}"
+        );
     }
 
     #[test]
