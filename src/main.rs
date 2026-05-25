@@ -46,7 +46,11 @@ async fn main() -> Result<()> {
                 channel,
                 open,
                 close,
-            } => commands::config::set_positioning(&resolved, channel, open, close),
+                slack,
+                no_restart,
+            } => commands::config::set_positioning(
+                &resolved, channel, open, close, slack, no_restart,
+            ),
         },
     }
 }

@@ -165,5 +165,11 @@ pub enum ConfigCommand {
         /// Full travel time from open to closed
         #[arg(long)]
         close: f64,
+        /// Closed-end slack included in full-travel timings (seconds)
+        #[arg(long)]
+        slack: Option<f64>,
+        /// Write the config without restarting; restart once after the final change
+        #[arg(long)]
+        no_restart: bool,
     },
 }

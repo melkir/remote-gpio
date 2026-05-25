@@ -77,13 +77,14 @@ Somfy RTS/Telis motors do not report physical position, so percentages are estim
 [positioning.l1]
 open_ms = 8500
 close_ms = 9200
+slack_ms = 2700
 
 [positioning.l2]
 open_ms = 7000
 close_ms = 8000
 ```
 
-The controller supports different timings per blind. Interior targets (`1..99`) schedule a proportional `stop`; endpoint targets (`0` and `100`) rely on the motor's own limits. When all four blinds move in the same direction in one request, the controller can start them with one `ALL` command, then issue individual `stop` commands for interior targets at each blind's calculated completion time.
+The controller supports different timings per blind. `slack_ms` is optional and defaults to `0`; when set, it is treated as closed-end slack included in full-travel timings. The planner subtracts it from proportional visible travel, then adds it back only for upward moves that start from estimated position `0`. Interior targets (`1..99`) schedule a proportional `stop`; endpoint targets (`0` and `100`) rely on the motor's own limits. When all four blinds move in the same direction in one request, the controller can start them with one `ALL` command, then issue individual `stop` commands for interior targets at each blind's calculated completion time.
 
 ## Lifecycle
 

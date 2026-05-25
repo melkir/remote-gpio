@@ -115,6 +115,7 @@ impl Default for TelisGpioOptions {
 pub struct BlindTimingOptions {
     pub open_ms: u64,
     pub close_ms: u64,
+    pub slack_ms: u64,
 }
 
 impl Default for BlindTimingOptions {
@@ -122,6 +123,7 @@ impl Default for BlindTimingOptions {
         Self {
             open_ms: 10_000,
             close_ms: 10_000,
+            slack_ms: 0,
         }
     }
 }
@@ -260,6 +262,12 @@ pub(crate) fn validate(config: &AppConfig) -> Result<()> {
         if timing.close_ms == 0 {
             bail!("{name}.close_ms must be greater than 0");
         }
+        if timing.slack_ms > timing.open_ms {
+            bail!("{name}.slack_ms must be <= {name}.open_ms");
+        }
+        if timing.slack_ms > timing.close_ms {
+            bail!("{name}.slack_ms must be <= {name}.close_ms");
+        }
     }
     Ok(())
 }
@@ -294,8 +302,44 @@ close_ms = 42000
         assert_eq!(config.positioning.l1.open_ms, 11_000);
         assert_eq!(config.positioning.l1.close_ms, 12_000);
         assert_eq!(config.positioning.l2.open_ms, 10_000);
+        assert_eq!(config.positioning.l2.slack_ms, 0);
         assert_eq!(config.positioning.l4.open_ms, 41_000);
         assert_eq!(config.positioning.l4.close_ms, 42_000);
+    }
+
+    #[test]
+    fn parses_slack_ms() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "fake"
+
+[positioning.l1]
+open_ms = 11000
+close_ms = 12000
+slack_ms = 2700
+"#,
+        )
+        .unwrap();
+
+        assert_eq!(config.positioning.l1.slack_ms, 2_700);
+    }
+
+    #[test]
+    fn rejects_slack_exceeding_travel() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "fake"
+
+[positioning.l1]
+open_ms = 11000
+close_ms = 12000
+slack_ms = 13000
+"#,
+        )
+        .unwrap();
+
+        let err = validate(&config).unwrap_err();
+        assert!(err.to_string().contains("positioning.l1.slack_ms"));
     }
 
     #[test]

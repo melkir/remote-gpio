@@ -10,6 +10,7 @@ use crate::positioning::state::{Blind, BLINDS, STATUS_DECREASING, STATUS_INCREAS
 pub struct BlindMotionTiming {
     pub open: Duration,
     pub close: Duration,
+    pub slack: Duration,
 }
 
 impl From<&BlindTimingOptions> for BlindMotionTiming {
@@ -17,6 +18,7 @@ impl From<&BlindTimingOptions> for BlindMotionTiming {
         Self {
             open: Duration::from_millis(value.open_ms),
             close: Duration::from_millis(value.close_ms),
+            slack: Duration::from_millis(value.slack_ms),
         }
     }
 }
@@ -137,8 +139,13 @@ fn movement_for(request: MotionRequest) -> Option<BlindMovement> {
         (Command::Down, STATUS_DECREASING, request.timing.close)
     };
     let delta = current.abs_diff(target) as u128;
-    let full_ms = full_travel.as_millis();
-    let millis = (full_ms * delta).div_ceil(100);
+    let slack_ms = request.timing.slack.as_millis();
+    let visible_full_ms = full_travel.as_millis().saturating_sub(slack_ms);
+    let mut millis = (visible_full_ms * delta).div_ceil(100);
+    let opens_from_fully_closed = command == Command::Up && current == 0;
+    if opens_from_fully_closed {
+        millis += slack_ms;
+    }
 
     Some(BlindMovement {
         blind: request.blind,
@@ -166,9 +173,14 @@ mod tests {
     use super::*;
 
     fn timing(open_ms: u64, close_ms: u64) -> BlindMotionTiming {
+        timing_with_slack(open_ms, close_ms, 0)
+    }
+
+    fn timing_with_slack(open_ms: u64, close_ms: u64, slack_ms: u64) -> BlindMotionTiming {
         BlindMotionTiming {
             open: Duration::from_millis(open_ms),
             close: Duration::from_millis(close_ms),
+            slack: Duration::from_millis(slack_ms),
         }
     }
 
@@ -214,6 +226,75 @@ mod tests {
         assert_eq!(movements[0].duration, Duration::from_millis(6_000));
         assert_eq!(movements[0].status, STATUS_DECREASING);
         assert!(movements[0].stop_at_end);
+    }
+
+    #[test]
+    fn opening_from_fully_closed_uses_visible_travel_plus_slack() {
+        let plan = plan_motion(&[MotionRequest {
+            blind: &BLINDS[0],
+            current: 0,
+            target: 50,
+            timing: timing_with_slack(30_000, 20_000, 2_000),
+        }]);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { movements, .. } = plan else {
+            return;
+        };
+
+        assert_eq!(movements[0].command, Command::Up);
+        assert_eq!(movements[0].duration, Duration::from_millis(16_000));
+    }
+
+    #[test]
+    fn slack_is_removed_from_interior_moves_away_from_closed_end() {
+        for (current, target, expected) in [(10, 60, 14_000), (100, 50, 9_000)] {
+            let plan = plan_motion(&[MotionRequest {
+                blind: &BLINDS[0],
+                current,
+                target,
+                timing: timing_with_slack(30_000, 20_000, 2_000),
+            }]);
+            assert!(matches!(plan, MotionPlan::Travel { .. }));
+            let MotionPlan::Travel { movements, .. } = plan else {
+                return;
+            };
+
+            assert_eq!(movements[0].duration, Duration::from_millis(expected));
+        }
+    }
+
+    #[test]
+    fn full_opening_from_closed_uses_full_open_travel_time() {
+        let plan = plan_motion(&[MotionRequest {
+            blind: &BLINDS[0],
+            current: 0,
+            target: 100,
+            timing: timing_with_slack(30_000, 20_000, 2_000),
+        }]);
+        assert!(matches!(plan, MotionPlan::Travel { .. }));
+        let MotionPlan::Travel { movements, .. } = plan else {
+            return;
+        };
+
+        assert_eq!(movements[0].duration, Duration::from_millis(30_000));
+    }
+
+    #[test]
+    fn closing_to_fully_closed_does_not_add_opening_slack() {
+        for (target, expected) in [(50, 9_000), (0, 18_000)] {
+            let plan = plan_motion(&[MotionRequest {
+                blind: &BLINDS[0],
+                current: 100,
+                target,
+                timing: timing_with_slack(30_000, 20_000, 2_000),
+            }]);
+            assert!(matches!(plan, MotionPlan::Travel { .. }));
+            let MotionPlan::Travel { movements, .. } = plan else {
+                return;
+            };
+
+            assert_eq!(movements[0].duration, Duration::from_millis(expected));
+        }
     }
 
     #[test]

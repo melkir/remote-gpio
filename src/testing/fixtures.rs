@@ -11,6 +11,7 @@ pub fn uniform_positioning(ms: u64) -> PositioningOptions {
     let timing = BlindTimingOptions {
         open_ms: ms,
         close_ms: ms,
+        slack_ms: 0,
     };
     PositioningOptions {
         l1: timing.clone(),
@@ -26,6 +27,7 @@ pub fn uniform_positioning_l1_ms(ms: u64) -> PositioningOptions {
         l1: BlindTimingOptions {
             open_ms: ms,
             close_ms: ms,
+            slack_ms: 0,
         },
         ..PositioningOptions::default()
     }
