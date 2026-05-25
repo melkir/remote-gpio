@@ -156,4 +156,14 @@ pub enum ConfigCommand {
         #[arg(value_enum)]
         kind: DriverKind,
     },
+    /// Set measured full-travel timing for one blind, in seconds
+    SetPositioning {
+        channel: Channel,
+        /// Full travel time from closed to open
+        #[arg(long)]
+        open: f64,
+        /// Full travel time from open to closed
+        #[arg(long)]
+        close: f64,
+    },
 }

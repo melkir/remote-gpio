@@ -42,6 +42,11 @@ async fn main() -> Result<()> {
             }
             ConfigCommand::Show => commands::config::show(&resolved),
             ConfigCommand::SetDriver { kind } => commands::config::set_driver(&resolved, kind),
+            ConfigCommand::SetPositioning {
+                channel,
+                open,
+                close,
+            } => commands::config::set_positioning(&resolved, channel, open, close),
         },
     }
 }
