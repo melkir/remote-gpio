@@ -78,13 +78,13 @@ impl Default for RtsGpioOptions {
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TelisOptions {
     pub gpio: TelisGpioOptions,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct TelisGpioOptions {
     pub up: u8,
     pub stop: u8,
@@ -275,7 +275,7 @@ pub(crate) fn validate(config: &AppConfig) -> Result<()> {
     if config.rts.gpio.gdo0 > MAX_BCM_GPIO {
         bail!("rts.gpio.gdo0 must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
     }
-    for (name, gpio) in [
+    validate_gpio_pins(&[
         ("telis.gpio.up", config.telis.gpio.up),
         ("telis.gpio.stop", config.telis.gpio.stop),
         ("telis.gpio.down", config.telis.gpio.down),
@@ -284,11 +284,7 @@ pub(crate) fn validate(config: &AppConfig) -> Result<()> {
         ("telis.gpio.led2", config.telis.gpio.led2),
         ("telis.gpio.led3", config.telis.gpio.led3),
         ("telis.gpio.led4", config.telis.gpio.led4),
-    ] {
-        if gpio > MAX_BCM_GPIO {
-            bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
-        }
-    }
+    ])?;
     for (name, timing) in config.positioning.named_timings() {
         if timing.open_ms == 0 {
             bail!("{name}.open_ms must be greater than 0");
@@ -303,6 +299,25 @@ pub(crate) fn validate(config: &AppConfig) -> Result<()> {
             bail!("{name}.slack_ms must be <= {name}.close_ms");
         }
     }
+    Ok(())
+}
+
+fn validate_gpio_pins(pins: &[(&str, u8)]) -> Result<()> {
+    for (name, gpio) in pins {
+        if *gpio > MAX_BCM_GPIO {
+            bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
+        }
+    }
+
+    for (index, (name, gpio)) in pins.iter().enumerate() {
+        if let Some((duplicate_name, _)) = pins[index + 1..]
+            .iter()
+            .find(|(_, other_gpio)| other_gpio == gpio)
+        {
+            bail!("{name} and {duplicate_name} must not both use BCM GPIO {gpio}");
+        }
+    }
+
     Ok(())
 }
 
@@ -390,6 +405,39 @@ open_ms = 0
 
         let err = validate(&config).unwrap_err();
         assert!(err.to_string().contains("positioning.l2.open_ms"));
+    }
+
+    #[test]
+    fn rejects_unknown_telis_fields() {
+        let err = toml::from_str::<AppConfig>(
+            r#"
+driver = "telis"
+
+[telis.gpio]
+up = 26
+unexpected = 4
+"#,
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn rejects_duplicate_telis_gpio_pins() {
+        let config: AppConfig = toml::from_str(
+            r#"
+driver = "telis"
+
+[telis.gpio]
+up = 26
+stop = 26
+"#,
+        )
+        .unwrap();
+
+        let err = validate(&config).unwrap_err();
+        assert!(err.to_string().contains("must not both use BCM GPIO 26"));
     }
 
     #[test]
