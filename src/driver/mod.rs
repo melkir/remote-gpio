@@ -3,7 +3,7 @@
 use anyhow::Result;
 use tokio::sync::watch::Receiver;
 
-use crate::config::{DriverConfig, DriverKind};
+use crate::config::DriverConfig;
 use crate::core::{Channel, Command};
 
 mod fake;
@@ -41,10 +41,12 @@ pub(crate) enum CommandRouter {
 
 impl CommandRouter {
     pub async fn new(config: DriverConfig) -> Result<Self> {
-        Ok(match config.kind {
-            DriverKind::Fake => Self::Fake(FakeDriver::new(Channel::L1)),
-            DriverKind::Telis => Self::Telis(TelisDriver::new(config.gpio, config.telis).await?),
-            DriverKind::Rts => Self::Rts(Box::new(RtsDriver::new(config.rts).await?)),
+        Ok(match config {
+            DriverConfig::Fake => Self::Fake(FakeDriver::new(Channel::L1)),
+            DriverConfig::Telis { gpio, telis } => {
+                Self::Telis(TelisDriver::new(gpio, telis).await?)
+            }
+            DriverConfig::Rts { rts } => Self::Rts(Box::new(RtsDriver::new(rts).await?)),
         })
     }
 

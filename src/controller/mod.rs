@@ -40,7 +40,7 @@ impl BlindController {
         config: DriverConfig,
         positioning: PositioningOptions,
     ) -> Result<Self> {
-        let driver_kind = config.kind;
+        let driver_kind = config.kind();
         let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {
@@ -60,7 +60,7 @@ impl BlindController {
         positioning: PositioningOptions,
         positions: HashMap<u64, u8>,
     ) -> Result<Self> {
-        let driver_kind = config.kind;
+        let driver_kind = config.kind();
         let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
         Ok(Self {

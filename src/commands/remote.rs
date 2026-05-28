@@ -3,54 +3,84 @@ use futures_util::StreamExt;
 
 use crate::cli::RemoteCommand;
 use crate::config::ResolvedConfig;
-use crate::core::Channel;
+use crate::core::Command;
 use crate::server::base_url;
-use crate::service::{validate_command_request, CommandRequest};
+use crate::service::{validate_control_request, CommandRequest, ControlRequest};
 
 pub async fn run(command: RemoteCommand, resolved: &ResolvedConfig) -> Result<()> {
     match command {
-        RemoteCommand::Up { channel } => post_command("up", channel, None, resolved).await,
-        RemoteCommand::Down { channel } => post_command("down", channel, None, resolved).await,
-        RemoteCommand::Stop { channel } => post_command("stop", channel, None, resolved).await,
+        RemoteCommand::Up { channel } => {
+            post_control(
+                ControlRequest::Driver {
+                    command: Command::Up,
+                    channel,
+                },
+                resolved,
+            )
+            .await
+        }
+        RemoteCommand::Down { channel } => {
+            post_control(
+                ControlRequest::Driver {
+                    command: Command::Down,
+                    channel,
+                },
+                resolved,
+            )
+            .await
+        }
+        RemoteCommand::Stop { channel } => {
+            post_control(
+                ControlRequest::Driver {
+                    command: Command::Stop,
+                    channel,
+                },
+                resolved,
+            )
+            .await
+        }
         RemoteCommand::Select { channel } => {
-            post_command("select", Some(channel), None, resolved).await
+            post_control(
+                ControlRequest::Driver {
+                    command: Command::Select,
+                    channel: Some(channel),
+                },
+                resolved,
+            )
+            .await
         }
         RemoteCommand::Prog { channel, long } => {
-            let cmd = if long { "prog_long" } else { "prog" };
-            post_command(cmd, Some(channel), None, resolved).await
+            let command = if long {
+                Command::ProgLong
+            } else {
+                Command::Prog
+            };
+            post_control(
+                ControlRequest::Driver {
+                    command,
+                    channel: Some(channel),
+                },
+                resolved,
+            )
+            .await
         }
         RemoteCommand::Target { position, channel } => {
-            post_command("target", channel, Some(position), resolved).await
+            post_control(ControlRequest::Position { channel, position }, resolved).await
         }
         RemoteCommand::Status => status().await,
         RemoteCommand::Watch => watch().await,
     }
 }
 
-async fn post_command(
-    command: &'static str,
-    channel: Option<Channel>,
-    value: Option<u8>,
-    resolved: &ResolvedConfig,
-) -> Result<()> {
-    validate_command_request(
-        resolved.config.driver,
-        CommandRequest {
-            command: command.to_string(),
-            channel,
-            value,
-        },
-    )?;
+async fn post_control(request: ControlRequest, resolved: &ResolvedConfig) -> Result<()> {
+    let request = validate_control_request(resolved.config.driver, request)?;
+    let payload = CommandRequest::from_control(request);
 
     let client = reqwest::Client::new();
     let url = format!("{}/command", base_url());
     let response = client
         .post(&url)
-        .json(&CommandRequest {
-            command: command.to_string(),
-            channel,
-            value,
-        })
+        .json(&payload)
         .send()
         .await
         .with_context(|| format!("connecting to somfy service at {url}"))?;
@@ -61,7 +91,11 @@ async fn post_command(
 
     let status = response.status();
     let body = response.text().await.unwrap_or_default();
-    bail!("service rejected {command}: HTTP {status}: {}", body.trim());
+    bail!(
+        "service rejected {}: HTTP {status}: {}",
+        payload.command,
+        body.trim()
+    );
 }
 
 async fn status() -> Result<()> {

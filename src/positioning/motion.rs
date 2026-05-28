@@ -25,19 +25,13 @@ impl From<&BlindTimingOptions> for BlindMotionTiming {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MotionTimings {
-    pub l1: BlindMotionTiming,
-    pub l2: BlindMotionTiming,
-    pub l3: BlindMotionTiming,
-    pub l4: BlindMotionTiming,
+    individual: [BlindMotionTiming; 4],
 }
 
 impl From<PositioningOptions> for MotionTimings {
     fn from(value: PositioningOptions) -> Self {
         Self {
-            l1: (&value.l1).into(),
-            l2: (&value.l2).into(),
-            l3: (&value.l3).into(),
-            l4: (&value.l4).into(),
+            individual: value.individual_timings().map(BlindMotionTiming::from),
         }
     }
 }
@@ -45,11 +39,12 @@ impl From<PositioningOptions> for MotionTimings {
 impl MotionTimings {
     pub fn for_channel(&self, channel: Channel) -> BlindMotionTiming {
         match channel {
-            Channel::L1 => self.l1,
-            Channel::L2 => self.l2,
-            Channel::L3 => self.l3,
-            Channel::L4 => self.l4,
-            Channel::All => self.l1,
+            Channel::L1 => self.individual[0],
+            Channel::L2 => self.individual[1],
+            Channel::L3 => self.individual[2],
+            Channel::L4 => self.individual[3],
+            // ALL has no single blind; use L1 timing (same as the pre-array default).
+            Channel::All => self.individual[0],
         }
     }
 }

@@ -56,14 +56,16 @@ pub fn find_blind(aid: u64) -> Option<&'static Blind> {
     BLINDS.iter().find(|b| b.aid == aid)
 }
 
+pub fn find_blind_for_channel(channel: Channel) -> Option<&'static Blind> {
+    BLINDS.iter().find(|b| b.channel == channel)
+}
+
 pub fn aids_for_channel(channel: Channel) -> Vec<u64> {
     match channel {
         Channel::All => BLINDS.iter().map(|blind| blind.aid).collect(),
-        _ => BLINDS
-            .iter()
-            .filter(|blind| blind.channel == channel)
-            .map(|blind| blind.aid)
-            .collect(),
+        _ => find_blind_for_channel(channel)
+            .map(|blind| vec![blind.aid])
+            .unwrap_or_default(),
     }
 }
 
@@ -156,7 +158,7 @@ impl PositionCache {
         if matches!(channel, Channel::All) {
             return self.apply_all_current(pos).await;
         }
-        let Some(blind) = BLINDS.iter().find(|b| b.channel == channel) else {
+        let Some(blind) = find_blind_for_channel(channel) else {
             return Vec::new();
         };
         self.apply_blind_current(blind, pos).await

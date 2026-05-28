@@ -3,13 +3,10 @@
 use crate::hap::runtime::{
     CharacteristicId, CharacteristicWrite, CharacteristicWriteStatus, HapStatus, Subscriptions,
 };
-use crate::homekit::accessory_db::IID_IDENTIFY;
-use crate::homekit::accessory_db::IID_TARGET_POSITION;
-use crate::homekit::accessory_db::{
-    BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE, IID_MANUFACTURER,
-    IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
+use crate::homekit::characteristic::{
+    BlindCharacteristic, BridgeCharacteristic, HomeKitCharacteristic,
 };
-use crate::positioning::state::{find_blind, Blind};
+use crate::positioning::state::Blind;
 
 #[derive(Copy, Clone, Debug)]
 pub struct PendingTargetWrite {
@@ -40,26 +37,37 @@ pub fn plan_target_writes(
             continue;
         }
 
-        if write.id.iid.0 == IID_IDENTIFY && is_known_characteristic(write.id) {
-            statuses[index] = Some(CharacteristicWriteStatus::success(write.id));
-            continue;
-        }
-
-        let Some(blind) = find_blind(write.id.aid.0) else {
+        let Some(characteristic) = HomeKitCharacteristic::resolve(write.id) else {
             statuses[index] = Some(CharacteristicWriteStatus::error(
                 write.id,
-                write_error_status(write.id),
+                HapStatus::ResourceDoesNotExist,
             ));
             continue;
         };
 
-        if write.id.iid.0 != IID_TARGET_POSITION {
+        if matches!(
+            characteristic,
+            HomeKitCharacteristic::Bridge(BridgeCharacteristic::Identify)
+                | HomeKitCharacteristic::Blind {
+                    characteristic: BlindCharacteristic::Identify,
+                    ..
+                }
+        ) {
+            statuses[index] = Some(CharacteristicWriteStatus::success(write.id));
+            continue;
+        };
+
+        let HomeKitCharacteristic::Blind {
+            blind,
+            characteristic: BlindCharacteristic::TargetPosition,
+        } = characteristic
+        else {
             statuses[index] = Some(CharacteristicWriteStatus::error(
                 write.id,
-                write_error_status(write.id),
+                HomeKitCharacteristic::write_error_status(write.id),
             ));
             continue;
-        }
+        };
 
         let value = match write.value.and_then(|v| v.as_u64()) {
             Some(v) if v <= 100 => v as u8,
@@ -87,10 +95,10 @@ fn handle_subscription(
     enabled: bool,
     subscriptions: &mut Subscriptions,
 ) -> CharacteristicWriteStatus {
-    if !is_known_characteristic(id) {
+    let Some(characteristic) = HomeKitCharacteristic::resolve(id) else {
         return CharacteristicWriteStatus::error(id, HapStatus::ResourceDoesNotExist);
-    }
-    if !supports_events(id) {
+    };
+    if !characteristic.supports_events() {
         return CharacteristicWriteStatus::error(id, HapStatus::NotificationNotSupported);
     }
     if enabled {
@@ -101,55 +109,10 @@ fn handle_subscription(
     CharacteristicWriteStatus::success(id)
 }
 
-fn write_error_status(id: CharacteristicId) -> HapStatus {
-    if is_known_characteristic(id) {
-        HapStatus::ReadOnly
-    } else {
-        HapStatus::ResourceDoesNotExist
-    }
-}
-
-fn is_known_characteristic(id: CharacteristicId) -> bool {
-    let aid = id.aid.0;
-    let iid = id.iid.0;
-    match aid {
-        BRIDGE_AID => matches!(
-            iid,
-            IID_IDENTIFY
-                | IID_MANUFACTURER
-                | IID_MODEL
-                | IID_NAME
-                | IID_SERIAL
-                | IID_FIRMWARE
-                | IID_BRIDGE_VERSION
-        ),
-        _ if find_blind(aid).is_some() => matches!(
-            iid,
-            IID_IDENTIFY
-                | IID_MANUFACTURER
-                | IID_MODEL
-                | IID_NAME
-                | IID_SERIAL
-                | IID_FIRMWARE
-                | IID_CURRENT_POSITION
-                | IID_TARGET_POSITION
-                | IID_POSITION_STATE
-        ),
-        _ => false,
-    }
-}
-
-fn supports_events(id: CharacteristicId) -> bool {
-    find_blind(id.aid.0).is_some()
-        && matches!(
-            id.iid.0,
-            IID_CURRENT_POSITION | IID_TARGET_POSITION | IID_POSITION_STATE
-        )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::homekit::accessory_db::{IID_CURRENT_POSITION, IID_TARGET_POSITION};
     use serde_json::json;
 
     #[test]
@@ -200,11 +163,14 @@ mod tests {
     #[test]
     fn unsupported_write_reports_protocol_status() {
         assert_eq!(
-            write_error_status(CharacteristicId::new(2, IID_CURRENT_POSITION)),
+            HomeKitCharacteristic::write_error_status(CharacteristicId::new(
+                2,
+                IID_CURRENT_POSITION
+            )),
             HapStatus::ReadOnly
         );
         assert_eq!(
-            write_error_status(CharacteristicId::new(99, 99)),
+            HomeKitCharacteristic::write_error_status(CharacteristicId::new(99, 99)),
             HapStatus::ResourceDoesNotExist
         );
     }

@@ -53,12 +53,8 @@ pub fn set_positioning(
         .transpose()?;
 
     let mut next = resolved.config.clone();
-    let timing = match channel {
-        Channel::L1 => &mut next.positioning.l1,
-        Channel::L2 => &mut next.positioning.l2,
-        Channel::L3 => &mut next.positioning.l3,
-        Channel::L4 => &mut next.positioning.l4,
-        Channel::All => unreachable!("ALL rejected above"),
+    let Some(timing) = next.positioning.timing_mut(channel) else {
+        bail!("positioning timing must target one blind: L1, L2, L3, or L4");
     };
     timing.open_ms = open_ms;
     timing.close_ms = close_ms;

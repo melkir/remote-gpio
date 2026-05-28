@@ -13,6 +13,7 @@ use crate::persist;
 use crate::positioning::state::PositionDelta;
 
 mod accessory_db;
+mod characteristic;
 pub mod somfy;
 mod target_writes;
 

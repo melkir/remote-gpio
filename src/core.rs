@@ -26,6 +26,16 @@ pub enum Channel {
 impl Channel {
     pub const INDIVIDUALS: [Channel; 4] = [Channel::L1, Channel::L2, Channel::L3, Channel::L4];
 
+    pub fn individual_index(self) -> Option<usize> {
+        match self {
+            Channel::L1 => Some(0),
+            Channel::L2 => Some(1),
+            Channel::L3 => Some(2),
+            Channel::L4 => Some(3),
+            Channel::All => None,
+        }
+    }
+
     /// Advance the Telis selector one step (L1 → L2 → … → ALL → L1).
     pub fn next(self) -> Self {
         match self {

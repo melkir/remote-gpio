@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::path::{Path, PathBuf};
 
+use crate::core::Channel;
 use crate::gpio::{GpioOptions, MAX_BCM_GPIO};
 
 /// Default system configuration path on the Pi.
@@ -137,24 +138,58 @@ pub struct PositioningOptions {
     pub l4: BlindTimingOptions,
 }
 
+impl PositioningOptions {
+    pub(crate) fn timing_mut(&mut self, channel: Channel) -> Option<&mut BlindTimingOptions> {
+        match channel {
+            Channel::L1 => Some(&mut self.l1),
+            Channel::L2 => Some(&mut self.l2),
+            Channel::L3 => Some(&mut self.l3),
+            Channel::L4 => Some(&mut self.l4),
+            Channel::All => None,
+        }
+    }
+
+    fn named_timings(&self) -> [(&'static str, &BlindTimingOptions); 4] {
+        [
+            ("positioning.l1", &self.l1),
+            ("positioning.l2", &self.l2),
+            ("positioning.l3", &self.l3),
+            ("positioning.l4", &self.l4),
+        ]
+    }
+
+    pub(crate) fn individual_timings(&self) -> [&BlindTimingOptions; 4] {
+        [&self.l1, &self.l2, &self.l3, &self.l4]
+    }
+}
+
 /// Resolved driver settings passed to the driver router.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct DriverConfig {
-    pub kind: DriverKind,
-    pub gpio: GpioOptions,
-    pub rts: RtsOptions,
-    pub telis: TelisOptions,
+pub(crate) enum DriverConfig {
+    Fake,
+    Telis {
+        gpio: GpioOptions,
+        telis: TelisOptions,
+    },
+    Rts {
+        rts: RtsOptions,
+    },
+}
+
+impl DriverConfig {
+    pub(crate) fn kind(&self) -> DriverKind {
+        match self {
+            Self::Fake => DriverKind::Fake,
+            Self::Telis { .. } => DriverKind::Telis,
+            Self::Rts { .. } => DriverKind::Rts,
+        }
+    }
 }
 
 #[cfg(test)]
 impl DriverConfig {
     pub(crate) fn fake() -> Self {
-        Self {
-            kind: DriverKind::Fake,
-            gpio: GpioOptions::default(),
-            rts: RtsOptions::default(),
-            telis: TelisOptions::default(),
-        }
+        Self::Fake
     }
 }
 
@@ -186,11 +221,15 @@ impl Default for AppConfig {
 impl AppConfig {
     /// Build the driver configuration snapshot used at startup.
     pub(crate) fn driver_config(&self) -> DriverConfig {
-        DriverConfig {
-            kind: self.driver,
-            gpio: self.gpio.clone(),
-            rts: self.rts.clone(),
-            telis: self.telis.clone(),
+        match self.driver {
+            DriverKind::Fake => DriverConfig::Fake,
+            DriverKind::Telis => DriverConfig::Telis {
+                gpio: self.gpio.clone(),
+                telis: self.telis.clone(),
+            },
+            DriverKind::Rts => DriverConfig::Rts {
+                rts: self.rts.clone(),
+            },
         }
     }
 }
@@ -250,12 +289,7 @@ pub(crate) fn validate(config: &AppConfig) -> Result<()> {
             bail!("{name} must be a BCM GPIO in 0..={MAX_BCM_GPIO}");
         }
     }
-    for (name, timing) in [
-        ("positioning.l1", &config.positioning.l1),
-        ("positioning.l2", &config.positioning.l2),
-        ("positioning.l3", &config.positioning.l3),
-        ("positioning.l4", &config.positioning.l4),
-    ] {
+    for (name, timing) in config.positioning.named_timings() {
         if timing.open_ms == 0 {
             bail!("{name}.open_ms must be greater than 0");
         }

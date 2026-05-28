@@ -12,12 +12,11 @@ use crate::hap::runtime::{
     Subscriptions,
 };
 use crate::homekit::accessory_db::{
-    self, BlindAccessory, BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE,
-    IID_IDENTIFY, IID_MANUFACTURER, IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL,
-    IID_TARGET_POSITION,
+    self, BlindAccessory, IID_CURRENT_POSITION, IID_POSITION_STATE, IID_TARGET_POSITION,
 };
+use crate::homekit::characteristic::{position_for_aid, HomeKitCharacteristic};
 use crate::homekit::target_writes::{plan_target_writes, PendingTargetWrite};
-use crate::positioning::state::{find_blind, BlindPosition, PositionDelta, BLINDS};
+use crate::positioning::state::{BlindPosition, PositionDelta, BLINDS};
 
 pub struct SomfyHapApp {
     controller: Arc<BlindController>,
@@ -111,45 +110,13 @@ impl HapAccessoryApp for SomfyHapApp {
 }
 
 fn read_characteristic(positions: &[BlindPosition], id: CharacteristicId) -> CharacteristicRead {
-    let aid = id.aid.0;
-    let iid = id.iid.0;
-    let value = if aid == BRIDGE_AID {
-        match iid {
-            IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
-            IID_MANUFACTURER => serde_json::json!("Somfy"),
-            IID_MODEL => serde_json::json!("Telis 4 Bridge"),
-            IID_NAME => serde_json::json!("Somfy Bridge"),
-            IID_SERIAL => serde_json::json!("somfy-bridge"),
-            IID_FIRMWARE => serde_json::json!(env!("CARGO_PKG_VERSION")),
-            IID_BRIDGE_VERSION => serde_json::json!("1.1.0"),
-            _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
-        }
-    } else if let Some(blind) = find_blind(aid) {
-        let pos = position_for_aid(positions, aid);
-        match iid {
-            IID_IDENTIFY => return CharacteristicRead::error(id, HapStatus::WriteOnly),
-            IID_MANUFACTURER => serde_json::json!("Somfy"),
-            IID_MODEL => serde_json::json!("Telis 4"),
-            IID_NAME => serde_json::json!(blind.name),
-            IID_SERIAL => serde_json::json!(blind.serial),
-            IID_FIRMWARE => serde_json::json!(env!("CARGO_PKG_VERSION")),
-            IID_CURRENT_POSITION => serde_json::json!(pos.current),
-            IID_TARGET_POSITION => serde_json::json!(pos.target),
-            IID_POSITION_STATE => serde_json::json!(pos.status),
-            _ => return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist),
-        }
-    } else {
+    let Some(characteristic) = HomeKitCharacteristic::resolve(id) else {
         return CharacteristicRead::error(id, HapStatus::ResourceDoesNotExist);
     };
-    CharacteristicRead::success(id, value)
-}
-
-fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
-    positions
-        .iter()
-        .copied()
-        .find(|position| position.aid == aid)
-        .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
+    match characteristic.read_value(positions) {
+        Ok(value) => CharacteristicRead::success(id, value),
+        Err(status) => CharacteristicRead::error(id, status),
+    }
 }
 
 fn build_accessories(positions: &[BlindPosition]) -> Value {

@@ -10,9 +10,9 @@ use crate::controller::BlindController;
 use crate::core::{Channel, Command};
 use crate::driver::{CommandOutcome, TELIS_PROG_UNAVAILABLE};
 
-/// Parsed command ready for dispatch.
+/// Validated command ready for dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ParsedCommandRequest {
+pub(crate) enum ControlRequest {
     Driver {
         command: Command,
         channel: Option<Channel>,
@@ -31,6 +31,23 @@ pub(crate) struct CommandRequest {
     pub channel: Option<Channel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<u8>,
+}
+
+impl CommandRequest {
+    pub(crate) fn from_control(request: ControlRequest) -> Self {
+        match request {
+            ControlRequest::Driver { command, channel } => Self {
+                command: command.to_string(),
+                channel,
+                value: None,
+            },
+            ControlRequest::Position { channel, position } => Self {
+                command: "target".to_string(),
+                channel,
+                value: Some(position),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -55,7 +72,7 @@ fn command_error(err: anyhow::Error) -> CommandError {
 }
 
 /// Validate a command request. Does not touch hardware.
-fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, CommandError> {
+fn parse_command(request: CommandRequest) -> Result<ControlRequest, CommandError> {
     let CommandRequest {
         command,
         channel,
@@ -63,7 +80,7 @@ fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, Comman
     } = request;
     if command == "target" {
         let position = target_position_value(value)?;
-        return Ok(ParsedCommandRequest::Position { channel, position });
+        return Ok(ControlRequest::Position { channel, position });
     }
 
     if value.is_some() {
@@ -83,7 +100,7 @@ fn parse_command(request: CommandRequest) -> Result<ParsedCommandRequest, Comman
         (Command::Select, channel) => channel,
         (Command::Up | Command::Down | Command::Stop, channel) => channel,
     };
-    Ok(ParsedCommandRequest::Driver {
+    Ok(ControlRequest::Driver {
         command: cmd,
         channel,
     })
@@ -111,12 +128,20 @@ fn ensure_pairing_for_kind(kind: DriverKind, command: Command) -> Result<(), Com
 pub(crate) fn validate_command_request(
     kind: DriverKind,
     request: CommandRequest,
-) -> Result<ParsedCommandRequest, CommandError> {
+) -> Result<ControlRequest, CommandError> {
     let parsed = parse_command(request)?;
-    if let ParsedCommandRequest::Driver { command, .. } = parsed {
+    validate_control_request(kind, parsed)
+}
+
+/// Apply driver pairing rules to an already-typed request. Does not touch hardware.
+pub(crate) fn validate_control_request(
+    kind: DriverKind,
+    request: ControlRequest,
+) -> Result<ControlRequest, CommandError> {
+    if let ControlRequest::Driver { command, .. } = request {
         ensure_pairing_for_kind(kind, command)?;
     }
-    Ok(parsed)
+    Ok(request)
 }
 
 /// Validate and dispatch a command. `select` changes selection; action commands
@@ -126,8 +151,15 @@ pub(crate) async fn dispatch_command(
     request: CommandRequest,
 ) -> Result<CommandOutcome, CommandError> {
     let parsed = validate_command_request(controller.driver_kind(), request)?;
-    match parsed {
-        ParsedCommandRequest::Driver {
+    dispatch_control_request(controller, parsed).await
+}
+
+pub(crate) async fn dispatch_control_request(
+    controller: &Arc<BlindController>,
+    request: ControlRequest,
+) -> Result<CommandOutcome, CommandError> {
+    match request {
+        ControlRequest::Driver {
             command: cmd,
             channel,
         } => controller
@@ -135,7 +167,7 @@ pub(crate) async fn dispatch_command(
             .await
             .with_context(|| format!("executing {cmd:?} command"))
             .map_err(command_error),
-        ParsedCommandRequest::Position { channel, position } => {
+        ControlRequest::Position { channel, position } => {
             controller
                 .set_target_for_channel(channel, position)
                 .await
@@ -155,10 +187,7 @@ mod tests {
     use crate::driver::ProtocolOperation;
     use std::sync::Arc;
 
-    fn parse(
-        command: &str,
-        channel: Option<Channel>,
-    ) -> Result<ParsedCommandRequest, CommandError> {
+    fn parse(command: &str, channel: Option<Channel>) -> Result<ControlRequest, CommandError> {
         parse_command(CommandRequest {
             command: command.to_string(),
             channel,
@@ -207,7 +236,7 @@ mod tests {
             let req = parse(wire, channel).unwrap();
             assert_eq!(
                 req,
-                ParsedCommandRequest::Driver {
+                ControlRequest::Driver {
                     command: expected,
                     channel
                 },
@@ -250,7 +279,7 @@ mod tests {
             let parsed = parse_command(req).unwrap();
             assert!(matches!(
                 parsed,
-                ParsedCommandRequest::Position { position: 50, .. }
+                ControlRequest::Position { position: 50, .. }
             ));
         }
     }
@@ -266,14 +295,14 @@ mod tests {
 
         assert_eq!(
             parse_command(with_channel).unwrap(),
-            ParsedCommandRequest::Position {
+            ControlRequest::Position {
                 channel: Some(Channel::L1),
                 position: 50,
             }
         );
         assert_eq!(
             parse_command(without_channel).unwrap(),
-            ParsedCommandRequest::Position {
+            ControlRequest::Position {
                 channel: None,
                 position: 50,
             }
