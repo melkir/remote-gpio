@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use http::StatusCode;
+use httparse::Header;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 
@@ -9,6 +10,7 @@ use crate::hap::session::{EncryptedReader, EncryptedWriter, MAX_FRAME_PLAINTEXT}
 
 const MAX_HTTP_BUFFER: usize = 16 * MAX_FRAME_PLAINTEXT;
 
+#[derive(Debug)]
 pub(super) struct RawRequest {
     pub method: String,
     pub path: String,
@@ -21,12 +23,9 @@ impl RawRequest {
     }
     pub fn query_param(&self, key: &str) -> Option<String> {
         let q = self.path.split('?').nth(1)?;
-        for part in q.split('&') {
-            let mut it = part.splitn(2, '=');
-            let k = it.next()?;
-            let v = it.next().unwrap_or("");
+        for (k, v) in form_urlencoded::parse(q.as_bytes()) {
             if k == key {
-                return Some(v.to_string());
+                return Some(v.into_owned());
             }
         }
         None
@@ -186,19 +185,115 @@ fn try_parse(buf: &mut Vec<u8>) -> Result<Option<RawRequest>> {
         httparse::Status::Complete(n) => n,
         httparse::Status::Partial => return Ok(None),
     };
-    let content_length: usize = req
-        .headers
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case("content-length"))
-        .and_then(|h| std::str::from_utf8(h.value).ok())
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0);
+    let content_length = parse_content_length(req.headers)?;
     if buf.len() < header_len + content_length {
         return Ok(None);
     }
-    let method = req.method.unwrap_or("").to_string();
-    let path = req.path.unwrap_or("").to_string();
+    let Some(method) = req.method else {
+        bail!("HTTP request missing method");
+    };
+    let Some(path) = req.path else {
+        bail!("HTTP request missing path");
+    };
+    let method = method.to_string();
+    let path = path.to_string();
     let body = buf[header_len..header_len + content_length].to_vec();
     buf.drain(..header_len + content_length);
     Ok(Some(RawRequest { method, path, body }))
+}
+
+fn parse_content_length(headers: &[Header<'_>]) -> Result<usize> {
+    let mut parsed = None;
+    for header in headers
+        .iter()
+        .filter(|h| h.name.eq_ignore_ascii_case("content-length"))
+    {
+        let value = std::str::from_utf8(header.value)?;
+        let length = value
+            .parse::<usize>()
+            .map_err(|_| anyhow::anyhow!("invalid Content-Length: {value}"))?;
+        if parsed.replace(length).is_some() {
+            bail!("duplicate Content-Length header");
+        }
+    }
+    Ok(parsed.unwrap_or(0))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(input: &str) -> Result<Option<RawRequest>> {
+        let mut buf = input.as_bytes().to_vec();
+        try_parse(&mut buf)
+    }
+
+    #[test]
+    fn parses_complete_request_and_drains_only_that_request() {
+        let mut buf = b"POST /pair-setup HTTP/1.1\r\nContent-Length: 4\r\n\r\nbodyGET /accessories HTTP/1.1\r\n\r\n".to_vec();
+
+        let req = try_parse(&mut buf).unwrap().unwrap();
+
+        assert_eq!(req.method, "POST");
+        assert_eq!(req.path, "/pair-setup");
+        assert_eq!(req.body, b"body");
+        assert_eq!(buf, b"GET /accessories HTTP/1.1\r\n\r\n");
+    }
+
+    #[test]
+    fn waits_for_declared_body_bytes() {
+        assert!(
+            parse("POST /pair-setup HTTP/1.1\r\nContent-Length: 4\r\n\r\nbo")
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_content_length() {
+        let err =
+            parse("POST /pair-setup HTTP/1.1\r\nContent-Length: nope\r\n\r\nbody").unwrap_err();
+
+        assert!(err.to_string().contains("invalid Content-Length"));
+    }
+
+    #[test]
+    fn rejects_duplicate_content_length() {
+        let err = parse(
+            "POST /pair-setup HTTP/1.1\r\nContent-Length: 4\r\nContent-Length: 4\r\n\r\nbody",
+        )
+        .unwrap_err();
+
+        assert!(err.to_string().contains("duplicate Content-Length"));
+    }
+
+    #[test]
+    fn decodes_query_parameters() {
+        let req = RawRequest {
+            method: "GET".to_string(),
+            path: "/characteristics?id=2.9%2C3.10&name=Living+Room".to_string(),
+            body: Vec::new(),
+        };
+
+        assert_eq!(req.path_only(), "/characteristics");
+        assert_eq!(req.query_param("id").as_deref(), Some("2.9,3.10"));
+        assert_eq!(req.query_param("name").as_deref(), Some("Living Room"));
+    }
+
+    #[test]
+    fn finds_query_param_after_empty_segment() {
+        let req = RawRequest {
+            method: "GET".to_string(),
+            path: "/characteristics?&id=2.9".to_string(),
+            body: Vec::new(),
+        };
+
+        assert_eq!(req.query_param("id").as_deref(), Some("2.9"));
+    }
+
+    #[test]
+    fn rejects_malformed_request_line() {
+        assert!(parse(" /pair-setup HTTP/1.1\r\n\r\n").is_err());
+        assert!(parse("POST  HTTP/1.1\r\n\r\n").is_err());
+    }
 }
