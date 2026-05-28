@@ -4,7 +4,7 @@ use crate::service::{dispatch_command, CommandError, CommandRequest};
 use anyhow::Result;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
-use axum::http::{Method, StatusCode};
+use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
 use axum::routing::post;
@@ -17,7 +17,6 @@ use serde::Deserialize;
 use std::convert::Infallible;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
 use tower_http::trace::DefaultMakeSpan;
 use tower_http::trace::TraceLayer;
 
@@ -62,10 +61,6 @@ pub async fn serve(shared_state: Arc<AppState>) -> Result<()> {
 
 /// Creates the router with all routes and middleware
 fn create_router(shared_state: Arc<AppState>) -> Router {
-    let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST])
-        .allow_origin(Any);
-
     Router::new()
         .route("/channel", get(handle_channel))
         .route("/events", get(handle_events))
@@ -73,7 +68,6 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
         .route("/ws", get(ws_handler))
         .fallback(embed::static_handler)
         .with_state(shared_state)
-        .layer(cors)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(false)),
