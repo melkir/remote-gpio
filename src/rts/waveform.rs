@@ -10,6 +10,21 @@ pub const MANCHESTER_HALF_SYMBOL_US: u32 = 640;
 pub const INTER_FRAME_GAP_US: u32 = 30_415;
 pub const FRAME_COUNT: usize = 4;
 pub const FRAME_COUNT_LONG: usize = 20;
+const WAKEUP_PULSE_COUNT: usize = 2;
+const FIRST_FRAME_HARDWARE_SYNC_PULSE_COUNT: usize = 2 * 2;
+const REPEAT_FRAME_HARDWARE_SYNC_PULSE_COUNT: usize = 7 * 2;
+const SOFTWARE_SYNC_PULSE_COUNT: usize = 2;
+const MANCHESTER_PULSE_COUNT: usize = FRAME_LEN * 8 * 2;
+const INTER_FRAME_GAP_PULSE_COUNT: usize = 1;
+const FIRST_FRAME_PULSE_COUNT: usize = WAKEUP_PULSE_COUNT
+    + FIRST_FRAME_HARDWARE_SYNC_PULSE_COUNT
+    + SOFTWARE_SYNC_PULSE_COUNT
+    + MANCHESTER_PULSE_COUNT
+    + INTER_FRAME_GAP_PULSE_COUNT;
+const REPEAT_FRAME_PULSE_COUNT: usize = REPEAT_FRAME_HARDWARE_SYNC_PULSE_COUNT
+    + SOFTWARE_SYNC_PULSE_COUNT
+    + MANCHESTER_PULSE_COUNT
+    + INTER_FRAME_GAP_PULSE_COUNT;
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct GpioPulse {
@@ -28,12 +43,20 @@ pub fn build_long(frame: RtsFrame, gpio: u8) -> Vec<GpioPulse> {
 
 fn build_n(frame: RtsFrame, gpio: u8, frame_count: usize) -> Vec<GpioPulse> {
     let mask = 1u32 << gpio;
-    let mut pulses = Vec::new();
+    let mut pulses = Vec::with_capacity(pulse_count_for_frames(frame_count));
     let bytes = frame.bytes();
     for index in 0..frame_count {
         append_frame(&mut pulses, mask, &bytes, index == 0);
     }
     pulses
+}
+
+const fn pulse_count_for_frames(frame_count: usize) -> usize {
+    if frame_count == 0 {
+        0
+    } else {
+        FIRST_FRAME_PULSE_COUNT + REPEAT_FRAME_PULSE_COUNT * (frame_count - 1)
+    }
 }
 
 fn append_frame(

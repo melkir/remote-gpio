@@ -106,13 +106,15 @@ impl<S: Read + Write> PigpioClient<S> {
     }
 
     fn command_ext(&mut self, command: u32, p1: u32, p2: u32, extension: &[u8]) -> Result<i32> {
-        let mut request = Vec::with_capacity(16 + extension.len());
-        request.extend_from_slice(&command.to_le_bytes());
-        request.extend_from_slice(&p1.to_le_bytes());
-        request.extend_from_slice(&p2.to_le_bytes());
-        request.extend_from_slice(&(extension.len() as u32).to_le_bytes());
-        request.extend_from_slice(extension);
-        self.stream.write_all(&request)?;
+        let mut request_header = [0u8; 16];
+        request_header[0..4].copy_from_slice(&command.to_le_bytes());
+        request_header[4..8].copy_from_slice(&p1.to_le_bytes());
+        request_header[8..12].copy_from_slice(&p2.to_le_bytes());
+        request_header[12..16].copy_from_slice(&(extension.len() as u32).to_le_bytes());
+        self.stream.write_all(&request_header)?;
+        if !extension.is_empty() {
+            self.stream.write_all(extension)?;
+        }
 
         // pigpiod replies with a 16-byte header. Some commands (SPI/I²C reads,
         // BSPIX, etc.) follow that with `result` extension bytes; none of the
@@ -120,7 +122,7 @@ impl<S: Read + Write> PigpioClient<S> {
         // extension-returning command requires draining those bytes here.
         let mut response = [0u8; 16];
         self.stream.read_exact(&mut response)?;
-        if response[0..12] != request[0..12] {
+        if response[0..12] != request_header[0..12] {
             let echoed_cmd = u32::from_le_bytes(
                 response[0..4]
                     .try_into()

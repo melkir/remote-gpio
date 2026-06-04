@@ -1,7 +1,11 @@
 #[cfg(not(debug_assertions))]
+use axum::body::Body;
+#[cfg(not(debug_assertions))]
 use axum::http::header;
 use axum::http::{StatusCode, Uri};
 use axum::response::{IntoResponse, Response};
+#[cfg(not(debug_assertions))]
+use std::borrow::Cow;
 
 #[cfg(not(debug_assertions))]
 #[derive(rust_embed::Embed)]
@@ -19,21 +23,22 @@ pub async fn static_handler(uri: Uri) -> Response {
 async fn serve_asset(path: &str) -> Response {
     if let Some(file) = Assets::get(path) {
         let mime = mime_guess::from_path(path).first_or_octet_stream();
-        return (
-            [(header::CONTENT_TYPE, mime.as_ref())],
-            file.data.into_owned(),
-        )
-            .into_response();
+        return embedded_response(mime.as_ref(), file.data);
     }
     // SPA fallback
     if let Some(index) = Assets::get("index.html") {
-        return (
-            [(header::CONTENT_TYPE, "text/html")],
-            index.data.into_owned(),
-        )
-            .into_response();
+        return embedded_response("text/html", index.data);
     }
     StatusCode::NOT_FOUND.into_response()
+}
+
+#[cfg(not(debug_assertions))]
+fn embedded_response(content_type: &str, data: Cow<'static, [u8]>) -> Response {
+    let body = match data {
+        Cow::Borrowed(bytes) => Body::from(bytes),
+        Cow::Owned(bytes) => Body::from(bytes),
+    };
+    ([(header::CONTENT_TYPE, content_type)], body).into_response()
 }
 
 #[cfg(debug_assertions)]
