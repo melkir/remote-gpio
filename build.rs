@@ -1,9 +1,9 @@
 use anyhow::Result;
-use vergen_gix::{BuildBuilder, Emitter, GixBuilder};
+use vergen_gix::{Build, Emitter, Gix};
 
 pub fn main() -> Result<()> {
     Emitter::default()
-        .add_instructions(&BuildBuilder::all_build()?)?
-        .add_instructions(&GixBuilder::all_git()?)?
+        .add_instructions(&Build::all_build())?
+        .add_instructions(&Gix::all_git())?
         .emit()
 }
