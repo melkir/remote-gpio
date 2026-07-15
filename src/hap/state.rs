@@ -86,7 +86,9 @@ impl HapState {
 
     fn generate() -> Self {
         let mut rng = OsRng;
-        let signing = SigningKey::generate(&mut rng);
+        let mut signing_bytes = [0u8; 32];
+        rng.fill(&mut signing_bytes);
+        let signing = SigningKey::from_bytes(&signing_bytes);
 
         let mut id_bytes = [0u8; 6];
         rng.fill(&mut id_bytes);

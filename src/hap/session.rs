@@ -5,7 +5,7 @@
 //! Counters increment per frame, separately for each direction.
 
 use anyhow::{anyhow, bail, Result};
-use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
 use hkdf::Hkdf;
 use sha2::Sha512;
@@ -42,7 +42,7 @@ pub struct EncryptedReader {
 
 impl EncryptedReader {
     pub fn new(inner: OwnedReadHalf, key: [u8; 32]) -> Self {
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+        let cipher = ChaCha20Poly1305::new(&Key::from(key));
         Self {
             inner,
             cipher,
@@ -80,12 +80,13 @@ impl EncryptedReader {
         self.inner.read_exact(&mut body).await?;
 
         let nonce_bytes = nonce_for(self.counter);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
         let tag_start = body.len() - TAG_LEN;
-        let tag = chacha20poly1305::Tag::clone_from_slice(&body[tag_start..]);
+        let tag = chacha20poly1305::Tag::try_from(&body[tag_start..])
+            .map_err(|_| anyhow!("invalid AEAD tag length"))?;
         body.truncate(tag_start);
         self.cipher
-            .decrypt_in_place_detached(nonce, &header, &mut body, &tag)
+            .decrypt_inout_detached(&nonce, &header, body.as_mut_slice().into(), &tag)
             .map_err(|_| anyhow!("AEAD decrypt failed (frame {})", self.counter))?;
 
         self.counter += 1;
@@ -102,7 +103,7 @@ pub struct EncryptedWriter {
 
 impl EncryptedWriter {
     pub fn new(inner: OwnedWriteHalf, key: [u8; 32]) -> Self {
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&key));
+        let cipher = ChaCha20Poly1305::new(&Key::from(key));
         Self {
             inner,
             cipher,
@@ -126,10 +127,10 @@ impl EncryptedWriter {
         let aad = (plaintext.len() as u16).to_le_bytes();
         let mut buf = plaintext.to_vec();
         let nonce_bytes = nonce_for(self.counter);
-        let nonce = Nonce::from_slice(&nonce_bytes);
+        let nonce = Nonce::from(nonce_bytes);
         let tag = self
             .cipher
-            .encrypt_in_place_detached(nonce, &aad, &mut buf)
+            .encrypt_inout_detached(&nonce, &aad, buf.as_mut_slice().into())
             .map_err(|_| anyhow!("AEAD encrypt failed"))?;
         self.inner.write_all(&aad).await?;
         self.inner.write_all(&buf).await?;

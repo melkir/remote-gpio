@@ -4,11 +4,10 @@
 //! session keys in `session::SessionKeys`.
 
 use anyhow::Result;
-use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
 use ed25519_dalek::{Signer, Verifier, VerifyingKey};
 use hkdf::Hkdf;
-use rand::rngs::OsRng;
 use sha2::Sha512;
 use x25519_dalek::{EphemeralSecret, PublicKey as XPub};
 
@@ -83,7 +82,7 @@ impl PairVerifySession {
             Err(_) => return HandleOutcome::Reply(error_response(2, HapError::Authentication)),
         };
 
-        let accessory_secret = EphemeralSecret::random_from_rng(OsRng);
+        let accessory_secret = EphemeralSecret::random();
         let accessory_pub = XPub::from(&accessory_secret);
         let shared = accessory_secret.diffie_hellman(&XPub::from(ios_pub_array));
         let shared_secret: [u8; 32] = shared.to_bytes();
@@ -111,13 +110,13 @@ impl PairVerifySession {
             .encode();
 
         let mut buf = sub;
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&session_key));
+        let cipher = ChaCha20Poly1305::new(&Key::from(session_key));
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes[4..].copy_from_slice(b"PV-Msg02");
-        let tag = match cipher.encrypt_in_place_detached(
-            Nonce::from_slice(&nonce_bytes),
+        let tag = match cipher.encrypt_inout_detached(
+            &Nonce::from(nonce_bytes),
             &[],
-            &mut buf,
+            buf.as_mut_slice().into(),
         ) {
             Ok(t) => t,
             Err(_) => return HandleOutcome::Reply(error_response(2, HapError::Unknown)),
@@ -162,12 +161,20 @@ impl PairVerifySession {
         };
 
         let mut plaintext = encrypted[..encrypted.len() - 16].to_vec();
-        let tag = Tag::clone_from_slice(&encrypted[encrypted.len() - 16..]);
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&session_key));
+        let tag = match Tag::try_from(&encrypted[encrypted.len() - 16..]) {
+            Ok(tag) => tag,
+            Err(_) => return HandleOutcome::Reply(error_response(4, HapError::Authentication)),
+        };
+        let cipher = ChaCha20Poly1305::new(&Key::from(session_key));
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes[4..].copy_from_slice(b"PV-Msg03");
         if cipher
-            .decrypt_in_place_detached(Nonce::from_slice(&nonce_bytes), &[], &mut plaintext, &tag)
+            .decrypt_inout_detached(
+                &Nonce::from(nonce_bytes),
+                &[],
+                plaintext.as_mut_slice().into(),
+                &tag,
+            )
             .is_err()
         {
             tracing::warn!("pair-verify M3 decrypt failed");

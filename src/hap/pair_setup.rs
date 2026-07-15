@@ -3,7 +3,7 @@
 //! including dashes.
 
 use anyhow::{anyhow, Result};
-use chacha20poly1305::aead::{AeadInPlace, KeyInit};
+use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
 use hkdf::Hkdf;
@@ -190,12 +190,18 @@ impl PairSetupSession {
         .map_err(|_| (6, HapError::Unknown))?;
 
         let mut plaintext = encrypted[..encrypted.len() - 16].to_vec();
-        let tag = Tag::clone_from_slice(&encrypted[encrypted.len() - 16..]);
-        let cipher = ChaCha20Poly1305::new(Key::from_slice(&session_key));
+        let tag = Tag::try_from(&encrypted[encrypted.len() - 16..])
+            .map_err(|_| (6, HapError::Authentication))?;
+        let cipher = ChaCha20Poly1305::new(&Key::from(session_key));
         let mut nonce_bytes = [0u8; 12];
         nonce_bytes[4..].copy_from_slice(b"PS-Msg05");
         cipher
-            .decrypt_in_place_detached(Nonce::from_slice(&nonce_bytes), &[], &mut plaintext, &tag)
+            .decrypt_inout_detached(
+                &Nonce::from(nonce_bytes),
+                &[],
+                plaintext.as_mut_slice().into(),
+                &tag,
+            )
             .map_err(|_| {
                 tracing::warn!("pair-setup M5 decrypt failed");
                 (6, HapError::Authentication)
@@ -263,7 +269,11 @@ impl PairSetupSession {
         let mut response_nonce = [0u8; 12];
         response_nonce[4..].copy_from_slice(b"PS-Msg06");
         let response_tag = cipher
-            .encrypt_in_place_detached(Nonce::from_slice(&response_nonce), &[], &mut response_buf)
+            .encrypt_inout_detached(
+                &Nonce::from(response_nonce),
+                &[],
+                response_buf.as_mut_slice().into(),
+            )
             .map_err(|_| (6, HapError::Unknown))?;
         response_buf.extend_from_slice(&response_tag);
 
