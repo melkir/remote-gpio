@@ -35,15 +35,32 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
 
     if check {
         print_check(&release, &decision);
+        if decision.status == UpdateStatus::Unknown {
+            bail!(
+                "cannot determine whether {} is newer: {}",
+                release.tag_name,
+                decision.reason
+            );
+        }
         return Ok(());
     }
 
-    if !decision.newer {
-        println!(
-            "Already at {} ({}). Nothing to do.",
-            release.tag_name, decision.reason
-        );
-        return Ok(());
+    match decision.status {
+        UpdateStatus::Newer => {}
+        UpdateStatus::Current => {
+            println!(
+                "Already at {} ({}). Nothing to do.",
+                release.tag_name, decision.reason
+            );
+            return Ok(());
+        }
+        UpdateStatus::Unknown => {
+            bail!(
+                "cannot determine whether {} is newer: {}",
+                release.tag_name,
+                decision.reason
+            );
+        }
     }
 
     println!(
@@ -157,9 +174,9 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
 struct Release {
     tag_name: String,
     #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
     target_commitish: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
     assets: Vec<Asset>,
 }
 
@@ -201,8 +218,15 @@ async fn fetch_release(
     Ok(release)
 }
 
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum UpdateStatus {
+    Newer,
+    Current,
+    Unknown,
+}
+
 struct Decision {
-    newer: bool,
+    status: UpdateStatus,
     reason: String,
 }
 
@@ -215,28 +239,37 @@ fn compare_versions(channel: UpgradeChannel, release: &Release) -> Decision {
                 semver::Version::parse(version::CRATE_VERSION),
             ) {
                 (Ok(latest), Ok(current)) => Decision {
-                    newer: latest > current,
+                    status: if latest > current {
+                        UpdateStatus::Newer
+                    } else {
+                        UpdateStatus::Current
+                    },
                     reason: format!("semver {current} vs {latest}"),
                 },
                 _ => Decision {
-                    newer: release.tag_name != format!("v{}", version::CRATE_VERSION),
+                    status: if release.tag_name != format!("v{}", version::CRATE_VERSION) {
+                        UpdateStatus::Newer
+                    } else {
+                        UpdateStatus::Current
+                    },
                     reason: "tag comparison (unparseable semver)".into(),
                 },
             }
         }
         UpgradeChannel::Nightly => {
-            let remote_sha = release
-                .target_commitish
-                .as_deref()
-                .or(release.name.as_deref())
-                .unwrap_or("");
+            let Some(remote_sha) = nightly_commit_sha(release) else {
+                return Decision {
+                    status: UpdateStatus::Unknown,
+                    reason: "release metadata does not contain a commit SHA".into(),
+                };
+            };
             let current = version::GIT_SHA;
-            let newer = !remote_sha.is_empty()
-                && !remote_sha.eq_ignore_ascii_case(current)
-                && !remote_sha.starts_with(current)
-                && !current.starts_with(remote_sha);
             Decision {
-                newer,
+                status: if same_git_commit(remote_sha, current) {
+                    UpdateStatus::Current
+                } else {
+                    UpdateStatus::Newer
+                },
                 reason: format!(
                     "git sha {} vs {}",
                     version::short_sha(),
@@ -245,6 +278,40 @@ fn compare_versions(channel: UpgradeChannel, release: &Release) -> Decision {
             }
         }
     }
+}
+
+fn nightly_commit_sha(release: &Release) -> Option<&str> {
+    // GitHub reports the moving release's target_commitish as the branch name
+    // (`main`); the release workflow writes the immutable commit into the body.
+    release
+        .body
+        .as_deref()
+        .and_then(|body| {
+            body.lines().find_map(|line| {
+                let candidate = line.trim().strip_prefix("Commit:")?.trim();
+                is_git_sha(candidate).then_some(candidate)
+            })
+        })
+        .or_else(|| {
+            release
+                .target_commitish
+                .as_deref()
+                .filter(|sha| is_git_sha(sha))
+        })
+}
+
+fn is_git_sha(value: &str) -> bool {
+    (7..=40).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn same_git_commit(left: &str, right: &str) -> bool {
+    left.eq_ignore_ascii_case(right)
+        || left
+            .get(..right.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(right))
+        || right
+            .get(..left.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(left))
 }
 
 fn asset_url(release: &Release, name: &str) -> Result<String> {
@@ -296,10 +363,12 @@ fn print_check(release: &Release, decision: &Decision) {
     );
     println!("Latest:  {}", release.tag_name);
     println!("{}", decision.reason);
-    if decision.newer {
-        println!("Newer version available. Run `sudo somfy upgrade` to apply.");
-    } else {
-        println!("Up to date.");
+    match decision.status {
+        UpdateStatus::Newer => {
+            println!("Newer version available. Run `sudo somfy upgrade` to apply.");
+        }
+        UpdateStatus::Current => println!("Up to date."),
+        UpdateStatus::Unknown => println!("Unable to determine update status."),
     }
 }
 
@@ -310,8 +379,8 @@ mod tests {
     fn release(tag: &str, target: Option<&str>, assets: &[(&str, &str)]) -> Release {
         Release {
             tag_name: tag.to_string(),
-            name: None,
             target_commitish: target.map(|s| s.to_string()),
+            body: None,
             assets: assets
                 .iter()
                 .map(|(n, u)| Asset {
@@ -326,21 +395,21 @@ mod tests {
     fn compare_versions_stable_newer() {
         let r = release("v9.9.9", None, &[]);
         let d = compare_versions(UpgradeChannel::Stable, &r);
-        assert!(d.newer, "expected newer: {}", d.reason);
+        assert_eq!(d.status, UpdateStatus::Newer, "{}", d.reason);
     }
 
     #[test]
     fn compare_versions_stable_same_not_newer() {
         let r = release(&format!("v{}", version::CRATE_VERSION), None, &[]);
         let d = compare_versions(UpgradeChannel::Stable, &r);
-        assert!(!d.newer, "expected not newer: {}", d.reason);
+        assert_eq!(d.status, UpdateStatus::Current, "{}", d.reason);
     }
 
     #[test]
     fn compare_versions_stable_unparseable_falls_back() {
         let r = release("not-semver", None, &[]);
         let d = compare_versions(UpgradeChannel::Stable, &r);
-        assert!(d.newer);
+        assert_eq!(d.status, UpdateStatus::Newer);
         assert!(d.reason.contains("tag comparison"));
     }
 
@@ -352,21 +421,44 @@ mod tests {
             &[],
         );
         let d = compare_versions(UpgradeChannel::Nightly, &r);
-        assert!(d.newer, "expected newer: {}", d.reason);
+        assert_eq!(d.status, UpdateStatus::Newer, "{}", d.reason);
     }
 
     #[test]
     fn compare_versions_nightly_same_sha_not_newer() {
         let r = release("nightly", Some(version::GIT_SHA), &[]);
         let d = compare_versions(UpgradeChannel::Nightly, &r);
-        assert!(!d.newer, "expected not newer: {}", d.reason);
+        assert_eq!(d.status, UpdateStatus::Current, "{}", d.reason);
     }
 
     #[test]
-    fn compare_versions_nightly_empty_remote_not_newer() {
-        let r = release("nightly", Some(""), &[]);
+    fn compare_versions_nightly_reads_commit_from_release_body() {
+        let mut r = release("nightly", Some("main"), &[]);
+        r.body = Some(format!(
+            "Moving prerelease from the main branch.\nCommit: {}\n",
+            version::GIT_SHA
+        ));
+
         let d = compare_versions(UpgradeChannel::Nightly, &r);
-        assert!(!d.newer);
+
+        assert_eq!(d.status, UpdateStatus::Current, "{}", d.reason);
+    }
+
+    #[test]
+    fn compare_versions_nightly_without_commit_is_unknown() {
+        let r = release("nightly", Some("main"), &[]);
+        let d = compare_versions(UpgradeChannel::Nightly, &r);
+
+        assert_eq!(d.status, UpdateStatus::Unknown);
+        assert!(d.reason.contains("does not contain a commit SHA"));
+    }
+
+    #[test]
+    fn nightly_commit_sha_rejects_non_hex_body_value() {
+        let mut r = release("nightly", Some("main"), &[]);
+        r.body = Some("Commit: not-a-sha".into());
+
+        assert_eq!(nightly_commit_sha(&r), None);
     }
 
     #[test]

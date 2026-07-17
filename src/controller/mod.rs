@@ -286,11 +286,16 @@ impl BlindController {
         command: Command,
     ) -> (CommandOutcome, Vec<PositionDelta>) {
         let inferred_position = infer_position(command);
-        let deltas = if let Some(position) = inferred_position {
-            self.motion_tasks.cancel_channel(channel).await;
-            self.positions.apply_for_channel(channel, position).await
-        } else {
-            Vec::new()
+        let deltas = match (command, inferred_position) {
+            (_, Some(position)) => {
+                self.motion_tasks.cancel_channel(channel).await;
+                self.positions.apply_for_channel(channel, position).await
+            }
+            (Command::Stop, None) => {
+                self.motion_tasks.cancel_channel(channel).await;
+                self.positions.stop_channel(channel).await
+            }
+            _ => Vec::new(),
         };
         (CommandOutcome { inferred_position }, deltas)
     }

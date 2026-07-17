@@ -181,6 +181,46 @@ async fn target_position_matching_pending_target_is_noop() {
 }
 
 #[tokio::test]
+async fn manual_stop_cancels_timed_position_completion() {
+    use crate::positioning::state::STATUS_STOPPED;
+
+    let controller =
+        fake_controller(uniform_positioning_l1_ms(100), HashMap::from([(2, 100)])).await;
+    controller
+        .set_target_positions(vec![(2, 50)])
+        .await
+        .unwrap();
+    let mut position_rx = controller.subscribe_positions();
+
+    controller
+        .execute(Command::Stop, Some(Channel::L1))
+        .await
+        .unwrap();
+    let published = position_rx.recv().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(60)).await;
+
+    assert_eq!(
+        controller.operations(),
+        vec![
+            ProtocolOperation::FakeCommand {
+                channel: Channel::L1,
+                command: Command::Down,
+            },
+            ProtocolOperation::FakeCommand {
+                channel: Channel::L1,
+                command: Command::Stop,
+            },
+        ]
+    );
+    let position = controller.position_for_aid(2).await;
+    assert_eq!(position.current, 100);
+    assert_eq!(position.target, 100);
+    assert_eq!(position.status, STATUS_STOPPED);
+    assert_eq!(published[0].target, Some(100));
+    assert_eq!(published[0].status, Some(STATUS_STOPPED));
+}
+
+#[tokio::test]
 async fn position_broadcast_runs_once_per_non_empty_emit() {
     let controller = fake_controller(controller_config(), HashMap::from([(2, 100)])).await;
     let mut position_rx = controller.subscribe_positions();
