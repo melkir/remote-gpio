@@ -209,6 +209,38 @@ impl PositionCache {
         target_events(blind.aid, target, status)
     }
 
+    /// Mark a manually stopped channel as stationary at its last known position.
+    ///
+    /// Position estimation only advances when a timed motion completes, so an
+    /// early stop cannot infer a more precise intermediate position. Resetting
+    /// the target to the last known current value keeps the state internally
+    /// consistent and prevents HomeKit from reporting a movement that is no
+    /// longer running.
+    pub async fn stop_channel(&self, channel: Channel) -> Vec<PositionDelta> {
+        let mut state = self.state.lock().await;
+        let mut deltas = Vec::new();
+
+        for aid in aids_for_channel(channel) {
+            let current = effective_current_position(&state, aid);
+            if effective_target_position(&state, aid) == current
+                && effective_status(&state, aid) == STATUS_STOPPED
+            {
+                continue;
+            }
+
+            state.target.insert(aid, current);
+            state.status.insert(aid, STATUS_STOPPED);
+            deltas.push(PositionDelta {
+                aid,
+                current: None,
+                target: Some(current),
+                status: Some(STATUS_STOPPED),
+            });
+        }
+
+        deltas
+    }
+
     fn finish_current_update(
         &self,
         changes: &[(u64, u8)],
@@ -332,6 +364,33 @@ mod tests {
         assert_eq!(blind.current, 25);
         assert_eq!(blind.target, 25);
         assert_eq!(blind.status, STATUS_STOPPED);
+    }
+
+    #[tokio::test]
+    async fn stop_channel_resets_pending_target_to_last_known_position() {
+        let cache = PositionCache::from_positions(HashMap::from([(2, 75)]));
+        cache.apply_target(&BLINDS[0], 25, STATUS_DECREASING).await;
+
+        let deltas = cache.stop_channel(Channel::L1).await;
+
+        assert_eq!(
+            deltas,
+            vec![PositionDelta {
+                aid: 2,
+                current: None,
+                target: Some(75),
+                status: Some(STATUS_STOPPED),
+            }]
+        );
+        assert_eq!(
+            cache.snapshot().await[0],
+            BlindPosition {
+                aid: 2,
+                current: 75,
+                target: 75,
+                status: STATUS_STOPPED,
+            }
+        );
     }
 
     #[test]
