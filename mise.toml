@@ -2,7 +2,7 @@
 rust = { version = "stable", profile = "default" }
 bun = "1"
 zig = "0.16"
-"cargo:cargo-release" = "1.1.3"
+"cargo:cargo-release" = "1.1.4"
 "cargo:cargo-zigbuild" = "0.23.0"
 
 [tasks."install:rust"]
