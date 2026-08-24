@@ -1,6 +1,6 @@
 [tools]
 rust = { version = "stable", profile = "default" }
-bun = "1"
+bun = "1.4"
 zig = "0.16"
 "cargo:cargo-release" = "1.1.5"
 "cargo:cargo-zigbuild" = "0.23.0"
