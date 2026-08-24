@@ -45,25 +45,23 @@ impl TelisDriver {
             self.select_to(target, true).await?;
         }
 
-        match command {
-            Command::Up => self.transport.press(TelisButton::Up).await,
-            Command::Down => self.transport.press(TelisButton::Down).await,
-            Command::Stop => self.transport.press(TelisButton::Stop).await,
-            Command::Prog | Command::ProgLong => bail!("{TELIS_PROG_UNAVAILABLE}"),
-            Command::Select => {
-                if channel.is_none() {
-                    self.select_once(true).await.map(|_| ())
-                } else {
-                    Ok(())
-                }
-            }
+        // `select` with no channel has nothing to steer toward, so it just
+        // advances the physical selector one step.
+        if command == Command::Select && channel.is_none() {
+            return self.select_once(true).await.map(|_| ());
         }
+        self.press(command).await
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
         self.select_to(channel, true).await?;
+        self.press(command).await
+    }
 
+    /// Press the button for `command`. Selection has already been steered to the
+    /// target channel, so `select` is a no-op here.
+    async fn press(&self, command: Command) -> Result<()> {
         match command {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,

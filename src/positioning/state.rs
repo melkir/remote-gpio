@@ -104,11 +104,70 @@ pub struct PositionDelta {
     pub status: Option<u8>,
 }
 
-#[derive(Clone, Debug, Default)]
+impl PositionDelta {
+    /// A blind came to rest at a known position: current, target, and status all move.
+    pub fn settled(aid: u64, position: u8) -> Self {
+        Self {
+            aid,
+            current: Some(position),
+            target: Some(position),
+            status: Some(STATUS_STOPPED),
+        }
+    }
+
+    /// A blind started moving toward `target`; current is still being estimated.
+    pub fn retargeted(aid: u64, target: u8, status: u8) -> Self {
+        Self {
+            aid,
+            current: None,
+            target: Some(target),
+            status: Some(status),
+        }
+    }
+}
+
+/// Estimated state of every blind, in [`BLINDS`] order.
+///
+/// The accessory set is fixed at compile time, so this is a flat array rather
+/// than a map: every lookup is one scan of four `Copy` structs.
+#[derive(Clone, Debug)]
 pub struct PositionState {
-    current: HashMap<u64, u8>,
-    target: HashMap<u64, u8>,
-    status: HashMap<u64, u8>,
+    blinds: [BlindPosition; BLINDS.len()],
+}
+
+impl PositionState {
+    /// Seed from `positions.json`. Unsaved blinds start fully open, and every
+    /// blind starts stationary at its own current position.
+    fn from_saved(saved: &HashMap<u64, u8>) -> Self {
+        let mut blinds = [BlindPosition::default_for_aid(0); BLINDS.len()];
+        for (slot, blind) in blinds.iter_mut().zip(BLINDS) {
+            let current = saved.get(&blind.aid).copied().unwrap_or(100).min(100);
+            *slot = BlindPosition {
+                aid: blind.aid,
+                current,
+                target: current,
+                status: STATUS_STOPPED,
+            };
+        }
+        Self { blinds }
+    }
+
+    fn get_mut(&mut self, aid: u64) -> Option<&mut BlindPosition> {
+        self.blinds.iter_mut().find(|position| position.aid == aid)
+    }
+
+    /// Snap a blind to a resting position, returning the delta if it moved.
+    fn settle(&mut self, aid: u64, position: u8) -> Option<PositionDelta> {
+        let position = position.min(100);
+        let blind = self.get_mut(aid)?;
+        if blind.current == position && blind.target == position {
+            return None;
+        }
+        blind.current = position;
+        blind.target = position;
+        blind.status = STATUS_STOPPED;
+        Some(PositionDelta::settled(aid, position))
+    }
 }
 
 #[derive(Debug)]
@@ -120,11 +179,7 @@ pub struct PositionCache {
 impl PositionCache {
     pub fn new() -> Self {
         Self {
-            state: Mutex::new(PositionState {
-                current: load_positions(),
-                target: HashMap::new(),
-                status: HashMap::new(),
-            }),
+            state: Mutex::new(PositionState::from_saved(&load_positions())),
             persist: true,
         }
     }
@@ -132,26 +187,13 @@ impl PositionCache {
     #[cfg(test)]
     pub fn from_positions(positions: HashMap<u64, u8>) -> Self {
         Self {
-            state: Mutex::new(PositionState {
-                current: positions,
-                target: HashMap::new(),
-                status: HashMap::new(),
-            }),
+            state: Mutex::new(PositionState::from_saved(&positions)),
             persist: false,
         }
     }
 
     pub async fn snapshot(&self) -> Vec<BlindPosition> {
-        let state = self.state.lock().await;
-        BLINDS
-            .iter()
-            .map(|b| BlindPosition {
-                aid: b.aid,
-                current: effective_current_position(&state, b.aid),
-                target: effective_target_position(&state, b.aid),
-                status: effective_status(&state, b.aid),
-            })
-            .collect()
+        self.state.lock().await.blinds.to_vec()
     }
 
     pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {
@@ -166,47 +208,38 @@ impl PositionCache {
 
     pub async fn apply_blind_current(&self, blind: &Blind, position: u8) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
-        let new_pos = position.min(100);
-        if state.current.get(&blind.aid).copied() == Some(new_pos)
-            && effective_target_position(&state, blind.aid) == new_pos
-        {
+        let Some(delta) = state.settle(blind.aid, position) else {
             return Vec::new();
-        }
-        state.current.insert(blind.aid, new_pos);
-        state.target.insert(blind.aid, new_pos);
-        state.status.insert(blind.aid, STATUS_STOPPED);
-        self.finish_current_update(&[(blind.aid, new_pos)], &state.current)
+        };
+        self.persist_positions(&state);
+        vec![delta]
     }
 
     pub async fn apply_all_current(&self, position: u8) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
-        let new_pos = position.min(100);
-        let mut changes = Vec::new();
-        for blind in BLINDS {
-            if state.current.get(&blind.aid).copied() != Some(new_pos)
-                || effective_target_position(&state, blind.aid) != new_pos
-            {
-                state.current.insert(blind.aid, new_pos);
-                state.target.insert(blind.aid, new_pos);
-                state.status.insert(blind.aid, STATUS_STOPPED);
-                changes.push((blind.aid, new_pos));
-            }
-        }
-        if changes.is_empty() {
+        let deltas: Vec<PositionDelta> = BLINDS
+            .iter()
+            .filter_map(|blind| state.settle(blind.aid, position))
+            .collect();
+        if deltas.is_empty() {
             return Vec::new();
         }
-        self.finish_current_update(&changes, &state.current)
+        self.persist_positions(&state);
+        deltas
     }
 
     pub async fn apply_target(&self, blind: &Blind, target: u8, status: u8) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
         let target = target.min(100);
-        if effective_target_position(&state, blind.aid) == target {
+        let Some(position) = state.get_mut(blind.aid) else {
+            return Vec::new();
+        };
+        if position.target == target {
             return Vec::new();
         }
-        state.target.insert(blind.aid, target);
-        state.status.insert(blind.aid, status);
-        target_events(blind.aid, target, status)
+        position.target = target;
+        position.status = status;
+        vec![PositionDelta::retargeted(blind.aid, target, status)]
     }
 
     /// Mark a manually stopped channel as stationary at its last known position.
@@ -218,43 +251,31 @@ impl PositionCache {
     /// longer running.
     pub async fn stop_channel(&self, channel: Channel) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
-        let mut deltas = Vec::new();
-
-        for aid in aids_for_channel(channel) {
-            let current = effective_current_position(&state, aid);
-            if effective_target_position(&state, aid) == current
-                && effective_status(&state, aid) == STATUS_STOPPED
-            {
-                continue;
-            }
-
-            state.target.insert(aid, current);
-            state.status.insert(aid, STATUS_STOPPED);
-            deltas.push(PositionDelta {
-                aid,
-                current: None,
-                target: Some(current),
-                status: Some(STATUS_STOPPED),
-            });
-        }
-
-        deltas
+        aids_for_channel(channel)
+            .into_iter()
+            .filter_map(|aid| {
+                let position = state.get_mut(aid)?;
+                if position.target == position.current && position.status == STATUS_STOPPED {
+                    return None;
+                }
+                position.target = position.current;
+                position.status = STATUS_STOPPED;
+                Some(PositionDelta::retargeted(
+                    aid,
+                    position.current,
+                    STATUS_STOPPED,
+                ))
+            })
+            .collect()
     }
 
-    fn finish_current_update(
-        &self,
-        changes: &[(u64, u8)],
-        positions: &HashMap<u64, u8>,
-    ) -> Vec<PositionDelta> {
-        if self.persist {
-            if let Err(e) = save_positions(positions) {
-                tracing::warn!("failed to persist positions: {e}");
-            }
+    fn persist_positions(&self, state: &PositionState) {
+        if !self.persist {
+            return;
         }
-        changes
-            .iter()
-            .flat_map(|(aid, pos)| position_events(*aid, *pos))
-            .collect()
+        if let Err(e) = save_positions(&state.blinds) {
+            tracing::warn!("failed to persist positions: {e}");
+        }
     }
 }
 
@@ -262,7 +283,7 @@ fn load_positions() -> HashMap<u64, u8> {
     load_positions_from(&persist::state_dir().join(POSITIONS_FILE))
 }
 
-fn save_positions(positions: &HashMap<u64, u8>) -> Result<()> {
+fn save_positions(positions: &[BlindPosition]) -> Result<()> {
     let dir = persist::state_dir();
     fs::create_dir_all(&dir)
         .with_context(|| format!("creating state directory {}", dir.display()))?;
@@ -293,58 +314,14 @@ fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
         .collect()
 }
 
-fn save_positions_to(path: &Path, positions: &HashMap<u64, u8>) -> Result<()> {
-    let stringified: BTreeMap<String, u8> =
-        positions.iter().map(|(k, v)| (k.to_string(), *v)).collect();
+/// Persist only the estimated current positions, keyed by aid.
+fn save_positions_to(path: &Path, positions: &[BlindPosition]) -> Result<()> {
+    let stringified: BTreeMap<String, u8> = positions
+        .iter()
+        .map(|position| (position.aid.to_string(), position.current))
+        .collect();
     let bytes = serde_json::to_vec_pretty(&stringified)?;
     atomic_save_bytes(path, &bytes, false)
-}
-
-pub fn effective_current_position(state: &PositionState, aid: u64) -> u8 {
-    let Some(blind) = find_blind(aid) else {
-        return 100;
-    };
-    state.current.get(&blind.aid).copied().unwrap_or(100)
-}
-
-pub fn effective_target_position(state: &PositionState, aid: u64) -> u8 {
-    let Some(blind) = find_blind(aid) else {
-        return 100;
-    };
-    state
-        .target
-        .get(&blind.aid)
-        .copied()
-        .unwrap_or_else(|| effective_current_position(state, aid))
-}
-
-pub fn effective_status(state: &PositionState, aid: u64) -> u8 {
-    let Some(blind) = find_blind(aid) else {
-        return STATUS_STOPPED;
-    };
-    state
-        .status
-        .get(&blind.aid)
-        .copied()
-        .unwrap_or(STATUS_STOPPED)
-}
-
-pub fn position_events(aid: u64, position: u8) -> Vec<PositionDelta> {
-    vec![PositionDelta {
-        aid,
-        current: Some(position),
-        target: Some(position),
-        status: Some(STATUS_STOPPED),
-    }]
-}
-
-pub fn target_events(aid: u64, target: u8, status: u8) -> Vec<PositionDelta> {
-    vec![PositionDelta {
-        aid,
-        current: None,
-        target: Some(target),
-        status: Some(status),
-    }]
 }
 
 #[cfg(test)]
@@ -393,35 +370,48 @@ mod tests {
         );
     }
 
+    /// Only `aid` and `current` reach the file; target/status are not persisted.
+    fn saved(entries: &[(u64, u8)]) -> Vec<BlindPosition> {
+        entries
+            .iter()
+            .map(|(aid, current)| BlindPosition {
+                aid: *aid,
+                current: *current,
+                target: 100,
+                status: STATUS_INCREASING,
+            })
+            .collect()
+    }
+
     #[test]
     fn external_position_broadcast_produces_position_delta() {
-        let events = position_events(2, 0);
+        let delta = PositionDelta::settled(2, 0);
 
-        assert_eq!(events.len(), 1);
-        assert_eq!(events[0].current, Some(0));
-        assert_eq!(events[0].target, Some(0));
-        assert_eq!(events[0].status, Some(STATUS_STOPPED));
+        assert_eq!(delta.current, Some(0));
+        assert_eq!(delta.target, Some(0));
+        assert_eq!(delta.status, Some(STATUS_STOPPED));
     }
 
     #[test]
     fn positions_file_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(POSITIONS_FILE);
-        let mut original = HashMap::new();
-        original.insert(2u64, 0u8);
-        original.insert(3u64, 100u8);
-        original.insert(4u64, 37u8);
-        original.insert(6u64, 0u8);
+        let original = saved(&[(2, 0), (3, 100), (4, 37), (6, 0)]);
+
         save_positions_to(&path, &original).unwrap();
+
         let loaded = load_positions_from(&path);
-        assert_eq!(loaded, original);
+        assert_eq!(
+            loaded,
+            HashMap::from([(2u64, 0u8), (3, 100), (4, 37), (6, 0)])
+        );
     }
 
     #[test]
     fn positions_file_saves_in_stable_order() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join(POSITIONS_FILE);
-        let positions = HashMap::from([(4, 37), (6, 50), (2, 0), (3, 101), (5, 100)]);
+        let positions = saved(&[(4, 37), (6, 50), (2, 0), (3, 101), (5, 100)]);
 
         save_positions_to(&path, &positions).unwrap();
 
@@ -429,6 +419,18 @@ mod tests {
             fs::read_to_string(&path).unwrap(),
             "{\n  \"2\": 0,\n  \"3\": 101,\n  \"4\": 37,\n  \"5\": 100,\n  \"6\": 50\n}"
         );
+    }
+
+    #[test]
+    fn out_of_range_saved_position_is_ignored_on_load() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(POSITIONS_FILE);
+        save_positions_to(&path, &saved(&[(2, 101), (3, 40)])).unwrap();
+
+        let state = PositionState::from_saved(&load_positions_from(&path));
+
+        assert_eq!(state.blinds[0].current, 100);
+        assert_eq!(state.blinds[1].current, 40);
     }
 
     #[test]

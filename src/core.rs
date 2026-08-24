@@ -5,23 +5,6 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::str::FromStr;
 
-const CHANNELS: [(Channel, &str); 5] = [
-    (Channel::L1, "L1"),
-    (Channel::L2, "L2"),
-    (Channel::L3, "L3"),
-    (Channel::L4, "L4"),
-    (Channel::All, "ALL"),
-];
-
-const COMMANDS: [(Command, &str); 6] = [
-    (Command::Up, "up"),
-    (Command::Down, "down"),
-    (Command::Stop, "stop"),
-    (Command::Select, "select"),
-    (Command::Prog, "prog"),
-    (Command::ProgLong, "prog_long"),
-];
-
 /// Installation target: one LED row (`L1`–`L4`) or the group (`ALL`).
 #[derive(Copy, Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum Channel {
@@ -35,6 +18,27 @@ pub enum Channel {
 
 impl Channel {
     pub const INDIVIDUALS: [Channel; 4] = [Channel::L1, Channel::L2, Channel::L3, Channel::L4];
+
+    /// Every channel, including the group. Drives `FromStr`.
+    pub const VARIANTS: [Channel; 5] = [
+        Channel::L1,
+        Channel::L2,
+        Channel::L3,
+        Channel::L4,
+        Channel::All,
+    ];
+
+    /// Wire spelling. The single source of truth for `Display` and `FromStr`,
+    /// so a new variant cannot be added to one and forgotten in the other.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Channel::L1 => "L1",
+            Channel::L2 => "L2",
+            Channel::L3 => "L3",
+            Channel::L4 => "L4",
+            Channel::All => "ALL",
+        }
+    }
 
     pub fn individual_index(self) -> Option<usize> {
         match self {
@@ -61,23 +65,16 @@ impl Channel {
 impl FromStr for Channel {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        CHANNELS
-            .iter()
-            .find(|(_, name)| *name == s)
-            .map(|(ch, _)| *ch)
+        Self::VARIANTS
+            .into_iter()
+            .find(|channel| channel.as_str() == s)
             .ok_or_else(|| anyhow::anyhow!("Invalid channel value: {s}"))
     }
 }
 
 impl fmt::Display for Channel {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Channel::L1 => "L1",
-            Channel::L2 => "L2",
-            Channel::L3 => "L3",
-            Channel::L4 => "L4",
-            Channel::All => "ALL",
-        })
+        f.write_str(self.as_str())
     }
 }
 
@@ -92,26 +89,43 @@ pub enum Command {
     ProgLong,
 }
 
-impl fmt::Display for Command {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+impl Command {
+    /// Every command. Drives `FromStr`.
+    pub const VARIANTS: [Command; 6] = [
+        Command::Up,
+        Command::Down,
+        Command::Stop,
+        Command::Select,
+        Command::Prog,
+        Command::ProgLong,
+    ];
+
+    /// Wire spelling. The single source of truth for `Display` and `FromStr`,
+    /// so a new variant cannot be added to one and forgotten in the other.
+    pub const fn as_str(self) -> &'static str {
+        match self {
             Command::Up => "up",
             Command::Down => "down",
             Command::Stop => "stop",
             Command::Select => "select",
             Command::Prog => "prog",
             Command::ProgLong => "prog_long",
-        })
+        }
+    }
+}
+
+impl fmt::Display for Command {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
     }
 }
 
 impl FromStr for Command {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> Result<Self> {
-        COMMANDS
-            .iter()
-            .find(|(_, name)| *name == s)
-            .map(|(command, _)| *command)
+        Self::VARIANTS
+            .into_iter()
+            .find(|command| command.as_str() == s)
             .ok_or_else(|| anyhow::anyhow!("Invalid command: {s}"))
     }
 }
@@ -121,9 +135,17 @@ mod tests {
     use super::*;
 
     #[test]
+    fn channel_wire_spellings_are_stable() {
+        assert_eq!(
+            Channel::VARIANTS.map(Channel::as_str),
+            ["L1", "L2", "L3", "L4", "ALL"]
+        );
+    }
+
+    #[test]
     fn channel_from_str_valid() {
-        for (ch, name) in CHANNELS {
-            assert_eq!(Channel::from_str(name).unwrap(), ch);
+        for ch in Channel::VARIANTS {
+            assert_eq!(Channel::from_str(ch.as_str()).unwrap(), ch);
         }
     }
 
@@ -135,7 +157,7 @@ mod tests {
 
     #[test]
     fn channel_display_round_trip() {
-        for (ch, _) in CHANNELS {
+        for ch in Channel::VARIANTS {
             let s = ch.to_string();
             assert_eq!(Channel::from_str(&s).unwrap(), ch);
         }
@@ -151,9 +173,17 @@ mod tests {
     }
 
     #[test]
+    fn command_wire_spellings_are_stable() {
+        assert_eq!(
+            Command::VARIANTS.map(Command::as_str),
+            ["up", "down", "stop", "select", "prog", "prog_long"]
+        );
+    }
+
+    #[test]
     fn command_from_str_valid() {
-        for (command, name) in COMMANDS {
-            assert_eq!(Command::from_str(name).unwrap(), command);
+        for command in Command::VARIANTS {
+            assert_eq!(Command::from_str(command.as_str()).unwrap(), command);
         }
     }
 
@@ -166,7 +196,7 @@ mod tests {
 
     #[test]
     fn command_display_round_trip() {
-        for (command, _) in COMMANDS {
+        for command in Command::VARIANTS {
             let s = command.to_string();
             assert_eq!(Command::from_str(&s).unwrap(), command);
         }

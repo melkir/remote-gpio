@@ -3,7 +3,6 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
 use tokio::sync::watch::{self, Sender};
-use tokio::sync::Mutex;
 
 use crate::config::RtsOptions;
 use crate::core::{Channel, Command};
@@ -83,7 +82,7 @@ pub(crate) struct RtsDriver {
     sender: Sender<Channel>,
     selected_rx: SelectedChannelRx,
     options: RtsOptions,
-    state: Mutex<RtsStateStore>,
+    state: Arc<StdMutex<RtsStateStore>>,
     transmitter: Arc<dyn RtsTransmitter>,
 }
 
@@ -120,9 +119,32 @@ impl RtsDriver {
             sender,
             selected_rx,
             options,
-            state: Mutex::new(state),
+            state: Arc::new(StdMutex::new(state)),
             transmitter,
         }
+    }
+
+    /// Run a state-store operation on the blocking pool.
+    ///
+    /// Reserving a rolling code fsyncs `rts.json` (plus its parent directory).
+    /// The server runs on a current-thread runtime, so doing that inline would
+    /// stall every other connection — SSE, WebSocket, and the HAP server — for
+    /// the duration of the write. Every access goes through here so the lock is
+    /// never contended from the reactor thread either.
+    async fn with_state<T, F>(&self, op: F) -> Result<T>
+    where
+        F: FnOnce(&mut RtsStateStore) -> Result<T> + Send + 'static,
+        T: Send + 'static,
+    {
+        let state = self.state.clone();
+        tokio::task::spawn_blocking(move || {
+            let mut state = state
+                .lock()
+                .map_err(|_| anyhow::anyhow!("RTS state mutex poisoned"))?;
+            op(&mut state)
+        })
+        .await
+        .context("RTS state task failed")?
     }
 
     #[cfg(test)]
@@ -173,21 +195,23 @@ impl RtsDriver {
     }
 
     async fn set_selected_channel(&self, channel: Channel) -> Result<()> {
-        {
-            let mut state = self.state.lock().await;
-            state.set_selected_channel(channel)?;
-        }
+        self.with_state(move |state| state.set_selected_channel(channel))
+            .await?;
         self.sender.send(channel)?;
         Ok(())
     }
 
     async fn transmit(&self, channel: Channel, command: RtsCommand, long: bool) -> Result<()> {
-        let (rolling_code, remote_id) = {
-            let mut state = self.state.lock().await;
-            let rolling_code = state.reserve_rolling_code(channel)?;
-            let remote_id = state.channel(channel)?.remote_id;
-            (rolling_code, remote_id)
-        };
+        // The reserve is persisted before anything goes on the air: a crash may
+        // then skip forward up to `DEFAULT_RESERVE_SIZE` codes, which receivers
+        // absorb, but it can never replay a code that was already transmitted.
+        let (rolling_code, remote_id) = self
+            .with_state(move |state| {
+                let rolling_code = state.reserve_rolling_code(channel)?;
+                let remote_id = state.channel(channel)?.remote_id;
+                Ok((rolling_code, remote_id))
+            })
+            .await?;
 
         let frame = RtsFrame::encode(command, rolling_code, remote_id)?;
         let pulses = if long {
@@ -196,7 +220,12 @@ impl RtsDriver {
             waveform::build(frame, self.options.gpio.gdo0)
         };
         let pulse_count = pulses.len();
-        let total_duration_us: u64 = pulses.iter().map(|pulse| pulse.us_delay as u64).sum();
+        let total_duration = Duration::from_micros(
+            pulses
+                .iter()
+                .map(|pulse| pulse.us_delay as u64)
+                .sum::<u64>(),
+        );
         tracing::debug!(
             %channel,
             command = ?command,
@@ -206,7 +235,7 @@ impl RtsDriver {
             frame = %hex::encode(frame.bytes()),
             gpio = self.options.gpio.gdo0,
             pulse_count,
-            total_duration_us,
+            total_duration_us = total_duration.as_micros(),
             "rts waveform prepared"
         );
         let transmission = PreparedTransmission {
@@ -219,6 +248,7 @@ impl RtsDriver {
             #[cfg(test)]
             remote_id,
             pulses,
+            total_duration,
         };
         let transmitter = self.transmitter.clone();
 
@@ -226,8 +256,8 @@ impl RtsDriver {
             .await
             .context("RTS transmitter task failed")??;
 
-        let mut state = self.state.lock().await;
-        state.commit_rolling_code(channel, rolling_code)?;
+        self.with_state(move |state| state.commit_rolling_code(channel, rolling_code))
+            .await?;
         tracing::info!(
             %channel,
             command = ?command,
@@ -250,6 +280,8 @@ pub(super) struct PreparedTransmission {
     #[cfg(test)]
     pub(super) remote_id: u32,
     pub(super) pulses: Vec<waveform::GpioPulse>,
+    /// Wall time the pulse train occupies, summed once when it is built.
+    pub(super) total_duration: Duration,
 }
 
 pub(super) trait RtsTransmitter: std::fmt::Debug + Send + Sync + 'static {
@@ -263,7 +295,7 @@ struct PigpioTransmitter {
 
 impl RtsTransmitter for PigpioTransmitter {
     fn transmit(&self, transmission: PreparedTransmission) -> Result<()> {
-        transmit_blocking(self.hardware.clone(), transmission.pulses)
+        transmit_blocking(self.hardware.clone(), &transmission)
     }
 }
 
@@ -323,30 +355,27 @@ fn open_spi(path: &str) -> Result<Spi> {
 
 fn transmit_blocking(
     hardware: Arc<StdMutex<Hardware>>,
-    pulses: Vec<waveform::GpioPulse>,
+    transmission: &PreparedTransmission,
 ) -> Result<()> {
     let mut hw = hardware
         .lock()
         .map_err(|_| anyhow::anyhow!("RTS hardware mutex poisoned"))?;
-    match try_transmit(&mut hw, &pulses) {
+    match try_transmit(&mut hw, transmission) {
         Err(err) if is_pigpio_io_error(&err) => {
             tracing::warn!(error = %err, "pigpiod io error; reconnecting and retrying once");
             hw.reconnect_pigpio()
                 .context("reconnecting to pigpiod after io error")?;
-            try_transmit(&mut hw, &pulses)
+            try_transmit(&mut hw, transmission)
         }
         other => other,
     }
 }
 
-fn try_transmit(hw: &mut Hardware, pulses: &[waveform::GpioPulse]) -> Result<()> {
+fn try_transmit(hw: &mut Hardware, transmission: &PreparedTransmission) -> Result<()> {
+    let total_duration = transmission.total_duration;
     hw.pigpio.wave_new()?;
-    hw.pigpio.wave_add_generic(pulses)?;
+    hw.pigpio.wave_add_generic(&transmission.pulses)?;
     let wave_id = hw.pigpio.wave_create()?;
-    let total_duration: Duration = pulses
-        .iter()
-        .map(|pulse| Duration::from_micros(pulse.us_delay as u64))
-        .sum();
     tracing::debug!(wave_id, ?total_duration, "pigpio wave created");
 
     hw.radio.tx()?;
