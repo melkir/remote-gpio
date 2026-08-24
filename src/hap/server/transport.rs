@@ -94,10 +94,7 @@ impl HapWriter {
             content_type,
             body.len()
         );
-        let mut out = Vec::with_capacity(head.len() + body.len());
-        out.extend_from_slice(head.as_bytes());
-        out.extend_from_slice(body);
-        self.write_all(&out).await
+        self.write_message(&head, body).await
     }
 
     pub async fn write_event(&mut self, body: &[u8]) -> Result<()> {
@@ -105,6 +102,11 @@ impl HapWriter {
             "EVENT/1.0 200 OK\r\nContent-Type: application/hap+json\r\nContent-Length: {}\r\n\r\n",
             body.len()
         );
+        self.write_message(&head, body).await
+    }
+
+    /// Emit head and body as one write so they share a session frame.
+    async fn write_message(&mut self, head: &str, body: &[u8]) -> Result<()> {
         let mut out = Vec::with_capacity(head.len() + body.len());
         out.extend_from_slice(head.as_bytes());
         out.extend_from_slice(body);
@@ -138,8 +140,9 @@ impl HapWriter {
 
 async fn read_request_plain(reader: &mut OwnedReadHalf, buf: &mut Vec<u8>) -> Result<RawRequest> {
     loop {
-        if let Some(req) = try_parse(buf)? {
-            return Ok(req);
+        if let ParseOutcome::Complete { request, consumed } = try_parse(buf)? {
+            buf.drain(..consumed);
+            return Ok(request);
         }
         if buf.len() >= MAX_HTTP_BUFFER {
             bail!("plain HTTP request too large");
@@ -158,36 +161,61 @@ async fn read_request_plain(reader: &mut OwnedReadHalf, buf: &mut Vec<u8>) -> Re
 
 async fn read_request_encrypted(reader: &mut EncryptedReader) -> Result<RawRequest> {
     loop {
-        // Try parse against currently buffered plaintext (clone to a Vec since
-        // try_parse mutates).
-        let mut snapshot = reader.buffered().to_vec();
-        if let Some(req) = try_parse(&mut snapshot)? {
-            let consumed = reader.buffered().len() - snapshot.len();
-            reader.consume(consumed);
-            return Ok(req);
+        // `try_parse` borrows the buffer read-only and reports how much to drop,
+        // so the buffered plaintext is parsed in place rather than cloned per pass.
+        let needed = match try_parse(reader.buffered())? {
+            ParseOutcome::Complete { request, consumed } => {
+                reader.consume(consumed);
+                return Ok(request);
+            }
+            ParseOutcome::NeedMore { min_len } => min_len,
+        };
+        // safety: prevent runaway frames
+        if needed > MAX_HTTP_BUFFER {
+            bail!("encrypted request too large");
         }
-        // Need more bytes.
-        reader.fill(reader.buffered().len() + 1).await?;
+        // Once the headers parse, `min_len` is the exact request length, so the
+        // body is read in one go instead of re-parsing after every frame.
+        reader.fill(needed).await?;
         if reader.buffered().is_empty() {
             bail!("encrypted connection closed");
         }
-        // safety: prevent runaway frames
         if reader.buffered().len() > MAX_HTTP_BUFFER {
             bail!("encrypted request too large");
         }
     }
 }
 
-fn try_parse(buf: &mut Vec<u8>) -> Result<Option<RawRequest>> {
+/// Result of parsing one request out of a buffer, without consuming from it.
+#[derive(Debug)]
+enum ParseOutcome {
+    Complete {
+        request: RawRequest,
+        /// Bytes of `buf` the request occupies; the caller drops them.
+        consumed: usize,
+    },
+    NeedMore {
+        /// Buffer length required before parsing can make progress.
+        min_len: usize,
+    },
+}
+
+fn try_parse(buf: &[u8]) -> Result<ParseOutcome> {
     let mut headers = [httparse::EMPTY_HEADER; 32];
     let mut req = httparse::Request::new(&mut headers);
     let header_len = match req.parse(buf)? {
         httparse::Status::Complete(n) => n,
-        httparse::Status::Partial => return Ok(None),
+        // Headers are still incomplete, so the full length is not yet knowable.
+        httparse::Status::Partial => {
+            return Ok(ParseOutcome::NeedMore {
+                min_len: buf.len() + 1,
+            })
+        }
     };
     let content_length = parse_content_length(req.headers)?;
-    if buf.len() < header_len + content_length {
-        return Ok(None);
+    let consumed = header_len + content_length;
+    if buf.len() < consumed {
+        return Ok(ParseOutcome::NeedMore { min_len: consumed });
     }
     let Some(method) = req.method else {
         bail!("HTTP request missing method");
@@ -195,11 +223,14 @@ fn try_parse(buf: &mut Vec<u8>) -> Result<Option<RawRequest>> {
     let Some(path) = req.path else {
         bail!("HTTP request missing path");
     };
-    let method = method.to_string();
-    let path = path.to_string();
-    let body = buf[header_len..header_len + content_length].to_vec();
-    buf.drain(..header_len + content_length);
-    Ok(Some(RawRequest { method, path, body }))
+    Ok(ParseOutcome::Complete {
+        request: RawRequest {
+            method: method.to_string(),
+            path: path.to_string(),
+            body: buf[header_len..consumed].to_vec(),
+        },
+        consumed,
+    })
 }
 
 fn parse_content_length(headers: &[Header<'_>]) -> Result<usize> {
@@ -223,30 +254,52 @@ fn parse_content_length(headers: &[Header<'_>]) -> Result<usize> {
 mod tests {
     use super::*;
 
-    fn parse(input: &str) -> Result<Option<RawRequest>> {
-        let mut buf = input.as_bytes().to_vec();
-        try_parse(&mut buf)
+    fn parse(input: &str) -> Result<ParseOutcome> {
+        try_parse(input.as_bytes())
+    }
+
+    /// Buffer length `input` must reach before it can parse; 0 if it already does.
+    fn needs_more(input: &str) -> usize {
+        match parse(input).unwrap() {
+            ParseOutcome::NeedMore { min_len } => min_len,
+            ParseOutcome::Complete { .. } => 0,
+        }
     }
 
     #[test]
-    fn parses_complete_request_and_drains_only_that_request() {
+    fn parses_complete_request_and_consumes_only_that_request() {
         let mut buf = b"POST /pair-setup HTTP/1.1\r\nContent-Length: 4\r\n\r\nbodyGET /accessories HTTP/1.1\r\n\r\n".to_vec();
 
-        let req = try_parse(&mut buf).unwrap().unwrap();
+        let outcome = try_parse(&buf).unwrap();
 
-        assert_eq!(req.method, "POST");
-        assert_eq!(req.path, "/pair-setup");
-        assert_eq!(req.body, b"body");
+        assert!(
+            matches!(outcome, ParseOutcome::Complete { .. }),
+            "{outcome:?}"
+        );
+        let ParseOutcome::Complete { request, consumed } = outcome else {
+            return;
+        };
+        buf.drain(..consumed);
+
+        assert_eq!(request.method, "POST");
+        assert_eq!(request.path, "/pair-setup");
+        assert_eq!(request.body, b"body");
         assert_eq!(buf, b"GET /accessories HTTP/1.1\r\n\r\n");
     }
 
     #[test]
     fn waits_for_declared_body_bytes() {
-        assert!(
-            parse("POST /pair-setup HTTP/1.1\r\nContent-Length: 4\r\n\r\nbo")
-                .unwrap()
-                .is_none()
-        );
+        let input = "POST /pair-setup HTTP/1.1\r\nContent-Length: 4\r\n\r\nbo";
+
+        // Headers parsed, so the exact total length is known: 2 body bytes short.
+        assert_eq!(needs_more(input), input.len() + 2);
+    }
+
+    #[test]
+    fn partial_headers_ask_for_one_more_byte() {
+        let input = "POST /pair-setup HTTP/1.1\r\nContent-Len";
+
+        assert_eq!(needs_more(input), input.len() + 1);
     }
 
     #[test]

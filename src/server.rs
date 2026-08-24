@@ -2,6 +2,7 @@ use crate::controller::BlindController;
 use crate::embed;
 use crate::service::{dispatch_command, CommandError, CommandRequest};
 use anyhow::Result;
+use axum::body::Bytes;
 use axum::extract::ws::{Message, WebSocket};
 use axum::extract::{ConnectInfo, Query, State, WebSocketUpgrade};
 use axum::http::StatusCode;
@@ -153,7 +154,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
         tokio::select! {
             // Send periodic ping to keep connection alive
             _ = ping_interval.tick() => {
-                if sink.send(Message::Ping(vec![].into())).await.is_err() {
+                if sink.send(Message::Ping(Bytes::new())).await.is_err() {
                     break;
                 }
             }
