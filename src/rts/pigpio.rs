@@ -294,7 +294,9 @@ mod tests {
         let stream = client.into_inner();
         let commands: Vec<u32> = stream
             .written
-            .chunks_exact(16)
+            .as_chunks::<16>()
+            .0
+            .iter()
             .map(|chunk| u32::from_le_bytes(chunk[0..4].try_into().unwrap()))
             .collect();
         assert_eq!(
