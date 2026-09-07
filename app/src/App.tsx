@@ -4,7 +4,7 @@ import { handleAccessSessionExpiry, isAccessChallenge, isValidChannel } from '@/
 import { cn } from '@/lib/utils';
 import { useLongPress } from '@uidotdev/usehooks';
 import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact';
-import { useCallback, useEffect, useState } from 'preact/hooks';
+import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
 
 export function App() {
@@ -70,27 +70,49 @@ export function App() {
     return () => controller.abort();
   }, []);
 
+  // `useLongPress` only wires pointer handlers — it never suppresses the click
+  // the browser dispatches on release. Without this guard a long press sends
+  // `select ALL` and the trailing click immediately cycles the selection off it.
+  const longPressFired = useRef(false);
   const attrs = useLongPress(
     () => {
+      longPressFired.current = true;
       send({ command: 'select', channel: 'ALL' });
     },
     {
       threshold: 500,
-      onStart: () => shortHaptic(),
+      onStart: () => {
+        // Every new press starts clean, so a long press that never produced a
+        // click (pointer left the button) cannot swallow the next real one.
+        longPressFired.current = false;
+        shortHaptic();
+      },
       onFinish: () => longHaptic(),
     },
   );
 
+  const cycleSelection = useCallback(() => {
+    if (longPressFired.current) {
+      longPressFired.current = false;
+      return;
+    }
+    send({ command: 'select' });
+  }, [send]);
+
   const status = {
-    [ReadyState.CONNECTING]: 'bg-loading',
-    [ReadyState.OPEN]: 'bg-green-900',
-    [ReadyState.CLOSED]: 'bg-red-900',
+    [ReadyState.CONNECTING]: { className: 'bg-loading', label: 'Connecting to blinds' },
+    [ReadyState.OPEN]: { className: 'bg-green-900', label: 'Connected to blinds' },
+    [ReadyState.CLOSED]: { className: 'bg-red-900', label: 'Disconnected from blinds' },
   }[readyState.value];
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-evenly gap-4 pt-4">
       {/* Connection status indicator */}
-      <div className={cn('absolute top-0 h-4 w-72 rounded-b-full bg-accent', status)} />
+      <div
+        role="status"
+        aria-label={status.label}
+        className={cn('absolute top-0 h-4 w-72 rounded-b-full bg-accent', status.className)}
+      />
 
       {/* Up, Stop, Down */}
       {[
@@ -148,7 +170,7 @@ export function App() {
       <div className="flex flex-row items-center justify-center">
         <Button
           {...attrs}
-          onClick={() => send({ command: 'select' })}
+          onClick={cycleSelection}
           variant="outline"
           className="size-24 rounded-full active:scale-95"
           aria-label="Cycle selection (long press to select all)"
