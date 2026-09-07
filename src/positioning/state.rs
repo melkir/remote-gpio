@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 
 use crate::core::Channel;
@@ -197,14 +197,17 @@ impl PositionState {
 #[derive(Debug)]
 pub struct PositionCache {
     state: Mutex<PositionState>,
-    persist: bool,
+    /// Where `positions.json` is written. Resolved once at construction rather
+    /// than per save, and `None` disables persistence entirely for tests.
+    path: Option<PathBuf>,
 }
 
 impl PositionCache {
     pub fn new() -> Self {
+        let path = persist::state_dir().join(POSITIONS_FILE);
         Self {
-            state: Mutex::new(PositionState::from_saved(&load_positions())),
-            persist: true,
+            state: Mutex::new(PositionState::from_saved(&load_positions_from(&path))),
+            path: Some(path),
         }
     }
 
@@ -212,7 +215,15 @@ impl PositionCache {
     pub fn from_positions(positions: HashMap<u64, u8>) -> Self {
         Self {
             state: Mutex::new(PositionState::from_saved(&positions)),
-            persist: false,
+            path: None,
+        }
+    }
+
+    #[cfg(test)]
+    pub fn persisting_at(path: PathBuf, positions: HashMap<u64, u8>) -> Self {
+        Self {
+            state: Mutex::new(PositionState::from_saved(&positions)),
+            path: Some(path),
         }
     }
 
@@ -241,7 +252,9 @@ impl PositionCache {
         if deltas.is_empty() {
             return Vec::new();
         }
-        self.persist_positions(&state);
+        // `state` is deliberately still held across this await — see
+        // [`Self::persist_positions`].
+        self.persist_positions(state.blinds).await;
         deltas
     }
 
@@ -285,25 +298,29 @@ impl PositionCache {
             .collect()
     }
 
-    fn persist_positions(&self, state: &PositionState) {
-        if !self.persist {
+    /// Write `positions.json` on the blocking pool.
+    ///
+    /// The server runs on a current-thread runtime, so writing inline stalled
+    /// every other connection — SSE, WebSocket, and the HAP server — for the
+    /// duration of the write, the same reason RTS state writes go through
+    /// [`tokio::task::spawn_blocking`]. It is a small unsynced write, but it is
+    /// still `create_dir_all` + open + write + rename against a Pi's SD card on
+    /// the reactor thread.
+    ///
+    /// Callers hold the state lock across this await on purpose: it serializes
+    /// writers, so a slow write can never be overtaken by a newer one and leave
+    /// a stale snapshot on disk. Without it the ordering guarantee would rest on
+    /// `BlindController::operation_lock`, which this type cannot see.
+    async fn persist_positions(&self, snapshot: PositionSnapshot) {
+        let Some(path) = self.path.clone() else {
             return;
-        }
-        if let Err(e) = save_positions(&state.blinds) {
-            tracing::warn!("failed to persist positions: {e}");
+        };
+        match tokio::task::spawn_blocking(move || save_positions_to(&path, &snapshot)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("failed to persist positions: {e}"),
+            Err(e) => tracing::warn!("position persistence task failed: {e}"),
         }
     }
-}
-
-fn load_positions() -> HashMap<u64, u8> {
-    load_positions_from(&persist::state_dir().join(POSITIONS_FILE))
-}
-
-fn save_positions(positions: &[BlindPosition]) -> Result<()> {
-    let dir = persist::state_dir();
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("creating state directory {}", dir.display()))?;
-    save_positions_to(&dir.join(POSITIONS_FILE), positions)
 }
 
 fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
@@ -332,6 +349,9 @@ fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
 
 /// Persist only the estimated current positions, keyed by aid.
 fn save_positions_to(path: &Path, positions: &[BlindPosition]) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(dir)
+        .with_context(|| format!("creating state directory {}", dir.display()))?;
     let stringified: BTreeMap<String, u8> = positions
         .iter()
         .map(|position| (position.aid.to_string(), position.current))
@@ -397,6 +417,77 @@ mod tests {
                 status: STATUS_INCREASING,
             })
             .collect()
+    }
+
+    fn persisting_cache(dir: &tempfile::TempDir) -> (PositionCache, PathBuf) {
+        // A nested path also proves the parent directory gets created.
+        let path = dir.path().join("state").join(POSITIONS_FILE);
+        (
+            PositionCache::persisting_at(path.clone(), HashMap::new()),
+            path,
+        )
+    }
+
+    #[tokio::test]
+    async fn settling_writes_positions_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persisting_cache(&dir);
+
+        cache.apply_for_channel(Channel::All, 0).await;
+
+        assert_eq!(
+            load_positions_from(&path),
+            HashMap::from([(2u64, 0u8), (3, 0), (4, 0), (5, 0)])
+        );
+    }
+
+    /// Writers are serialized by the state lock, so the newest snapshot is the
+    /// one left on disk — a slow write can never be overtaken by a later one.
+    #[tokio::test]
+    async fn consecutive_settles_leave_the_last_value_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persisting_cache(&dir);
+
+        for position in [10u8, 20, 30] {
+            cache.apply_blind_current(&BLINDS[0], position).await;
+        }
+
+        assert_eq!(load_positions_from(&path).get(&2), Some(&30));
+    }
+
+    #[tokio::test]
+    async fn cache_without_a_path_writes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = PositionCache::from_positions(HashMap::new());
+
+        cache.apply_for_channel(Channel::All, 0).await;
+
+        assert!(!dir.path().join(POSITIONS_FILE).exists());
+    }
+
+    /// The write must not run on the reactor. `#[tokio::test]` is a
+    /// current-thread runtime, so a ready task can only make progress if the
+    /// persist actually yields — which it does only because the write is handed
+    /// to `spawn_blocking`. Doing it inline again would fail this.
+    #[tokio::test]
+    async fn persisting_yields_the_reactor_to_other_tasks() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, _path) = persisting_cache(&dir);
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let task = tokio::spawn(async move { flag.store(true, Ordering::SeqCst) });
+
+        cache.apply_for_channel(Channel::All, 0).await;
+
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "persist blocked the reactor: the ready task never got to run"
+        );
+        task.await.unwrap();
     }
 
     #[test]
