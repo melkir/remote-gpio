@@ -76,8 +76,8 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 }
 
 /// Returns the currently-selected channel as plain text.
-async fn handle_channel(State(state): State<Arc<AppState>>) -> String {
-    state.controller.current_selection().to_string()
+async fn handle_channel(State(state): State<Arc<AppState>>) -> &'static str {
+    state.controller.current_selection().as_str()
 }
 
 /// Streams channel selection changes as server-sent events.
@@ -88,7 +88,7 @@ async fn handle_events(
     rx.mark_changed();
     let stream = stream::unfold(rx, |mut rx| async move {
         rx.changed().await.ok()?;
-        let channel = rx.borrow_and_update().to_string();
+        let channel = rx.borrow_and_update().as_str();
         Some((Ok(Event::default().event("selection").data(channel)), rx))
     });
 
@@ -144,8 +144,10 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
     let mut rx_channel = state.controller.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
-    // Send initial channel state.
-    let selection = rx_channel.borrow().to_string();
+    // Send initial channel state. `borrow_and_update` marks the current value
+    // as seen so the first `changed()` reports a real change rather than
+    // immediately re-sending what was just written.
+    let selection = rx_channel.borrow_and_update().as_str();
     if sink.send(Message::Text(selection.into())).await.is_err() {
         return;
     }
@@ -163,7 +165,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 if result.is_err() {
                     break;
                 }
-                let selection = rx_channel.borrow().to_string();
+                let selection = rx_channel.borrow_and_update().as_str();
                 if sink.send(Message::Text(selection.into())).await.is_err() {
                     break;
                 }

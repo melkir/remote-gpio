@@ -14,9 +14,9 @@ use crate::hap::runtime::{
 use crate::homekit::accessory_db::{
     self, BlindAccessory, IID_CURRENT_POSITION, IID_POSITION_STATE, IID_TARGET_POSITION,
 };
-use crate::homekit::characteristic::{position_for_aid, HomeKitCharacteristic};
+use crate::homekit::characteristic::HomeKitCharacteristic;
 use crate::homekit::target_writes::{plan_target_writes, PendingTargetWrite};
-use crate::positioning::state::{BlindPosition, PositionDelta, BLINDS};
+use crate::positioning::state::{position_for_aid, BlindPosition, PositionDelta, BLINDS};
 
 pub struct SomfyHapApp {
     controller: Arc<BlindController>,

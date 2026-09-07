@@ -1,28 +1,24 @@
 use anyhow::Result;
 use std::sync::Arc;
 use std::sync::Mutex as StdMutex;
-use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
 use crate::core::{Channel, Command};
 #[cfg(test)]
 use crate::driver::ProtocolOperation;
-use crate::driver::SelectedChannelRx;
+use crate::driver::Selection;
 
 #[derive(Debug)]
 pub(crate) struct FakeDriver {
-    sender: Sender<Channel>,
-    selected_rx: SelectedChannelRx,
+    selection: Selection,
     transport: FakeTransport,
     execute_lock: Mutex<()>,
 }
 
 impl FakeDriver {
     pub(super) fn new(selected_channel: Channel) -> Self {
-        let (sender, selected_rx) = watch::channel(selected_channel);
         Self {
-            sender,
-            selected_rx,
+            selection: Selection::new(selected_channel),
             transport: FakeTransport::new(),
             execute_lock: Mutex::new(()),
         }
@@ -35,11 +31,11 @@ impl FakeDriver {
 
     pub(super) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
-        let target = channel.unwrap_or_else(|| self.selected_channel());
+        let target = channel.unwrap_or_else(|| self.selection.get());
         match command {
             Command::Select => {
-                let channel = channel.unwrap_or_else(|| self.selected_channel().next());
-                self.sender.send(channel)?;
+                let channel = channel.unwrap_or_else(|| self.selection.get().next());
+                self.selection.set(channel);
                 self.transport.record_selection(channel).await;
             }
             Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
@@ -55,12 +51,8 @@ impl FakeDriver {
         Ok(())
     }
 
-    pub(super) fn selected_channel(&self) -> Channel {
-        *self.selected_rx.borrow()
-    }
-
-    pub(super) fn subscribe_selected_channel(&self) -> SelectedChannelRx {
-        self.selected_rx.clone()
+    pub(super) fn selection(&self) -> &Selection {
+        &self.selection
     }
 }
 
@@ -121,7 +113,7 @@ mod tests {
     #[tokio::test]
     async fn execute_select_updates_and_broadcasts_selection() {
         let driver = FakeDriver::new(Channel::L1);
-        let mut rx = driver.subscribe_selected_channel();
+        let mut rx = driver.selection().subscribe();
 
         driver
             .execute(Command::Select, Some(Channel::L3))
@@ -130,7 +122,7 @@ mod tests {
 
         rx.changed().await.unwrap();
         assert_eq!(*rx.borrow_and_update(), Channel::L3);
-        assert_eq!(driver.selected_channel(), Channel::L3);
+        assert_eq!(driver.selection().get(), Channel::L3);
         assert_eq!(
             driver.operations(),
             vec![ProtocolOperation::TelisSelection(Channel::L3)]
@@ -140,11 +132,11 @@ mod tests {
     #[tokio::test]
     async fn execute_on_does_not_mutate_or_broadcast_selection() {
         let driver = FakeDriver::new(Channel::L1);
-        let rx = driver.subscribe_selected_channel();
+        let rx = driver.selection().subscribe();
 
         driver.execute_on(Channel::L3, Command::Up).await.unwrap();
 
-        assert_eq!(driver.selected_channel(), Channel::L1);
+        assert_eq!(driver.selection().get(), Channel::L1);
         assert!(!rx.has_changed().unwrap());
         assert_eq!(
             driver.operations(),

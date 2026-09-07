@@ -20,6 +20,39 @@ const CMD_WVNEW: u32 = 53;
 
 const PI_OUTPUT: u32 = 1;
 
+/// Bytes each pulse occupies in a `WVAG` extension: on-mask, off-mask, delay.
+const PULSE_WIRE_LEN: usize = 12;
+
+/// A pulse train already serialized into the `WVAG` extension payload.
+///
+/// Encoding happens once when the waveform is built rather than on every
+/// `wave_add_generic`, so a retry after a pigpiod reconnect reuses the same
+/// buffer instead of rebuilding several kilobytes.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct EncodedWave {
+    pulse_count: u32,
+    bytes: Vec<u8>,
+}
+
+impl EncodedWave {
+    pub fn new(pulses: &[GpioPulse]) -> Self {
+        let mut bytes = Vec::with_capacity(pulses.len() * PULSE_WIRE_LEN);
+        for pulse in pulses {
+            bytes.extend_from_slice(&pulse.gpio_on.to_le_bytes());
+            bytes.extend_from_slice(&pulse.gpio_off.to_le_bytes());
+            bytes.extend_from_slice(&pulse.us_delay.to_le_bytes());
+        }
+        Self {
+            pulse_count: pulses.len() as u32,
+            bytes,
+        }
+    }
+
+    pub fn pulse_count(&self) -> usize {
+        self.pulse_count as usize
+    }
+}
+
 #[derive(Debug)]
 pub struct PigpioClient<S> {
     stream: S,
@@ -70,14 +103,8 @@ impl<S: Read + Write> PigpioClient<S> {
         self.command(CMD_WVNEW, 0, 0).map(|_| ())
     }
 
-    pub fn wave_add_generic(&mut self, pulses: &[GpioPulse]) -> Result<()> {
-        let mut extension = Vec::with_capacity(pulses.len() * 12);
-        for pulse in pulses {
-            extension.extend_from_slice(&pulse.gpio_on.to_le_bytes());
-            extension.extend_from_slice(&pulse.gpio_off.to_le_bytes());
-            extension.extend_from_slice(&pulse.us_delay.to_le_bytes());
-        }
-        self.command_ext(CMD_WVAG, pulses.len() as u32, 0, &extension)
+    pub fn wave_add_generic(&mut self, wave: &EncodedWave) -> Result<()> {
+        self.command_ext(CMD_WVAG, wave.pulse_count, 0, &wave.bytes)
             .map(|_| ())
     }
 
@@ -314,7 +341,7 @@ mod tests {
         let mut client = PigpioClient::new(stream);
 
         client
-            .wave_add_generic(&[
+            .wave_add_generic(&EncodedWave::new(&[
                 GpioPulse {
                     gpio_on: 1,
                     gpio_off: 0,
@@ -325,7 +352,7 @@ mod tests {
                     gpio_off: 1,
                     us_delay: 640,
                 },
-            ])
+            ]))
             .unwrap();
 
         let stream = client.into_inner();
@@ -346,11 +373,11 @@ mod tests {
         let mut client = PigpioClient::new(stream);
 
         let err = client
-            .wave_add_generic(&[GpioPulse {
+            .wave_add_generic(&EncodedWave::new(&[GpioPulse {
                 gpio_on: 1,
                 gpio_off: 0,
                 us_delay: 640,
-            }])
+            }]))
             .unwrap_err();
         let message = err.to_string();
         assert!(message.contains("WVAG"), "{message}");

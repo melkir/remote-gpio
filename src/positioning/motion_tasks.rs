@@ -51,9 +51,8 @@ impl MotionTasks {
     }
 
     pub async fn cancel_channel(&self, channel: Channel) {
-        let aids = aids_for_channel(channel);
         let mut tasks = self.tasks.lock().await;
-        for aid in aids {
+        for aid in aids_for_channel(channel) {
             Self::cancel_state(tasks.get_mut(&aid));
         }
     }

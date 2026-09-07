@@ -2,10 +2,14 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "cn:build": "cn build --content 'src/**/*.{ts,tsx}' -o src/lib/cn-tables.ts",
+    "predev": "bun run cn:build",
     "dev": "vite",
+    "prebuild": "bun run cn:build",
     "build": "vite build",
     "preview": "vite preview",
     "lint": "oxlint src/",
+    "pretypecheck": "bun run cn:build",
     "typecheck": "tsgo --noEmit",
     "format": "oxfmt --write src/",
     "format:check": "oxfmt --check src/"
@@ -16,10 +20,9 @@
     "@tailwindcss/vite": "^4.2.2",
     "@uidotdev/usehooks": "^2.4.1",
     "class-variance-authority": "^0.7.1",
-    "clsx": "^2.1.1",
+    "cn": "^0.2.6",
     "lucide-preact": "^1.11.0",
     "preact": "^10.29.1",
-    "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
     "use-haptic": "^1.1.13"
   },

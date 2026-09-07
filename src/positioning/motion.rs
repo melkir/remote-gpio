@@ -38,14 +38,8 @@ impl From<PositioningOptions> for MotionTimings {
 
 impl MotionTimings {
     pub fn for_channel(&self, channel: Channel) -> BlindMotionTiming {
-        match channel {
-            Channel::L1 => self.individual[0],
-            Channel::L2 => self.individual[1],
-            Channel::L3 => self.individual[2],
-            Channel::L4 => self.individual[3],
-            // ALL has no single blind; use L1 timing (same as the pre-array default).
-            Channel::All => self.individual[0],
-        }
+        // ALL has no single blind; use L1 timing (same as the pre-array default).
+        self.individual[channel.individual_index().unwrap_or(0)]
     }
 }
 
@@ -176,6 +170,49 @@ mod tests {
             open: Duration::from_millis(open_ms),
             close: Duration::from_millis(close_ms),
             slack: Duration::from_millis(slack_ms),
+        }
+    }
+
+    /// `for_channel` indexes rather than matching per variant, so a shifted
+    /// index would quietly apply another blind's travel time.
+    #[test]
+    fn for_channel_selects_the_matching_blind_timing() {
+        let timings = MotionTimings::from(PositioningOptions {
+            l1: BlindTimingOptions {
+                open_ms: 1_000,
+                close_ms: 1_100,
+                slack_ms: 0,
+            },
+            l2: BlindTimingOptions {
+                open_ms: 2_000,
+                close_ms: 2_200,
+                slack_ms: 0,
+            },
+            l3: BlindTimingOptions {
+                open_ms: 3_000,
+                close_ms: 3_300,
+                slack_ms: 0,
+            },
+            l4: BlindTimingOptions {
+                open_ms: 4_000,
+                close_ms: 4_400,
+                slack_ms: 0,
+            },
+        });
+
+        for (channel, open_ms) in [
+            (Channel::L1, 1_000),
+            (Channel::L2, 2_000),
+            (Channel::L3, 3_000),
+            (Channel::L4, 4_000),
+            // ALL has no blind of its own and falls back to L1.
+            (Channel::All, 1_000),
+        ] {
+            assert_eq!(
+                timings.for_channel(channel).open,
+                Duration::from_millis(open_ms),
+                "{channel}"
+            );
         }
     }
 

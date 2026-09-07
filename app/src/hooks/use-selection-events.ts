@@ -1,4 +1,4 @@
-import { signal } from '@preact/signals';
+import { useSignal } from '@preact/signals';
 import { useEffect, useRef } from 'preact/hooks';
 
 export enum ReadyState {
@@ -16,7 +16,9 @@ type Options = {
 };
 
 export function useSelectionEvents(url: string, options: Options = {}) {
-  const readyState = useRef(signal(ReadyState.CLOSED)).current;
+  // `useSignal` creates the signal once; `useRef(signal(...))` re-evaluated
+  // `signal(...)` on every render and discarded the result.
+  const readyState = useSignal(ReadyState.CLOSED);
   const optsRef = useRef(options);
   optsRef.current = options;
 

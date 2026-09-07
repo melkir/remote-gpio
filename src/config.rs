@@ -139,6 +139,24 @@ pub struct PositioningOptions {
 }
 
 impl PositioningOptions {
+    /// Config keys for the per-blind timing tables, in `L1`–`L4` order.
+    const TIMING_KEYS: [&'static str; 4] = [
+        "positioning.l1",
+        "positioning.l2",
+        "positioning.l3",
+        "positioning.l4",
+    ];
+
+    /// Per-blind timings in `L1`–`L4` order — the one ordering every other
+    /// accessor here derives from, and the same index space as
+    /// [`Channel::individual_index`].
+    pub(crate) fn individual_timings(&self) -> [&BlindTimingOptions; 4] {
+        [&self.l1, &self.l2, &self.l3, &self.l4]
+    }
+
+    /// Matches per variant rather than indexing: the arms make the `L1`-`L4`
+    /// ordering structurally impossible to get wrong, and this is config
+    /// parsing, so there is nothing to win by being clever.
     pub(crate) fn timing_mut(&mut self, channel: Channel) -> Option<&mut BlindTimingOptions> {
         match channel {
             Channel::L1 => Some(&mut self.l1),
@@ -150,16 +168,8 @@ impl PositioningOptions {
     }
 
     fn named_timings(&self) -> [(&'static str, &BlindTimingOptions); 4] {
-        [
-            ("positioning.l1", &self.l1),
-            ("positioning.l2", &self.l2),
-            ("positioning.l3", &self.l3),
-            ("positioning.l4", &self.l4),
-        ]
-    }
-
-    pub(crate) fn individual_timings(&self) -> [&BlindTimingOptions; 4] {
-        [&self.l1, &self.l2, &self.l3, &self.l4]
+        let timings = self.individual_timings();
+        std::array::from_fn(|index| (Self::TIMING_KEYS[index], timings[index]))
     }
 }
 
@@ -324,6 +334,50 @@ fn validate_gpio_pins(pins: &[(&str, u8)]) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `timing_mut`, `individual_timings` and `named_timings` all index the same
+    /// `L1`-`L4` ordering, so a mis-ordered accessor would silently edit or
+    /// report the wrong blind.
+    #[test]
+    fn positioning_accessors_agree_on_channel_order() {
+        let mut options = PositioningOptions::default();
+        for (index, channel) in Channel::INDIVIDUALS.into_iter().enumerate() {
+            let timing = options.timing_mut(channel).unwrap();
+            timing.open_ms = 1_000 + index as u64;
+            timing.close_ms = 2_000 + index as u64;
+        }
+
+        assert_eq!(options.l1.open_ms, 1_000);
+        assert_eq!(options.l2.open_ms, 1_001);
+        assert_eq!(options.l3.open_ms, 1_002);
+        assert_eq!(options.l4.open_ms, 1_003);
+
+        let individual = options.individual_timings();
+        for (index, timing) in individual.into_iter().enumerate() {
+            assert_eq!(timing.open_ms, 1_000 + index as u64);
+        }
+
+        let named = options.named_timings();
+        assert_eq!(
+            named.map(|(name, _)| name),
+            [
+                "positioning.l1",
+                "positioning.l2",
+                "positioning.l3",
+                "positioning.l4"
+            ]
+        );
+        for (index, (_, timing)) in named.into_iter().enumerate() {
+            assert_eq!(timing.close_ms, 2_000 + index as u64);
+        }
+    }
+
+    #[test]
+    fn timing_mut_has_no_entry_for_the_group_channel() {
+        assert!(PositioningOptions::default()
+            .timing_mut(Channel::All)
+            .is_none());
+    }
 
     #[test]
     fn missing_homekit_defaults_disabled() {

@@ -6,6 +6,9 @@ use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::core::Channel;
@@ -60,18 +63,27 @@ pub fn find_blind_for_channel(channel: Channel) -> Option<&'static Blind> {
     BLINDS.iter().find(|b| b.channel == channel)
 }
 
-pub fn aids_for_channel(channel: Channel) -> Vec<u64> {
+/// Accessories a channel addresses: every blind for `ALL`, otherwise the single
+/// mapped blind (empty when the channel has no accessory).
+///
+/// Borrows from the compile-time [`BLINDS`] table, so callers that only iterate
+/// never allocate.
+pub fn blinds_for_channel(channel: Channel) -> &'static [Blind] {
     match channel {
-        Channel::All => BLINDS.iter().map(|blind| blind.aid).collect(),
-        _ => find_blind_for_channel(channel)
-            .map(|blind| vec![blind.aid])
-            .unwrap_or_default(),
+        Channel::All => BLINDS,
+        _ => match find_blind_for_channel(channel) {
+            Some(blind) => std::slice::from_ref(blind),
+            None => &[],
+        },
     }
+}
+
+pub fn aids_for_channel(channel: Channel) -> impl Iterator<Item = u64> {
+    blinds_for_channel(channel).iter().map(|blind| blind.aid)
 }
 
 pub fn target_positions(channel: Channel, position: u8) -> Vec<(u64, u8)> {
     aids_for_channel(channel)
-        .into_iter()
         .map(|aid| (aid, position))
         .collect()
 }
@@ -94,6 +106,21 @@ impl BlindPosition {
             status: STATUS_STOPPED,
         }
     }
+}
+
+/// Estimated state of every blind, in [`BLINDS`] order.
+///
+/// The accessory set is fixed at compile time, so a snapshot is a plain `Copy`
+/// array — passing one around never touches the heap.
+pub type PositionSnapshot = [BlindPosition; BLINDS.len()];
+
+/// Look one accessory up in a snapshot, falling back to the default estimate.
+pub fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
+    positions
+        .iter()
+        .copied()
+        .find(|position| position.aid == aid)
+        .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -132,7 +159,7 @@ impl PositionDelta {
 /// than a map: every lookup is one scan of four `Copy` structs.
 #[derive(Clone, Debug)]
 pub struct PositionState {
-    blinds: [BlindPosition; BLINDS.len()],
+    blinds: PositionSnapshot,
 }
 
 impl PositionState {
@@ -173,14 +200,20 @@ impl PositionState {
 #[derive(Debug)]
 pub struct PositionCache {
     state: Mutex<PositionState>,
-    persist: bool,
+    /// Where `positions.json` is written. Resolved once at construction rather
+    /// than per save, and `None` disables persistence entirely for tests.
+    ///
+    /// Held behind an `Arc` so handing the path to the blocking write is a
+    /// refcount bump rather than a fresh `PathBuf` per save.
+    path: Option<Arc<Path>>,
 }
 
 impl PositionCache {
     pub fn new() -> Self {
+        let path: Arc<Path> = persist::state_dir().join(POSITIONS_FILE).into();
         Self {
-            state: Mutex::new(PositionState::from_saved(&load_positions())),
-            persist: true,
+            state: Mutex::new(PositionState::from_saved(&load_positions_from(&path))),
+            path: Some(path),
         }
     }
 
@@ -188,43 +221,46 @@ impl PositionCache {
     pub fn from_positions(positions: HashMap<u64, u8>) -> Self {
         Self {
             state: Mutex::new(PositionState::from_saved(&positions)),
-            persist: false,
+            path: None,
         }
     }
 
-    pub async fn snapshot(&self) -> Vec<BlindPosition> {
-        self.state.lock().await.blinds.to_vec()
+    #[cfg(test)]
+    pub fn persisting_at(path: PathBuf, positions: HashMap<u64, u8>) -> Self {
+        Self {
+            state: Mutex::new(PositionState::from_saved(&positions)),
+            path: Some(path.into()),
+        }
     }
 
-    pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {
-        if matches!(channel, Channel::All) {
-            return self.apply_all_current(pos).await;
-        }
-        let Some(blind) = find_blind_for_channel(channel) else {
-            return Vec::new();
-        };
-        self.apply_blind_current(blind, pos).await
+    pub async fn snapshot(&self) -> PositionSnapshot {
+        self.state.lock().await.blinds
+    }
+
+    /// Snap every blind the channel addresses to `position`.
+    ///
+    /// `ALL` and a single channel differ only in how many blinds
+    /// [`blinds_for_channel`] yields, so both go through one path.
+    pub async fn apply_for_channel(&self, channel: Channel, position: u8) -> Vec<PositionDelta> {
+        self.settle_all(blinds_for_channel(channel), position).await
     }
 
     pub async fn apply_blind_current(&self, blind: &Blind, position: u8) -> Vec<PositionDelta> {
-        let mut state = self.state.lock().await;
-        let Some(delta) = state.settle(blind.aid, position) else {
-            return Vec::new();
-        };
-        self.persist_positions(&state);
-        vec![delta]
+        self.settle_all(std::slice::from_ref(blind), position).await
     }
 
-    pub async fn apply_all_current(&self, position: u8) -> Vec<PositionDelta> {
+    async fn settle_all(&self, blinds: &[Blind], position: u8) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
-        let deltas: Vec<PositionDelta> = BLINDS
+        let deltas: Vec<PositionDelta> = blinds
             .iter()
             .filter_map(|blind| state.settle(blind.aid, position))
             .collect();
         if deltas.is_empty() {
             return Vec::new();
         }
-        self.persist_positions(&state);
+        // `state` is deliberately still held across this await — see
+        // [`Self::persist_positions`].
+        self.persist_positions(state.blinds).await;
         deltas
     }
 
@@ -252,7 +288,6 @@ impl PositionCache {
     pub async fn stop_channel(&self, channel: Channel) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
         aids_for_channel(channel)
-            .into_iter()
             .filter_map(|aid| {
                 let position = state.get_mut(aid)?;
                 if position.target == position.current && position.status == STATUS_STOPPED {
@@ -269,25 +304,29 @@ impl PositionCache {
             .collect()
     }
 
-    fn persist_positions(&self, state: &PositionState) {
-        if !self.persist {
+    /// Write `positions.json` on the blocking pool.
+    ///
+    /// The server runs on a current-thread runtime, so writing inline stalled
+    /// every other connection — SSE, WebSocket, and the HAP server — for the
+    /// duration of the write, the same reason RTS state writes go through
+    /// [`tokio::task::spawn_blocking`]. It is a small unsynced write, but it is
+    /// still `create_dir_all` + open + write + rename against a Pi's SD card on
+    /// the reactor thread.
+    ///
+    /// Callers hold the state lock across this await on purpose: it serializes
+    /// writers, so a slow write can never be overtaken by a newer one and leave
+    /// a stale snapshot on disk. Without it the ordering guarantee would rest on
+    /// `BlindController::operation_lock`, which this type cannot see.
+    async fn persist_positions(&self, snapshot: PositionSnapshot) {
+        let Some(path) = self.path.as_ref().map(Arc::clone) else {
             return;
-        }
-        if let Err(e) = save_positions(&state.blinds) {
-            tracing::warn!("failed to persist positions: {e}");
+        };
+        match tokio::task::spawn_blocking(move || save_positions_to(&path, &snapshot)).await {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => tracing::warn!("failed to persist positions: {e}"),
+            Err(e) => tracing::warn!("position persistence task failed: {e}"),
         }
     }
-}
-
-fn load_positions() -> HashMap<u64, u8> {
-    load_positions_from(&persist::state_dir().join(POSITIONS_FILE))
-}
-
-fn save_positions(positions: &[BlindPosition]) -> Result<()> {
-    let dir = persist::state_dir();
-    fs::create_dir_all(&dir)
-        .with_context(|| format!("creating state directory {}", dir.display()))?;
-    save_positions_to(&dir.join(POSITIONS_FILE), positions)
 }
 
 fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
@@ -316,6 +355,9 @@ fn load_positions_from(path: &Path) -> HashMap<u64, u8> {
 
 /// Persist only the estimated current positions, keyed by aid.
 fn save_positions_to(path: &Path, positions: &[BlindPosition]) -> Result<()> {
+    let dir = path.parent().unwrap_or(Path::new("."));
+    fs::create_dir_all(dir)
+        .with_context(|| format!("creating state directory {}", dir.display()))?;
     let stringified: BTreeMap<String, u8> = positions
         .iter()
         .map(|position| (position.aid.to_string(), position.current))
@@ -383,6 +425,67 @@ mod tests {
             .collect()
     }
 
+    fn persisting_cache(dir: &tempfile::TempDir) -> (PositionCache, PathBuf) {
+        // A nested path also proves the parent directory gets created.
+        let path = dir.path().join("state").join(POSITIONS_FILE);
+        (
+            PositionCache::persisting_at(path.clone(), HashMap::new()),
+            path,
+        )
+    }
+
+    #[tokio::test]
+    async fn settling_writes_positions_to_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persisting_cache(&dir);
+
+        cache.apply_for_channel(Channel::All, 0).await;
+
+        assert_eq!(
+            load_positions_from(&path),
+            HashMap::from([(2u64, 0u8), (3, 0), (4, 0), (5, 0)])
+        );
+    }
+
+    /// Writers are serialized by the state lock, so the newest snapshot is the
+    /// one left on disk — a slow write can never be overtaken by a later one.
+    #[tokio::test]
+    async fn consecutive_settles_leave_the_last_value_on_disk() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, path) = persisting_cache(&dir);
+
+        for position in [10u8, 20, 30] {
+            cache.apply_blind_current(&BLINDS[0], position).await;
+        }
+
+        assert_eq!(load_positions_from(&path).get(&2), Some(&30));
+    }
+
+    /// The write must not run on the reactor. `#[tokio::test]` is a
+    /// current-thread runtime, so a ready task can only make progress if the
+    /// persist actually yields — which it does only because the write is handed
+    /// to `spawn_blocking`. Doing it inline again would fail this.
+    #[tokio::test]
+    async fn persisting_yields_the_reactor_to_other_tasks() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cache, _path) = persisting_cache(&dir);
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let task = tokio::spawn(async move { flag.store(true, Ordering::SeqCst) });
+
+        cache.apply_for_channel(Channel::All, 0).await;
+
+        assert!(
+            ran.load(Ordering::SeqCst),
+            "persist blocked the reactor: the ready task never got to run"
+        );
+        task.await.unwrap();
+    }
+
     #[test]
     fn external_position_broadcast_produces_position_delta() {
         let delta = PositionDelta::settled(2, 0);
@@ -443,8 +546,11 @@ mod tests {
 
     #[test]
     fn aids_for_channel_maps_channel_and_all() {
-        assert_eq!(aids_for_channel(Channel::L2), vec![3]);
-        assert_eq!(aids_for_channel(Channel::All), vec![2, 3, 4, 5]);
+        assert_eq!(aids_for_channel(Channel::L2).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(
+            aids_for_channel(Channel::All).collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
     }
 
     #[test]

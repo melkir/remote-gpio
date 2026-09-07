@@ -1,4 +1,5 @@
 use anyhow::Result;
+#[cfg(test)]
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
@@ -11,8 +12,10 @@ use crate::positioning::motion::{
     plan_motion, BlindMovement, DriverStart, MotionPlan, MotionRequest, MotionTimings,
 };
 use crate::positioning::motion_tasks::MotionTasks;
+#[cfg(test)]
+use crate::positioning::state::BlindPosition;
 use crate::positioning::state::{
-    find_blind, target_positions, BlindPosition, PositionCache, PositionDelta,
+    find_blind, position_for_aid, target_positions, PositionCache, PositionDelta, PositionSnapshot,
 };
 
 /// Driver-agnostic control of channel selection, button presses, and position events.
@@ -111,18 +114,13 @@ impl BlindController {
         let _ = self.position_tx.send(Arc::from(deltas));
     }
 
-    pub async fn position_snapshot(&self) -> Vec<BlindPosition> {
+    pub async fn position_snapshot(&self) -> PositionSnapshot {
         self.positions.snapshot().await
     }
 
     #[cfg(test)]
     pub async fn position_for_aid(&self, aid: u64) -> BlindPosition {
-        self.positions
-            .snapshot()
-            .await
-            .into_iter()
-            .find(|position| position.aid == aid)
-            .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
+        position_for_aid(&self.positions.snapshot().await, aid)
     }
 
     pub async fn set_target_for_channel(
@@ -157,9 +155,9 @@ impl BlindController {
     }
 
     async fn build_motion_requests(&self, targets: Vec<(u64, u8)>) -> Vec<MotionRequest> {
-        let snapshot = self.positions.snapshot().await;
-        let positions: HashMap<u64, BlindPosition> =
-            snapshot.into_iter().map(|p| (p.aid, p)).collect();
+        // Four accessories, fixed at compile time: a linear scan of the snapshot
+        // beats building a map to look up at most four entries.
+        let positions = self.positions.snapshot().await;
 
         let mut requests = Vec::with_capacity(targets.len());
         for (aid, target) in targets {
@@ -168,10 +166,7 @@ impl BlindController {
                 continue;
             };
             let target = target.min(100);
-            let position = positions
-                .get(&aid)
-                .copied()
-                .unwrap_or_else(|| BlindPosition::default_for_aid(aid));
+            let position = position_for_aid(&positions, aid);
             if position.target == target {
                 continue;
             }

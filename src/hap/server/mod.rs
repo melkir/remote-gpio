@@ -35,6 +35,12 @@ where
                 continue;
             }
         };
+        // Responses and EVENT pushes are single small writes; Nagle would sit
+        // on them waiting for an ACK that only arrives once the controller has
+        // seen the response.
+        if let Err(e) = stream.set_nodelay(true) {
+            tracing::warn!("hap: could not set TCP_NODELAY on {peer}: {e}");
+        }
         let ctx = ctx.clone();
         tokio::spawn(async move {
             if let Err(e) = handle_connection(stream, ctx).await {

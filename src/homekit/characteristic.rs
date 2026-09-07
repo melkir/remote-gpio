@@ -5,7 +5,7 @@ use crate::homekit::accessory_db::{
     BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE, IID_IDENTIFY,
     IID_MANUFACTURER, IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL, IID_TARGET_POSITION,
 };
-use crate::positioning::state::{find_blind, Blind, BlindPosition};
+use crate::positioning::state::{find_blind, position_for_aid, Blind, BlindPosition};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum BridgeCharacteristic {
@@ -130,14 +130,6 @@ impl HomeKitCharacteristic {
             HapStatus::ResourceDoesNotExist
         }
     }
-}
-
-pub(crate) fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
-    positions
-        .iter()
-        .copied()
-        .find(|position| position.aid == aid)
-        .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
 }
 
 fn bridge_characteristic(iid: u64) -> Option<BridgeCharacteristic> {

@@ -26,7 +26,7 @@ somfy homekit --help
 
 - **Port `5010`** — dedicated TCP listener. Kept separate from the loopback HTTP listener (`127.0.0.1:5002`) because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
 - **mDNS** — `_hap._tcp.local.` advertised via `mdns-sd`. TXT record carries `id`, `c#`, `s#`, `sf`, `ci=2` (Bridge), `md`, `pv=1.1`. The `Announcement` guard's `Drop` impl unregisters and shuts the daemon's worker threads.
-- **Accessory database** — Bridge (`aid=1`) plus 5 bridged `WindowCovering` accessories (`aid=2..6`), one per Somfy LED selector (`L1`–`L4`, `ALL`). IIDs are stable across runs; `config_number` must bump if the schema ever changes.
+- **Accessory database** — Bridge (`aid=1`) plus 4 bridged `WindowCovering` accessories (`aid=2..5`), one per Somfy LED selector (`L1`–`L4`). `ALL` is not an accessory: it is a fan-out that addresses all four (see `blinds_for_channel`). IIDs are stable across runs; `config_number` must bump if the schema ever changes.
 
 ## Persistent state
 
@@ -47,13 +47,21 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 | SRP-6a / SHA-512    | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects.            |
 | Pair-Setup (M1–M6)  | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs.                                              |
 | Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                               |
-| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024.                                             |
+| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024. Each frame is staged contiguously and written once; the socket is unbuffered, so a separate 2-byte length write would lead a segment Nagle holds. |
 | HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser; `http::StatusCode` owns response status phrases. |
 | App wiring          | `src/homekit/mod.rs` wires mDNS advertisement, HAP state, controller position events, and the generic HAP server.                                      |
 
 ## Connection lifecycle
 
 `src/hap/server/mod.rs::handle_connection` runs a single `tokio::select!`:
+
+> **Reads off this socket must be cancellation-safe.** The request-reading branch
+> races the event branch, so its future is dropped whenever an EVENT push wins —
+> possibly mid-frame. `EncryptedReader` therefore accumulates wire bytes in a
+> struct field using `read`, which guarantees nothing was consumed when it is
+> cancelled. `read_exact` is **not** safe here: it discards a partial fill, which
+> desyncs the stream and makes every later frame fail to decrypt. `fill_frame`
+> also stops at the current frame's boundary so pipelined frames stay separate.
 
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.
