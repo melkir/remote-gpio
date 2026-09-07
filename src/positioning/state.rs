@@ -5,7 +5,10 @@
 use anyhow::{Context, Result};
 use std::collections::{BTreeMap, HashMap};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
+use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use crate::core::Channel;
@@ -199,12 +202,15 @@ pub struct PositionCache {
     state: Mutex<PositionState>,
     /// Where `positions.json` is written. Resolved once at construction rather
     /// than per save, and `None` disables persistence entirely for tests.
-    path: Option<PathBuf>,
+    ///
+    /// Held behind an `Arc` so handing the path to the blocking write is a
+    /// refcount bump rather than a fresh `PathBuf` per save.
+    path: Option<Arc<Path>>,
 }
 
 impl PositionCache {
     pub fn new() -> Self {
-        let path = persist::state_dir().join(POSITIONS_FILE);
+        let path: Arc<Path> = persist::state_dir().join(POSITIONS_FILE).into();
         Self {
             state: Mutex::new(PositionState::from_saved(&load_positions_from(&path))),
             path: Some(path),
@@ -223,7 +229,7 @@ impl PositionCache {
     pub fn persisting_at(path: PathBuf, positions: HashMap<u64, u8>) -> Self {
         Self {
             state: Mutex::new(PositionState::from_saved(&positions)),
-            path: Some(path),
+            path: Some(path.into()),
         }
     }
 
@@ -312,7 +318,7 @@ impl PositionCache {
     /// a stale snapshot on disk. Without it the ordering guarantee would rest on
     /// `BlindController::operation_lock`, which this type cannot see.
     async fn persist_positions(&self, snapshot: PositionSnapshot) {
-        let Some(path) = self.path.clone() else {
+        let Some(path) = self.path.as_ref().map(Arc::clone) else {
             return;
         };
         match tokio::task::spawn_blocking(move || save_positions_to(&path, &snapshot)).await {
@@ -453,16 +459,6 @@ mod tests {
         }
 
         assert_eq!(load_positions_from(&path).get(&2), Some(&30));
-    }
-
-    #[tokio::test]
-    async fn cache_without_a_path_writes_nothing() {
-        let dir = tempfile::tempdir().unwrap();
-        let cache = PositionCache::from_positions(HashMap::new());
-
-        cache.apply_for_channel(Channel::All, 0).await;
-
-        assert!(!dir.path().join(POSITIONS_FILE).exists());
     }
 
     /// The write must not run on the reactor. `#[tokio::test]` is a

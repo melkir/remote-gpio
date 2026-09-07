@@ -110,9 +110,12 @@ export function App() {
       {/* Connection status indicator */}
       <div
         role="status"
-        aria-label={status.label}
         className={cn('absolute top-0 h-4 w-72 rounded-b-full bg-accent', status.className)}
-      />
+      >
+        {/* Live regions announce content changes, not `aria-label` changes, so
+            the state has to be readable text rather than an attribute. */}
+        <span className="sr-only">{status.label}</span>
+      </div>
 
       {/* Up, Stop, Down */}
       {[

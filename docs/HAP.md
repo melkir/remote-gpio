@@ -63,7 +63,6 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 > desyncs the stream and makes every later frame fail to decrypt. `fill_frame`
 > also stops at the current frame's boundary so pipelined frames stay separate.
 
-
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.
 3. **Event push** — every connection holds a per-socket `HashSet<(aid, iid)>` of subscribed characteristics and a `broadcast::Receiver<Vec<CharacteristicEvent>>`. The controller publishes position deltas only on `BlindController::subscribe_positions` (never on the HAP stack). A bridge task started at `homekit::start` subscribes there, maps deltas to characteristic events, and forwards them on the HAP runtime broadcast channel; connections fan matching subscriptions out as `EVENT/1.0` frames over the same encrypted writer. If that subscription lags, the bridge warns and pushes a full snapshot resync so iOS does not miss `CurrentPosition` / `TargetPosition` / `PositionState` updates.

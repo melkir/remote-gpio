@@ -154,13 +154,17 @@ impl PositioningOptions {
         [&self.l1, &self.l2, &self.l3, &self.l4]
     }
 
-    fn individual_timings_mut(&mut self) -> [&mut BlindTimingOptions; 4] {
-        [&mut self.l1, &mut self.l2, &mut self.l3, &mut self.l4]
-    }
-
+    /// Matches per variant rather than indexing: the arms make the `L1`-`L4`
+    /// ordering structurally impossible to get wrong, and this is config
+    /// parsing, so there is nothing to win by being clever.
     pub(crate) fn timing_mut(&mut self, channel: Channel) -> Option<&mut BlindTimingOptions> {
-        let index = channel.individual_index()?;
-        self.individual_timings_mut().into_iter().nth(index)
+        match channel {
+            Channel::L1 => Some(&mut self.l1),
+            Channel::L2 => Some(&mut self.l2),
+            Channel::L3 => Some(&mut self.l3),
+            Channel::L4 => Some(&mut self.l4),
+            Channel::All => None,
+        }
     }
 
     fn named_timings(&self) -> [(&'static str, &BlindTimingOptions); 4] {
