@@ -112,7 +112,7 @@ The system has no motor position sensors. Position is an application-level infer
 
 ### Driver Boundary
 
-The driver router is the hardware seam. Every driver exposes the same command operations and selected-channel stream, but each driver has different physical constraints:
+The driver router is the hardware seam. Every driver exposes the same command operations and selected-channel stream — the stream itself is one shared `driver::Selection` (the `watch` pair plus its accessors) rather than a per-driver copy — but each driver has different physical constraints:
 
 | Driver  | Architecture Role                                                           | State Source              |
 | ------- | --------------------------------------------------------------------------- | ------------------------- |

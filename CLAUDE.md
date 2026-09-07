@@ -27,7 +27,8 @@ Operator CLI is defined in `src/cli.rs` — prefer `somfy --help` over duplicati
 - `src/cli.rs` — clap subcommands. Default is `serve`. Per-command logic under `src/commands/`.
 - `src/config.rs` — TOML config (`/etc/somfy/config.toml`): selects the driver and supplies shared GPIO, Telis, and RTS options. `validate()` is the single gate.
 - `src/server.rs` — Axum routes (`/events`, `/ws`, `/command`, `/channel`, embedded static files).
-- `src/controller.rs` — `BlindController` state engine; broadcasts the selected `Channel` via `watch::channel`.
+- `src/controller/mod.rs` — `BlindController` state engine; broadcasts the selected `Channel` via the shared `driver::Selection` watch pair.
+- `src/positioning/` — estimated blind positions (`state`, a fixed `[BlindPosition; 4]` snapshot persisted to `positions.json`), percentage-travel planning (`motion`), and in-flight timed-motion handles (`motion_tasks`).
 - `src/service/` — command wire validation and UI press dispatch for HTTP/WS/CLI.
 - `src/core.rs` — shared `Channel` and `Command` types.
 - `src/driver/` — driver abstraction. `CommandRouter` / `DriverExecutor` dispatch to one of `FakeDriver` / `TelisDriver` / `RtsDriver` (all three are always compiled into the binary; selection is purely runtime via config). `Prog` / `ProgLong` are RTS-only (RF pairing); the Telis driver rejects them.
