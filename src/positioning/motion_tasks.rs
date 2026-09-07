@@ -19,14 +19,16 @@ struct MotionTaskState {
 }
 
 impl MotionTasks {
-    pub async fn replace(&self, aid: u64, handle: Option<tokio::task::JoinHandle<()>>) -> u64 {
+    /// Open a new motion for `aid`: abort whatever was still running and return
+    /// the generation token the caller passes back to [`Self::attach_handle`]
+    /// once its task is spawned.
+    pub async fn begin(&self, aid: u64) -> u64 {
         let mut tasks = self.tasks.lock().await;
         let state = tasks.entry(aid).or_default();
         state.generation = state.generation.wrapping_add(1);
         if let Some(old) = state.handle.take() {
             old.abort();
         }
-        state.handle = handle;
         state.generation
     }
 

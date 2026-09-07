@@ -114,20 +114,24 @@ where
     A: HapAccessoryApp,
     S: HapStore,
 {
-    match (req.method.as_str(), req.path_only()) {
+    let path = req.path_only();
+
+    // Pair-setup and pair-verify are the only endpoints reachable before the
+    // session is encrypted; everything else — including paths this server does
+    // not serve — is rejected here rather than per arm, so a new route cannot be
+    // added without a session check.
+    if !encrypted && !matches!(path, "/pair-setup" | "/pair-verify") {
+        return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
+    }
+
+    match (req.method.as_str(), path) {
         ("POST", "/pair-setup") => handle_pair_setup(ctx, conn, &req.body).await,
         ("POST", "/pair-verify") => handle_pair_verify(ctx, conn, &req.body).await,
         ("GET", "/accessories") => {
-            if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
-            }
             let body = serde_json::to_vec(&ctx.app.accessories().await?)?;
             Ok(RequestOutcome::response(OutboundResponse::hap_json(body)))
         }
         ("GET", "/characteristics") => {
-            if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
-            }
             let ids = req.query_param("id").unwrap_or_default();
             let ids = match parse_characteristic_ids(&ids) {
                 Ok(ids) => ids,
@@ -143,9 +147,6 @@ where
             Ok(RequestOutcome::response(OutboundResponse::hap_json(body)))
         }
         ("PUT", "/characteristics") => {
-            if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
-            }
             match handle_put_characteristics(ctx.app.as_ref(), &req.body, &mut conn.subs).await {
                 Ok(write) => {
                     let response = if write.all_success() {
@@ -167,9 +168,6 @@ where
             }
         }
         ("POST", "/pairings") => {
-            if !encrypted {
-                return Ok(RequestOutcome::response(OutboundResponse::unauthorized()));
-            }
             let body = handle_pairings(ctx, conn.controller_id.as_deref(), &req.body).await;
             Ok(RequestOutcome::response(OutboundResponse::pairing_tlv(
                 body,

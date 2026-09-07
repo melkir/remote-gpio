@@ -30,11 +30,6 @@ impl Check {
         self
     }
 
-    pub fn optional_detail(mut self, detail: Option<String>) -> Self {
-        self.detail = detail;
-        self
-    }
-
     pub fn skipped(mut self) -> Self {
         self.status = Status::Skipped;
         self.detail = None;
@@ -48,25 +43,41 @@ impl Check {
             self.status(fail)
         }
     }
+
+    /// Leave the check as-is when `condition` holds; otherwise drop to `fail`
+    /// and explain why. A passing check keeps its default empty detail, so the
+    /// summary prints its label alone.
+    pub fn unless(self, condition: bool, fail: Status, detail: impl Into<String>) -> Self {
+        if condition {
+            self
+        } else {
+            self.status(fail).detail(detail)
+        }
+    }
 }
 
 /// Open `path` for read; OK with `path` on success, blocking with error detail on failure.
 pub fn readable_file(id: &'static str, label: &'static str, path: &str) -> Check {
-    match std::fs::OpenOptions::new().read(true).open(path) {
-        Ok(_) => Check::new(id, label).detail(path),
-        Err(e) => Check::new(id, label)
-            .status(Status::Blocking)
-            .detail(format!("{path}: {e}")),
-    }
+    open_file(id, label, path, std::fs::OpenOptions::new().read(true))
 }
 
 /// Open `path` for read+write; OK with `path` on success, blocking on failure.
 pub fn read_write_file(id: &'static str, label: &'static str, path: &str) -> Check {
-    match std::fs::OpenOptions::new()
-        .read(true)
-        .write(true)
-        .open(path)
-    {
+    open_file(
+        id,
+        label,
+        path,
+        std::fs::OpenOptions::new().read(true).write(true),
+    )
+}
+
+fn open_file(
+    id: &'static str,
+    label: &'static str,
+    path: &str,
+    options: &std::fs::OpenOptions,
+) -> Check {
+    match options.open(path) {
         Ok(_) => Check::new(id, label).detail(path),
         Err(e) => Check::new(id, label)
             .status(Status::Blocking)

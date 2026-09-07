@@ -35,32 +35,28 @@ pub async fn run(channel: UpgradeChannel, version_pin: Option<String>, check: bo
 
     if check {
         print_check(&release, &decision);
-        if decision.status == UpdateStatus::Unknown {
-            bail!(
-                "cannot determine whether {} is newer: {}",
-                release.tag_name,
-                decision.reason
-            );
-        }
+    }
+
+    // An undecidable comparison is an error in both modes: `--check` has nothing
+    // to report and an upgrade has nothing to justify swapping the binary.
+    if decision.status == UpdateStatus::Unknown {
+        bail!(
+            "cannot determine whether {} is newer: {}",
+            release.tag_name,
+            decision.reason
+        );
+    }
+
+    if check {
         return Ok(());
     }
 
-    match decision.status {
-        UpdateStatus::Newer => {}
-        UpdateStatus::Current => {
-            println!(
-                "Already at {} ({}). Nothing to do.",
-                release.tag_name, decision.reason
-            );
-            return Ok(());
-        }
-        UpdateStatus::Unknown => {
-            bail!(
-                "cannot determine whether {} is newer: {}",
-                release.tag_name,
-                decision.reason
-            );
-        }
+    if decision.status == UpdateStatus::Current {
+        println!(
+            "Already at {} ({}). Nothing to do.",
+            release.tag_name, decision.reason
+        );
+        return Ok(());
     }
 
     println!(

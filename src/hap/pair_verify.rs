@@ -3,14 +3,12 @@
 //! signatures. Output is a 32-byte shared secret used to derive the
 //! session keys in `session::SessionKeys`.
 
-use anyhow::Result;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Tag};
 use ed25519_dalek::{Signer, Verifier, VerifyingKey};
-use hkdf::Hkdf;
-use sha2::Sha512;
 use x25519_dalek::{EphemeralSecret, PublicKey as XPub};
 
+use crate::hap::crypto::{hkdf_sha512, pairing_nonce};
 use crate::hap::state::HapState;
 use crate::hap::tlv::{error_response, HapError, ParsedTlv, Tag as TlvTag, Tlv};
 
@@ -87,7 +85,7 @@ impl PairVerifySession {
         let shared = accessory_secret.diffie_hellman(&XPub::from(ios_pub_array));
         let shared_secret: [u8; 32] = shared.to_bytes();
 
-        let session_key = match derive_key(
+        let session_key = match hkdf_sha512(
             &shared_secret,
             b"Pair-Verify-Encrypt-Salt",
             b"Pair-Verify-Encrypt-Info",
@@ -111,10 +109,8 @@ impl PairVerifySession {
 
         let mut buf = sub;
         let cipher = ChaCha20Poly1305::new(&Key::from(session_key));
-        let mut nonce_bytes = [0u8; 12];
-        nonce_bytes[4..].copy_from_slice(b"PV-Msg02");
         let tag = match cipher.encrypt_inout_detached(
-            &Nonce::from(nonce_bytes),
+            &pairing_nonce(b"PV-Msg02"),
             &[],
             buf.as_mut_slice().into(),
         ) {
@@ -166,11 +162,9 @@ impl PairVerifySession {
             Err(_) => return HandleOutcome::Reply(error_response(4, HapError::Authentication)),
         };
         let cipher = ChaCha20Poly1305::new(&Key::from(session_key));
-        let mut nonce_bytes = [0u8; 12];
-        nonce_bytes[4..].copy_from_slice(b"PV-Msg03");
         if cipher
             .decrypt_inout_detached(
-                &Nonce::from(nonce_bytes),
+                &pairing_nonce(b"PV-Msg03"),
                 &[],
                 plaintext.as_mut_slice().into(),
                 &tag,
@@ -235,12 +229,4 @@ impl PairVerifySession {
             controller_id: pairing_id_str,
         }
     }
-}
-
-fn derive_key(ikm: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 32]> {
-    let hkdf = Hkdf::<Sha512>::new(Some(salt), ikm);
-    let mut out = [0u8; 32];
-    hkdf.expand(info, &mut out)
-        .map_err(|e| anyhow::anyhow!("HKDF: {e}"))?;
-    Ok(out)
 }

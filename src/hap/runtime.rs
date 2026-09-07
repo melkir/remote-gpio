@@ -2,20 +2,19 @@ use anyhow::Result;
 use serde_json::Value;
 use std::collections::HashSet;
 use std::future::Future;
-use std::hash::{Hash, Hasher};
 use std::pin::Pin;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
 use crate::hap::state::HapState;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Aid(pub u64);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct Iid(pub u64);
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash)]
 pub struct CharacteristicId {
     pub aid: Aid,
     pub iid: Iid,
@@ -27,13 +26,6 @@ impl CharacteristicId {
             aid: Aid(aid),
             iid: Iid(iid),
         }
-    }
-}
-
-impl Hash for CharacteristicId {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        self.aid.0.hash(state);
-        self.iid.0.hash(state);
     }
 }
 
