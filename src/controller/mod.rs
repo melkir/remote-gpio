@@ -43,18 +43,7 @@ impl BlindController {
         config: DriverConfig,
         positioning: PositioningOptions,
     ) -> Result<Self> {
-        let driver_kind = config.kind();
-        let router = CommandRouter::new(config).await?;
-        let (position_tx, _) = broadcast::channel(64);
-        Ok(Self {
-            router,
-            driver_kind,
-            operation_lock: Mutex::new(()),
-            positions: Arc::new(PositionCache::new()),
-            timings: positioning.into(),
-            motion_tasks: MotionTasks::default(),
-            position_tx,
-        })
+        Self::with_position_cache(config, positioning, PositionCache::new()).await
     }
 
     #[cfg(test)]
@@ -63,6 +52,19 @@ impl BlindController {
         positioning: PositioningOptions,
         positions: HashMap<u64, u8>,
     ) -> Result<Self> {
+        Self::with_position_cache(
+            config,
+            positioning,
+            PositionCache::from_positions(positions),
+        )
+        .await
+    }
+
+    async fn with_position_cache(
+        config: DriverConfig,
+        positioning: PositioningOptions,
+        positions: PositionCache,
+    ) -> Result<Self> {
         let driver_kind = config.kind();
         let router = CommandRouter::new(config).await?;
         let (position_tx, _) = broadcast::channel(64);
@@ -70,7 +72,7 @@ impl BlindController {
             router,
             driver_kind,
             operation_lock: Mutex::new(()),
-            positions: Arc::new(PositionCache::from_positions(positions)),
+            positions: Arc::new(positions),
             timings: positioning.into(),
             motion_tasks: MotionTasks::default(),
             position_tx,
@@ -236,18 +238,19 @@ impl BlindController {
     ) -> Result<CommandOutcome> {
         let (outcome, deltas) = {
             let _guard = self.operation_lock.lock().await;
-            if command == Command::Select {
-                self.router.execute(command, channel).await?;
-                let target = self.current_selection();
-                self.complete_command(target, command).await
-            } else if let Some(channel) = channel {
-                self.router.execute_on(channel, command).await?;
-                self.complete_command(channel, command).await
-            } else {
-                self.router.execute(command, None).await?;
-                let target = self.current_selection();
-                self.complete_command(target, command).await
-            }
+            // An action command naming a channel targets it directly; `select`
+            // and channel-less commands go through the driver's own selection.
+            let target = match channel {
+                Some(channel) if command != Command::Select => {
+                    self.router.execute_on(channel, command).await?;
+                    channel
+                }
+                _ => {
+                    self.router.execute(command, channel).await?;
+                    self.current_selection()
+                }
+            };
+            self.complete_command(target, command).await
         };
         self.emit_position_deltas(&deltas);
         Ok(outcome)
@@ -297,7 +300,7 @@ impl BlindController {
 
     async fn schedule_completion(self: &Arc<Self>, movement: BlindMovement) {
         let controller = self.clone();
-        let generation = self.motion_tasks.replace(movement.blind.aid, None).await;
+        let generation = self.motion_tasks.begin(movement.blind.aid).await;
         let handle = tokio::spawn(async move {
             tokio::time::sleep(movement.duration).await;
             let deltas = {

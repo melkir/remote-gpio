@@ -2,14 +2,13 @@
 //! 3072 (see `srp.rs`), username "Pair-Setup", password = the setup code
 //! including dashes.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
-use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce, Tag};
+use chacha20poly1305::{ChaCha20Poly1305, Key, Tag};
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
-use hkdf::Hkdf;
 use rand::{rngs::OsRng, RngCore};
-use sha2::Sha512;
 
+use crate::hap::crypto::{hkdf_sha512, pairing_nonce};
 use crate::hap::srp;
 use crate::hap::state::{HapState, PairedController, MAX_SETUP_FAILED_ATTEMPTS};
 use crate::hap::tlv::{error_response, HapError, ParsedTlv, Tag as TlvTag, Tlv};
@@ -182,7 +181,7 @@ impl PairSetupSession {
             return Err((6, HapError::Authentication));
         }
 
-        let session_key = derive_session_key(
+        let session_key = hkdf_sha512(
             &srp_key,
             b"Pair-Setup-Encrypt-Salt",
             b"Pair-Setup-Encrypt-Info",
@@ -193,11 +192,9 @@ impl PairSetupSession {
         let tag = Tag::try_from(&encrypted[encrypted.len() - 16..])
             .map_err(|_| (6, HapError::Authentication))?;
         let cipher = ChaCha20Poly1305::new(&Key::from(session_key));
-        let mut nonce_bytes = [0u8; 12];
-        nonce_bytes[4..].copy_from_slice(b"PS-Msg05");
         cipher
             .decrypt_inout_detached(
-                &Nonce::from(nonce_bytes),
+                &pairing_nonce(b"PS-Msg05"),
                 &[],
                 plaintext.as_mut_slice().into(),
                 &tag,
@@ -218,7 +215,7 @@ impl PairSetupSession {
             .get(TlvTag::Signature)
             .ok_or((6, HapError::Authentication))?;
 
-        let ios_device_x = derive_session_key(
+        let ios_device_x = hkdf_sha512(
             &srp_key,
             b"Pair-Setup-Controller-Sign-Salt",
             b"Pair-Setup-Controller-Sign-Info",
@@ -243,7 +240,7 @@ impl PairSetupSession {
             (6, HapError::Authentication)
         })?;
 
-        let accessory_x = derive_session_key(
+        let accessory_x = hkdf_sha512(
             &srp_key,
             b"Pair-Setup-Accessory-Sign-Salt",
             b"Pair-Setup-Accessory-Sign-Info",
@@ -266,11 +263,9 @@ impl PairSetupSession {
             .encode();
 
         let mut response_buf = sub_response.clone();
-        let mut response_nonce = [0u8; 12];
-        response_nonce[4..].copy_from_slice(b"PS-Msg06");
         let response_tag = cipher
             .encrypt_inout_detached(
-                &Nonce::from(response_nonce),
+                &pairing_nonce(b"PS-Msg06"),
                 &[],
                 response_buf.as_mut_slice().into(),
             )
@@ -295,14 +290,6 @@ impl PairSetupSession {
             .put(TlvTag::EncryptedData, response_buf)
             .encode())
     }
-}
-
-fn derive_session_key(srp_key: &[u8], salt: &[u8], info: &[u8]) -> Result<[u8; 32]> {
-    let hkdf = Hkdf::<Sha512>::new(Some(salt), srp_key);
-    let mut out = [0u8; 32];
-    hkdf.expand(info, &mut out)
-        .map_err(|e| anyhow!("HKDF: {e}"))?;
-    Ok(out)
 }
 
 /// Increment the failed-attempt counter and pick the right HAP

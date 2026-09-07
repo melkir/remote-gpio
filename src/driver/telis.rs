@@ -38,20 +38,20 @@ impl TelisDriver {
     pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
         if let Some(target) = channel {
-            self.select_to(target, true).await?;
+            self.select_to(target).await?;
         }
 
         // `select` with no channel has nothing to steer toward, so it just
         // advances the physical selector one step.
         if command == Command::Select && channel.is_none() {
-            return self.select_once(true).await.map(|_| ());
+            return self.select_once().await.map(|_| ());
         }
         self.press(command).await
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
-        self.select_to(channel, true).await?;
+        self.select_to(channel).await?;
         self.press(command).await
     }
 
@@ -71,25 +71,17 @@ impl TelisDriver {
         &self.selection
     }
 
-    async fn select_once(&self, broadcast: bool) -> Result<Channel> {
+    /// Step the physical selector one position and publish where it landed.
+    async fn select_once(&self) -> Result<Channel> {
         let channel = self.transport.select().await?;
-        if broadcast {
-            self.selection.set(channel);
-        }
+        self.selection.set(channel);
         Ok(channel)
     }
 
-    async fn select_to(&self, target: Channel, broadcast: bool) -> Result<()> {
-        self.select_from_to(self.selection.get(), target, broadcast)
-            .await
-    }
-
-    async fn select_from_to(
-        &self,
-        mut current: Channel,
-        target: Channel,
-        broadcast: bool,
-    ) -> Result<()> {
+    /// Step the selector until it reaches `target`, giving up after
+    /// [`MAX_SELECT_CYCLES`] so a stuck LED row cannot spin forever.
+    async fn select_to(&self, target: Channel) -> Result<()> {
+        let mut current = self.selection.get();
         let mut attempts = 0;
         while current != target {
             if attempts >= MAX_SELECT_CYCLES {
@@ -97,7 +89,7 @@ impl TelisDriver {
                     "LED selection did not reach {target} after {attempts} select cycles"
                 );
             }
-            current = self.select_once(broadcast).await?;
+            current = self.select_once().await?;
             attempts += 1;
         }
         Ok(())

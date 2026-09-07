@@ -20,35 +20,29 @@ pub fn config_file(resolved_config: &ResolvedConfig) -> Check {
 
 pub fn unit_installed() -> Check {
     let exists = Path::new(UNIT_PATH).exists();
-    Check::new("unit_installed", "Systemd unit")
-        .when(exists, Status::Ok, Status::Advisory)
-        .optional_detail(if exists {
-            None
-        } else {
-            Some(format!("not installed at {UNIT_PATH}"))
-        })
+    Check::new("unit_installed", "Systemd unit").unless(
+        exists,
+        Status::Advisory,
+        format!("not installed at {UNIT_PATH}"),
+    )
 }
 
 pub fn unit_in_sync(disk: &str, expected: &str) -> Check {
     let in_sync = disk.trim() == expected.trim();
-    Check::new("unit_in_sync", "Unit in sync")
-        .when(in_sync, Status::Ok, Status::Advisory)
-        .optional_detail(if in_sync {
-            None
-        } else {
-            Some("on-disk unit differs from template; run `sudo somfy install`".into())
-        })
+    Check::new("unit_in_sync", "Unit in sync").unless(
+        in_sync,
+        Status::Advisory,
+        "on-disk unit differs from template; run `sudo somfy install`",
+    )
 }
 
 pub fn exec_start_match(disk: &str) -> Check {
     let ok = exec_start_matches(disk);
-    Check::new("exec_start_match", "Unit ExecStart")
-        .when(ok, Status::Ok, Status::Blocking)
-        .optional_detail(if ok {
-            None
-        } else {
-            Some(format!("ExecStart does not match {} serve", BIN_PATH))
-        })
+    Check::new("exec_start_match", "Unit ExecStart").unless(
+        ok,
+        Status::Blocking,
+        format!("ExecStart does not match {BIN_PATH} serve"),
+    )
 }
 
 pub fn service_active() -> Check {
@@ -78,13 +72,11 @@ pub fn service_user(user: &str) -> (Check, bool) {
 
 pub fn gpio_group_member(user: &str, user_exists: bool) -> Check {
     let in_group = user_exists && user_in_group(user, "gpio").unwrap_or(false);
-    Check::new("gpio_group_member", "GPIO group")
-        .when(in_group, Status::Ok, Status::Advisory)
-        .optional_detail(if in_group {
-            None
-        } else {
-            Some(format!("user `{user}` not in gpio group"))
-        })
+    Check::new("gpio_group_member", "GPIO group").unless(
+        in_group,
+        Status::Advisory,
+        format!("user `{user}` not in gpio group"),
+    )
 }
 
 pub fn render_expected_unit(resolved_config: &ResolvedConfig) -> Option<String> {

@@ -2,8 +2,9 @@ use serde_json::{json, Value};
 
 use crate::hap::runtime::{CharacteristicId, HapStatus};
 use crate::homekit::accessory_db::{
-    BRIDGE_AID, IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE, IID_IDENTIFY,
-    IID_MANUFACTURER, IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL, IID_TARGET_POSITION,
+    BLIND_MODEL, BRIDGE_AID, BRIDGE_MODEL, BRIDGE_NAME, BRIDGE_SERIAL, BRIDGE_VERSION, FIRMWARE,
+    IID_BRIDGE_VERSION, IID_CURRENT_POSITION, IID_FIRMWARE, IID_IDENTIFY, IID_MANUFACTURER,
+    IID_MODEL, IID_NAME, IID_POSITION_STATE, IID_SERIAL, IID_TARGET_POSITION, MANUFACTURER,
 };
 use crate::positioning::state::{find_blind, position_for_aid, Blind, BlindPosition};
 
@@ -56,58 +57,11 @@ impl HomeKitCharacteristic {
 
     pub(crate) fn read_value(self, positions: &[BlindPosition]) -> Result<Value, HapStatus> {
         match self {
-            Self::Bridge(BridgeCharacteristic::Identify)
-            | Self::Blind {
-                characteristic: BlindCharacteristic::Identify,
-                ..
-            } => Err(HapStatus::WriteOnly),
-            Self::Bridge(BridgeCharacteristic::Manufacturer) => Ok(json!("Somfy")),
-            Self::Bridge(BridgeCharacteristic::Model) => Ok(json!("Telis 4 Bridge")),
-            Self::Bridge(BridgeCharacteristic::Name) => Ok(json!("Somfy Bridge")),
-            Self::Bridge(BridgeCharacteristic::Serial) => Ok(json!("somfy-bridge")),
-            Self::Bridge(BridgeCharacteristic::Firmware) => Ok(json!(env!("CARGO_PKG_VERSION"))),
-            Self::Bridge(BridgeCharacteristic::BridgeVersion) => Ok(json!("1.1.0")),
-            Self::Blind {
-                blind: _,
-                characteristic: BlindCharacteristic::Manufacturer,
-            } => Ok(json!("Somfy")),
-            Self::Blind {
-                blind: _,
-                characteristic: BlindCharacteristic::Model,
-            } => Ok(json!("Telis 4")),
+            Self::Bridge(characteristic) => read_bridge(characteristic),
             Self::Blind {
                 blind,
-                characteristic: BlindCharacteristic::Name,
-            } => Ok(json!(blind.name)),
-            Self::Blind {
-                blind,
-                characteristic: BlindCharacteristic::Serial,
-            } => Ok(json!(blind.serial)),
-            Self::Blind {
-                blind: _,
-                characteristic: BlindCharacteristic::Firmware,
-            } => Ok(json!(env!("CARGO_PKG_VERSION"))),
-            Self::Blind {
-                blind,
-                characteristic: BlindCharacteristic::CurrentPosition,
-            } => {
-                let pos = position_for_aid(positions, blind.aid);
-                Ok(json!(pos.current))
-            }
-            Self::Blind {
-                blind,
-                characteristic: BlindCharacteristic::TargetPosition,
-            } => {
-                let pos = position_for_aid(positions, blind.aid);
-                Ok(json!(pos.target))
-            }
-            Self::Blind {
-                blind,
-                characteristic: BlindCharacteristic::PositionState,
-            } => {
-                let pos = position_for_aid(positions, blind.aid);
-                Ok(json!(pos.status))
-            }
+                characteristic,
+            } => read_blind(blind, characteristic, positions),
         }
     }
 
@@ -129,6 +83,37 @@ impl HomeKitCharacteristic {
         } else {
             HapStatus::ResourceDoesNotExist
         }
+    }
+}
+
+fn read_bridge(characteristic: BridgeCharacteristic) -> Result<Value, HapStatus> {
+    match characteristic {
+        BridgeCharacteristic::Identify => Err(HapStatus::WriteOnly),
+        BridgeCharacteristic::Manufacturer => Ok(json!(MANUFACTURER)),
+        BridgeCharacteristic::Model => Ok(json!(BRIDGE_MODEL)),
+        BridgeCharacteristic::Name => Ok(json!(BRIDGE_NAME)),
+        BridgeCharacteristic::Serial => Ok(json!(BRIDGE_SERIAL)),
+        BridgeCharacteristic::Firmware => Ok(json!(FIRMWARE)),
+        BridgeCharacteristic::BridgeVersion => Ok(json!(BRIDGE_VERSION)),
+    }
+}
+
+fn read_blind(
+    blind: &Blind,
+    characteristic: BlindCharacteristic,
+    positions: &[BlindPosition],
+) -> Result<Value, HapStatus> {
+    let position = || position_for_aid(positions, blind.aid);
+    match characteristic {
+        BlindCharacteristic::Identify => Err(HapStatus::WriteOnly),
+        BlindCharacteristic::Manufacturer => Ok(json!(MANUFACTURER)),
+        BlindCharacteristic::Model => Ok(json!(BLIND_MODEL)),
+        BlindCharacteristic::Name => Ok(json!(blind.name)),
+        BlindCharacteristic::Serial => Ok(json!(blind.serial)),
+        BlindCharacteristic::Firmware => Ok(json!(FIRMWARE)),
+        BlindCharacteristic::CurrentPosition => Ok(json!(position().current)),
+        BlindCharacteristic::TargetPosition => Ok(json!(position().target)),
+        BlindCharacteristic::PositionState => Ok(json!(position().status)),
     }
 }
 

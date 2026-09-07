@@ -32,13 +32,14 @@ pub fn channel_led_gpio(channel: Channel, config: &TelisGpioOptions) -> Option<u
     }
 }
 
-/// Represents the Telis button GPIO pins driven by the wired driver.
+/// A button on the wired Telis remote. The GPIO each one drives comes from
+/// [`TelisGpioOptions`] via [`button_gpio`], never from the variant itself.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum TelisButton {
-    Select = 6,
-    Down = 13,
-    Stop = 19,
-    Up = 26,
+    Select,
+    Down,
+    Stop,
+    Up,
 }
 
 #[cfg(any(target_os = "linux", test))]

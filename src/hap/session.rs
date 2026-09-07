@@ -7,10 +7,10 @@
 use anyhow::{anyhow, bail, Result};
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Nonce};
-use hkdf::Hkdf;
-use sha2::Sha512;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+
+use crate::hap::crypto::hkdf_sha512;
 
 pub const MAX_FRAME_PLAINTEXT: usize = 1024;
 const TAG_LEN: usize = 16;
@@ -25,14 +25,11 @@ pub struct SessionKeys {
 
 impl SessionKeys {
     pub fn derive(shared_secret: &[u8]) -> Result<Self> {
-        let hkdf = Hkdf::<Sha512>::new(Some(b"Control-Salt"), shared_secret);
-        let mut read = [0u8; 32];
-        let mut write = [0u8; 32];
-        hkdf.expand(b"Control-Write-Encryption-Key", &mut read)
-            .map_err(|e| anyhow!("HKDF read key: {e}"))?;
-        hkdf.expand(b"Control-Read-Encryption-Key", &mut write)
-            .map_err(|e| anyhow!("HKDF write key: {e}"))?;
-        Ok(Self { read, write })
+        const SALT: &[u8] = b"Control-Salt";
+        Ok(Self {
+            read: hkdf_sha512(shared_secret, SALT, b"Control-Write-Encryption-Key")?,
+            write: hkdf_sha512(shared_secret, SALT, b"Control-Read-Encryption-Key")?,
+        })
     }
 }
 

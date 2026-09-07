@@ -7,6 +7,25 @@ import { ChevronDown, ChevronUp, Circle, CircleDot, Pause } from 'lucide-preact'
 import { useCallback, useEffect, useRef, useState } from 'preact/hooks';
 import { useHaptic } from 'use-haptic';
 
+const ACTIONS = [
+  { icon: <ChevronUp className="size-8" />, command: 'up', label: 'Move up', className: 'size-24' },
+  { icon: <Pause className="size-10" />, command: 'stop', label: 'Stop', className: 'size-28' },
+  {
+    icon: <ChevronDown className="size-8" />,
+    command: 'down',
+    label: 'Move down',
+    className: 'size-24',
+  },
+] as const;
+
+const CHANNELS = ['L1', 'L2', 'L3', 'L4'] as const;
+
+const STATUS = {
+  [ReadyState.CONNECTING]: { className: 'bg-loading', label: 'Connecting to blinds' },
+  [ReadyState.OPEN]: { className: 'bg-green-900', label: 'Connected to blinds' },
+  [ReadyState.CLOSED]: { className: 'bg-red-900', label: 'Disconnected from blinds' },
+} as const;
+
 export function App() {
   const [activeChannel, setActiveChannel] = useState<string | null>(null);
   const { triggerHaptic: shortHaptic } = useHaptic(100);
@@ -99,11 +118,7 @@ export function App() {
     send({ command: 'select' });
   }, [send]);
 
-  const status = {
-    [ReadyState.CONNECTING]: { className: 'bg-loading', label: 'Connecting to blinds' },
-    [ReadyState.OPEN]: { className: 'bg-green-900', label: 'Connected to blinds' },
-    [ReadyState.CLOSED]: { className: 'bg-red-900', label: 'Disconnected from blinds' },
-  }[readyState.value];
+  const status = STATUS[readyState.value];
 
   return (
     <div className="flex min-h-screen flex-col items-center justify-evenly gap-4 pt-4">
@@ -118,26 +133,7 @@ export function App() {
       </div>
 
       {/* Up, Stop, Down */}
-      {[
-        {
-          icon: <ChevronUp className="size-8" />,
-          command: 'up',
-          label: 'Move up',
-          className: 'size-24',
-        },
-        {
-          icon: <Pause className="size-10" />,
-          command: 'stop',
-          label: 'Stop',
-          className: 'size-28',
-        },
-        {
-          icon: <ChevronDown className="size-8" />,
-          command: 'down',
-          label: 'Move down',
-          className: 'size-24',
-        },
-      ].map(({ icon, command, label, className }) => (
+      {ACTIONS.map(({ icon, command, label, className }) => (
         <Button
           key={command}
           variant="outline"
@@ -151,7 +147,7 @@ export function App() {
 
       {/* Channel selection row */}
       <div className="flex flex-row items-center justify-center gap-12">
-        {['L1', 'L2', 'L3', 'L4'].map((channel) => (
+        {CHANNELS.map((channel) => (
           <Button
             key={channel}
             variant="ghost"

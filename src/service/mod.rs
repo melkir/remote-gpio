@@ -90,16 +90,13 @@ fn parse_command(request: CommandRequest) -> Result<ControlRequest, CommandError
     }
 
     let cmd = Command::from_str(&command).map_err(|e| CommandError::Invalid(e.to_string()))?;
-    let channel = match (cmd, channel) {
-        (Command::Prog | Command::ProgLong, Some(channel)) => Some(channel),
-        (Command::Prog | Command::ProgLong, None) => {
-            return Err(CommandError::Invalid(
-                "prog and prog_long require a channel".to_string(),
-            ));
-        }
-        (Command::Select, channel) => channel,
-        (Command::Up | Command::Down | Command::Stop, channel) => channel,
-    };
+    // Pairing is addressed RF: it has to name the channel rather than fall back
+    // to whatever happens to be selected. Every other command may omit it.
+    if matches!(cmd, Command::Prog | Command::ProgLong) && channel.is_none() {
+        return Err(CommandError::Invalid(
+            "prog and prog_long require a channel".to_string(),
+        ));
+    }
     Ok(ControlRequest::Driver {
         command: cmd,
         channel,

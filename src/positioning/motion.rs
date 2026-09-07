@@ -60,7 +60,6 @@ pub struct DriverStart {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlindMovement {
     pub blind: &'static Blind,
-    pub current: u8,
     pub target: u8,
     pub command: Command,
     pub status: u8,
@@ -138,7 +137,6 @@ fn movement_for(request: MotionRequest) -> Option<BlindMovement> {
 
     Some(BlindMovement {
         blind: request.blind,
-        current,
         target,
         command,
         status,

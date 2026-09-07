@@ -6,6 +6,17 @@ use crate::positioning::state::STATUS_STOPPED;
 
 pub(crate) const BRIDGE_AID: u64 = 1;
 
+/// Accessory Information strings. Reads in [`super::characteristic`] answer from
+/// these same constants, so a value can never drift from the published database.
+pub(crate) const MANUFACTURER: &str = "Somfy";
+pub(crate) const FIRMWARE: &str = env!("CARGO_PKG_VERSION");
+pub(crate) const BRIDGE_NAME: &str = "Somfy Bridge";
+pub(crate) const BRIDGE_MODEL: &str = "Telis 4 Bridge";
+pub(crate) const BRIDGE_SERIAL: &str = "somfy-bridge";
+/// HAP Bridge Configuration `Version` characteristic (service `A2`).
+pub(crate) const BRIDGE_VERSION: &str = "1.1.0";
+pub(crate) const BLIND_MODEL: &str = "Telis 4";
+
 pub(crate) const IID_AINFO_SERVICE: u64 = 1;
 pub(crate) const IID_IDENTIFY: u64 = 2;
 pub(crate) const IID_MANUFACTURER: u64 = 3;
@@ -36,21 +47,15 @@ pub(crate) fn build_accessories(blinds: &[BlindAccessory<'_>]) -> Value {
 }
 
 fn bridge_accessory() -> Value {
-    let firmware = env!("CARGO_PKG_VERSION");
     json!({
         "aid": BRIDGE_AID,
         "services": [
-            accessory_info_service(
-                "Somfy Bridge",
-                "Telis 4 Bridge",
-                "somfy-bridge",
-                firmware,
-            ),
+            accessory_info_service(BRIDGE_NAME, BRIDGE_MODEL, BRIDGE_SERIAL),
             {
                 "iid": IID_BRIDGE_PROTO_SERVICE,
                 "type": "A2",
                 "characteristics": [
-                    char_string(IID_BRIDGE_VERSION, "37", "1.1.0", &["pr"]),
+                    char_string(IID_BRIDGE_VERSION, "37", BRIDGE_VERSION, &["pr"]),
                 ],
             }
         ]
@@ -58,26 +63,25 @@ fn bridge_accessory() -> Value {
 }
 
 fn blind_accessory(blind: &BlindAccessory<'_>) -> Value {
-    let firmware = env!("CARGO_PKG_VERSION");
     json!({
         "aid": blind.aid,
         "services": [
-            accessory_info_service(blind.name, "Telis 4", blind.serial, firmware),
+            accessory_info_service(blind.name, BLIND_MODEL, blind.serial),
             window_covering_service(blind.position),
         ]
     })
 }
 
-fn accessory_info_service(name: &str, model: &str, serial: &str, firmware: &str) -> Value {
+fn accessory_info_service(name: &str, model: &str, serial: &str) -> Value {
     json!({
         "iid": IID_AINFO_SERVICE,
         "type": "3E",
         "characteristics": [
-            char_string(IID_MANUFACTURER, "20", "Somfy", &["pr"]),
+            char_string(IID_MANUFACTURER, "20", MANUFACTURER, &["pr"]),
             char_string(IID_MODEL, "21", model, &["pr"]),
             char_string(IID_NAME, "23", name, &["pr"]),
             char_string(IID_SERIAL, "30", serial, &["pr"]),
-            char_string(IID_FIRMWARE, "52", firmware, &["pr"]),
+            char_string(IID_FIRMWARE, "52", FIRMWARE, &["pr"]),
             char_bool_pw(IID_IDENTIFY, "14"),
         ],
     })
