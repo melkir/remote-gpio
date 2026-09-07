@@ -2,15 +2,14 @@ use anyhow::{bail, Context, Result};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpStream};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::time::Duration;
-use tokio::sync::watch::{self, Sender};
 
 use crate::config::RtsOptions;
 use crate::core::{Channel, Command};
-use crate::driver::SelectedChannelRx;
+use crate::driver::Selection;
 use crate::gpio::MAX_BCM_GPIO;
 use crate::rts::cc1101::Cc1101;
 use crate::rts::frame::{RtsCommand, RtsFrame};
-use crate::rts::pigpio::PigpioClient;
+use crate::rts::pigpio::{EncodedWave, PigpioClient};
 use crate::rts::state::RtsStateStore;
 
 #[cfg(test)]
@@ -79,8 +78,7 @@ type Spi = std::fs::File;
 
 #[derive(Debug)]
 pub(crate) struct RtsDriver {
-    sender: Sender<Channel>,
-    selected_rx: SelectedChannelRx,
+    selection: Selection,
     options: RtsOptions,
     state: Arc<StdMutex<RtsStateStore>>,
     transmitter: Arc<dyn RtsTransmitter>,
@@ -96,28 +94,17 @@ impl RtsDriver {
         }
         assert_pigpiod_endpoints_are_loopback()?;
         let state = RtsStateStore::load_or_init_default()?;
-        let selected_channel = state.selected_channel();
-        let (sender, selected_rx) = watch::channel(selected_channel);
         let transmitter = init_transmitter(options.clone()).await?;
-        Ok(Self::from_parts(
-            sender,
-            selected_rx,
-            options,
-            state,
-            transmitter,
-        ))
+        Ok(Self::from_parts(options, state, transmitter))
     }
 
     fn from_parts(
-        sender: Sender<Channel>,
-        selected_rx: SelectedChannelRx,
         options: RtsOptions,
         state: RtsStateStore,
         transmitter: Arc<dyn RtsTransmitter>,
     ) -> Self {
         Self {
-            sender,
-            selected_rx,
+            selection: Selection::new(state.selected_channel()),
             options,
             state: Arc::new(StdMutex::new(state)),
             transmitter,
@@ -154,27 +141,19 @@ impl RtsDriver {
         transmitter: Arc<dyn RtsTransmitter>,
     ) -> Result<Self> {
         let state = RtsStateStore::load_or_init(state_path, DEFAULT_RESERVE_SIZE)?;
-        let selected_channel = state.selected_channel();
-        let (sender, selected_rx) = watch::channel(selected_channel);
-        Ok(Self::from_parts(
-            sender,
-            selected_rx,
-            options,
-            state,
-            transmitter,
-        ))
+        Ok(Self::from_parts(options, state, transmitter))
     }
 
     pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         match command {
             Command::Select => {
-                let channel = channel.unwrap_or_else(|| self.selected_channel().next());
+                let channel = channel.unwrap_or_else(|| self.selection.get().next());
                 self.set_selected_channel(channel).await
             }
             // Directional commands use persisted logical selection, not `channel`.
             // Call [`Self::execute_on`] to transmit on a specific RTS channel.
             Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
-                let channel = self.selected_channel();
+                let channel = self.selection.get();
                 self.execute_on(channel, command).await
             }
         }
@@ -186,18 +165,14 @@ impl RtsDriver {
         self.transmit(channel, rts_command, long).await
     }
 
-    pub(crate) fn selected_channel(&self) -> Channel {
-        *self.selected_rx.borrow()
-    }
-
-    pub(crate) fn subscribe_selected_channel(&self) -> SelectedChannelRx {
-        self.selected_rx.clone()
+    pub(crate) fn selection(&self) -> &Selection {
+        &self.selection
     }
 
     async fn set_selected_channel(&self, channel: Channel) -> Result<()> {
         self.with_state(move |state| state.set_selected_channel(channel))
             .await?;
-        self.sender.send(channel)?;
+        self.selection.set(channel)?;
         Ok(())
     }
 
@@ -219,13 +194,14 @@ impl RtsDriver {
         } else {
             waveform::build(frame, self.options.gpio.gdo0)
         };
-        let pulse_count = pulses.len();
         let total_duration = Duration::from_micros(
             pulses
                 .iter()
                 .map(|pulse| pulse.us_delay as u64)
                 .sum::<u64>(),
         );
+        // Serialize for pigpiod once, here, rather than on each `wave_add_generic`.
+        let wave = EncodedWave::new(&pulses);
         tracing::debug!(
             %channel,
             command = ?command,
@@ -234,7 +210,7 @@ impl RtsDriver {
             remote_id,
             frame = %hex::encode(frame.bytes()),
             gpio = self.options.gpio.gdo0,
-            pulse_count,
+            pulse_count = wave.pulse_count(),
             total_duration_us = total_duration.as_micros(),
             "rts waveform prepared"
         );
@@ -247,7 +223,7 @@ impl RtsDriver {
             rolling_code,
             #[cfg(test)]
             remote_id,
-            pulses,
+            wave,
             total_duration,
         };
         let transmitter = self.transmitter.clone();
@@ -279,7 +255,7 @@ pub(super) struct PreparedTransmission {
     pub(super) rolling_code: u16,
     #[cfg(test)]
     pub(super) remote_id: u32,
-    pub(super) pulses: Vec<waveform::GpioPulse>,
+    pub(super) wave: EncodedWave,
     /// Wall time the pulse train occupies, summed once when it is built.
     pub(super) total_duration: Duration,
 }
@@ -374,7 +350,7 @@ fn transmit_blocking(
 fn try_transmit(hw: &mut Hardware, transmission: &PreparedTransmission) -> Result<()> {
     let total_duration = transmission.total_duration;
     hw.pigpio.wave_new()?;
-    hw.pigpio.wave_add_generic(&transmission.pulses)?;
+    hw.pigpio.wave_add_generic(&transmission.wave)?;
     let wave_id = hw.pigpio.wave_create()?;
     tracing::debug!(wave_id, ?total_duration, "pigpio wave created");
 
@@ -483,7 +459,7 @@ mod tests {
         assert_eq!(transmissions[0].command, RtsCommand::Up);
         assert_eq!(transmissions[0].rolling_code, 1);
         assert!(transmissions[0].remote_id > 0);
-        assert_eq!(transmissions[0].pulses.len(), 508);
+        assert_eq!(transmissions[0].wave.pulse_count(), 508);
 
         let state: RtsState =
             serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();
@@ -509,7 +485,7 @@ mod tests {
             .await
             .unwrap();
 
-        assert_eq!(driver.selected_channel(), Channel::L4);
+        assert_eq!(driver.selection().get(), Channel::L4);
         assert!(transmitter.transmissions().is_empty());
         let state: RtsState =
             serde_json::from_str(&std::fs::read_to_string(&state_path).unwrap()).unwrap();

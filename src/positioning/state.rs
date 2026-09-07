@@ -60,18 +60,27 @@ pub fn find_blind_for_channel(channel: Channel) -> Option<&'static Blind> {
     BLINDS.iter().find(|b| b.channel == channel)
 }
 
-pub fn aids_for_channel(channel: Channel) -> Vec<u64> {
+/// Accessories a channel addresses: every blind for `ALL`, otherwise the single
+/// mapped blind (empty when the channel has no accessory).
+///
+/// Borrows from the compile-time [`BLINDS`] table, so callers that only iterate
+/// never allocate.
+pub fn blinds_for_channel(channel: Channel) -> &'static [Blind] {
     match channel {
-        Channel::All => BLINDS.iter().map(|blind| blind.aid).collect(),
-        _ => find_blind_for_channel(channel)
-            .map(|blind| vec![blind.aid])
-            .unwrap_or_default(),
+        Channel::All => BLINDS,
+        _ => match find_blind_for_channel(channel) {
+            Some(blind) => std::slice::from_ref(blind),
+            None => &[],
+        },
     }
+}
+
+pub fn aids_for_channel(channel: Channel) -> impl Iterator<Item = u64> {
+    blinds_for_channel(channel).iter().map(|blind| blind.aid)
 }
 
 pub fn target_positions(channel: Channel, position: u8) -> Vec<(u64, u8)> {
     aids_for_channel(channel)
-        .into_iter()
         .map(|aid| (aid, position))
         .collect()
 }
@@ -94,6 +103,21 @@ impl BlindPosition {
             status: STATUS_STOPPED,
         }
     }
+}
+
+/// Estimated state of every blind, in [`BLINDS`] order.
+///
+/// The accessory set is fixed at compile time, so a snapshot is a plain `Copy`
+/// array — passing one around never touches the heap.
+pub type PositionSnapshot = [BlindPosition; BLINDS.len()];
+
+/// Look one accessory up in a snapshot, falling back to the default estimate.
+pub fn position_for_aid(positions: &[BlindPosition], aid: u64) -> BlindPosition {
+    positions
+        .iter()
+        .copied()
+        .find(|position| position.aid == aid)
+        .unwrap_or_else(|| BlindPosition::default_for_aid(aid))
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -132,7 +156,7 @@ impl PositionDelta {
 /// than a map: every lookup is one scan of four `Copy` structs.
 #[derive(Clone, Debug)]
 pub struct PositionState {
-    blinds: [BlindPosition; BLINDS.len()],
+    blinds: PositionSnapshot,
 }
 
 impl PositionState {
@@ -192,8 +216,8 @@ impl PositionCache {
         }
     }
 
-    pub async fn snapshot(&self) -> Vec<BlindPosition> {
-        self.state.lock().await.blinds.to_vec()
+    pub async fn snapshot(&self) -> PositionSnapshot {
+        self.state.lock().await.blinds
     }
 
     pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {
@@ -252,7 +276,6 @@ impl PositionCache {
     pub async fn stop_channel(&self, channel: Channel) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
         aids_for_channel(channel)
-            .into_iter()
             .filter_map(|aid| {
                 let position = state.get_mut(aid)?;
                 if position.target == position.current && position.status == STATUS_STOPPED {
@@ -443,8 +466,11 @@ mod tests {
 
     #[test]
     fn aids_for_channel_maps_channel_and_all() {
-        assert_eq!(aids_for_channel(Channel::L2), vec![3]);
-        assert_eq!(aids_for_channel(Channel::All), vec![2, 3, 4, 5]);
+        assert_eq!(aids_for_channel(Channel::L2).collect::<Vec<_>>(), vec![3]);
+        assert_eq!(
+            aids_for_channel(Channel::All).collect::<Vec<_>>(),
+            vec![2, 3, 4, 5]
+        );
     }
 
     #[test]

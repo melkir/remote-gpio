@@ -3,73 +3,35 @@ use futures_util::StreamExt;
 
 use crate::cli::RemoteCommand;
 use crate::config::ResolvedConfig;
-use crate::core::Command;
+use crate::core::{Channel, Command};
 use crate::server::base_url;
 use crate::service::{validate_control_request, CommandRequest, ControlRequest};
 
 pub async fn run(command: RemoteCommand, resolved: &ResolvedConfig) -> Result<()> {
-    match command {
-        RemoteCommand::Up { channel } => {
-            post_control(
-                ControlRequest::Driver {
-                    command: Command::Up,
-                    channel,
-                },
-                resolved,
-            )
-            .await
-        }
-        RemoteCommand::Down { channel } => {
-            post_control(
-                ControlRequest::Driver {
-                    command: Command::Down,
-                    channel,
-                },
-                resolved,
-            )
-            .await
-        }
-        RemoteCommand::Stop { channel } => {
-            post_control(
-                ControlRequest::Driver {
-                    command: Command::Stop,
-                    channel,
-                },
-                resolved,
-            )
-            .await
-        }
-        RemoteCommand::Select { channel } => {
-            post_control(
-                ControlRequest::Driver {
-                    command: Command::Select,
-                    channel: Some(channel),
-                },
-                resolved,
-            )
-            .await
-        }
+    let request = match command {
+        RemoteCommand::Up { channel } => driver_request(Command::Up, channel),
+        RemoteCommand::Down { channel } => driver_request(Command::Down, channel),
+        RemoteCommand::Stop { channel } => driver_request(Command::Stop, channel),
+        RemoteCommand::Select { channel } => driver_request(Command::Select, Some(channel)),
         RemoteCommand::Prog { channel, long } => {
             let command = if long {
                 Command::ProgLong
             } else {
                 Command::Prog
             };
-            post_control(
-                ControlRequest::Driver {
-                    command,
-                    channel: Some(channel),
-                },
-                resolved,
-            )
-            .await
+            driver_request(command, Some(channel))
         }
         RemoteCommand::Target { position, channel } => {
-            post_control(ControlRequest::Position { channel, position }, resolved).await
+            ControlRequest::Position { channel, position }
         }
-        RemoteCommand::Status => status().await,
-        RemoteCommand::Watch => watch().await,
-    }
+        RemoteCommand::Status => return status().await,
+        RemoteCommand::Watch => return watch().await,
+    };
+    post_control(request, resolved).await
+}
+
+fn driver_request(command: Command, channel: Option<Channel>) -> ControlRequest {
+    ControlRequest::Driver { command, channel }
 }
 
 async fn post_control(request: ControlRequest, resolved: &ResolvedConfig) -> Result<()> {

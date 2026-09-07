@@ -1,7 +1,7 @@
 //! Hardware driver abstraction (`fake`, `telis`, `rts`).
 
 use anyhow::Result;
-use tokio::sync::watch::Receiver;
+use tokio::sync::watch::{self, Receiver, Sender};
 
 use crate::config::DriverConfig;
 use crate::core::{Channel, Command};
@@ -19,6 +19,39 @@ pub(crate) use rts::{pigpiod_addr_list, pigpiod_addrs, PIGPIOD_PORT};
 use telis::TelisDriver;
 
 pub type SelectedChannelRx = Receiver<Channel>;
+
+/// The channel-selection watch pair every driver keeps.
+///
+/// Drivers differ in how a selection is *made* — stepping a physical selector,
+/// reading persisted RTS state, or plain memory — but not in how it is
+/// published, so the sender/receiver pair and its accessors live here instead of
+/// being repeated in each driver.
+#[derive(Debug)]
+pub(crate) struct Selection {
+    sender: Sender<Channel>,
+    rx: SelectedChannelRx,
+}
+
+impl Selection {
+    pub(crate) fn new(channel: Channel) -> Self {
+        let (sender, rx) = watch::channel(channel);
+        Self { sender, rx }
+    }
+
+    pub(crate) fn get(&self) -> Channel {
+        *self.rx.borrow()
+    }
+
+    pub(crate) fn subscribe(&self) -> SelectedChannelRx {
+        self.rx.clone()
+    }
+
+    /// Publish a new selection to every subscriber.
+    pub(crate) fn set(&self, channel: Channel) -> Result<()> {
+        self.sender.send(channel)?;
+        Ok(())
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct CommandOutcome {
@@ -71,20 +104,20 @@ impl CommandRouter {
         }
     }
 
-    pub fn selected_channel(&self) -> Channel {
+    fn selection(&self) -> &Selection {
         match self {
-            Self::Fake(driver) => driver.selected_channel(),
-            Self::Telis(driver) => driver.selected_channel(),
-            Self::Rts(driver) => driver.selected_channel(),
+            Self::Fake(driver) => driver.selection(),
+            Self::Telis(driver) => driver.selection(),
+            Self::Rts(driver) => driver.selection(),
         }
     }
 
+    pub fn selected_channel(&self) -> Channel {
+        self.selection().get()
+    }
+
     pub fn subscribe_selected_channel(&self) -> SelectedChannelRx {
-        match self {
-            Self::Fake(driver) => driver.subscribe_selected_channel(),
-            Self::Telis(driver) => driver.subscribe_selected_channel(),
-            Self::Rts(driver) => driver.subscribe_selected_channel(),
-        }
+        self.selection().subscribe()
     }
 
     #[cfg(test)]

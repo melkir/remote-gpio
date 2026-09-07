@@ -1,20 +1,18 @@
 use anyhow::{bail, Result};
 use futures_util::future::BoxFuture;
 use std::sync::Arc;
-use tokio::sync::watch::{self, Sender};
 use tokio::sync::Mutex;
 
 use crate::config::TelisOptions;
 use crate::core::{Channel, Command};
-use crate::driver::{SelectedChannelRx, TELIS_PROG_UNAVAILABLE};
+use crate::driver::{Selection, TELIS_PROG_UNAVAILABLE};
 use crate::gpio::{trigger_output, watch_inputs, GpioOptions, TelisButton};
 
 const MAX_SELECT_CYCLES: usize = 8;
 
 #[derive(Debug)]
 pub(crate) struct TelisDriver {
-    sender: Sender<Channel>,
-    selected_rx: SelectedChannelRx,
+    selection: Selection,
     transport: Arc<dyn TelisTransport>,
     execute_lock: Mutex<()>,
 }
@@ -29,11 +27,9 @@ impl TelisDriver {
     }
 
     async fn with_transport(transport: Arc<dyn TelisTransport>) -> Result<Self> {
-        let selection = transport.select().await?;
-        let (sender, selected_rx) = watch::channel(selection);
+        let selected = transport.select().await?;
         Ok(Self {
-            sender,
-            selected_rx,
+            selection: Selection::new(selected),
             transport,
             execute_lock: Mutex::new(()),
         })
@@ -71,24 +67,20 @@ impl TelisDriver {
         }
     }
 
-    pub(super) fn selected_channel(&self) -> Channel {
-        *self.selected_rx.borrow()
-    }
-
-    pub(super) fn subscribe_selected_channel(&self) -> SelectedChannelRx {
-        self.selected_rx.clone()
+    pub(super) fn selection(&self) -> &Selection {
+        &self.selection
     }
 
     async fn select_once(&self, broadcast: bool) -> Result<Channel> {
         let channel = self.transport.select().await?;
         if broadcast {
-            self.sender.send(channel)?;
+            self.selection.set(channel)?;
         }
         Ok(channel)
     }
 
     async fn select_to(&self, target: Channel, broadcast: bool) -> Result<()> {
-        self.select_from_to(self.selected_channel(), target, broadcast)
+        self.select_from_to(self.selection.get(), target, broadcast)
             .await
     }
 

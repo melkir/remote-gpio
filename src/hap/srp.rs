@@ -8,6 +8,7 @@
 use anyhow::{bail, Result};
 use num_bigint::BigUint;
 use sha2::{Digest, Sha512};
+use std::sync::LazyLock;
 
 // RFC 5054 Appendix A, 3072-bit group. N hex constant copied directly so the
 // constants are auditable in-tree without depending on the srp crate.
@@ -27,9 +28,15 @@ D87602733EC86A64521F2B18177B200CBBE117577A615D6C770988C0BAD946E2\
 const G_VAL: u32 = 5;
 const USERNAME: &[u8] = b"Pair-Setup";
 
-fn group_n() -> BigUint {
+/// Parsing 768 hex digits into a 3072-bit integer is not free, and both pairing
+/// steps need N, so it is parsed once for the life of the process.
+static GROUP_N: LazyLock<BigUint> = LazyLock::new(|| {
     #[expect(clippy::expect_used, reason = "RFC 5054 N constant is valid hex")]
     BigUint::parse_bytes(N_HEX.as_bytes(), 16).expect("valid N constant")
+});
+
+fn group_n() -> &'static BigUint {
+    &GROUP_N
 }
 
 fn group_g() -> BigUint {
@@ -89,12 +96,12 @@ pub fn server_setup(password: &[u8], salt: [u8; 16], b_priv: [u8; 32]) -> Server
     };
     let x = BigUint::from_bytes_be(&x_hash);
 
-    let v = g.modpow(&x, &n);
+    let v = g.modpow(&x, n);
 
     // k = H(N | PAD(g))
     let k_hash = {
         let mut h = Sha512::new();
-        h.update(pad_to_n(&n));
+        h.update(pad_to_n(n));
         h.update(pad_to_n(&g));
         h.finalize()
     };
@@ -102,7 +109,7 @@ pub fn server_setup(password: &[u8], salt: [u8; 16], b_priv: [u8; 32]) -> Server
 
     // B = (k*v + g^b) mod N
     let b_int = BigUint::from_bytes_be(&b_priv);
-    let b_pub_int = (&k * &v + g.modpow(&b_int, &n)) % &n;
+    let b_pub_int = (&k * &v + g.modpow(&b_int, n)) % n;
 
     ServerSetup {
         salt,
@@ -119,7 +126,7 @@ pub fn server_verify(setup: &ServerSetup, a_pub_bytes: &[u8]) -> Result<ServerVe
     let g = group_g();
     let a_pub = BigUint::from_bytes_be(a_pub_bytes);
 
-    if &a_pub % &n == BigUint::from(0u32) {
+    if &a_pub % n == BigUint::from(0u32) {
         bail!("invalid A");
     }
 
@@ -135,8 +142,8 @@ pub fn server_verify(setup: &ServerSetup, a_pub_bytes: &[u8]) -> Result<ServerVe
     let u = BigUint::from_bytes_be(&u_hash);
 
     let b_int = BigUint::from_bytes_be(&setup.b_priv);
-    let s_base = (&a_pub * setup.v.modpow(&u, &n)) % &n;
-    let s = s_base.modpow(&b_int, &n);
+    let s_base = (&a_pub * setup.v.modpow(&u, n)) % n;
+    let s = s_base.modpow(&b_int, n);
     let s_pad = pad_to_n(&s);
     let k = sha512(&s_pad);
 
