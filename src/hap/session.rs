@@ -135,8 +135,8 @@ pub struct EncryptedWriter {
     inner: OwnedWriteHalf,
     cipher: ChaCha20Poly1305,
     counter: u64,
-    /// Reused staging buffer holding one whole frame, so each frame leaves in a
-    /// single write instead of three.
+    /// Reused staging buffer holding an entire outgoing message — every frame
+    /// of it — so the message leaves in a single write.
     frame: Vec<u8>,
 }
 
@@ -151,10 +151,19 @@ impl EncryptedWriter {
         }
     }
 
+    /// Encrypt `plaintext` into as many frames as it needs and emit the whole
+    /// message in a single write.
+    ///
+    /// The socket is unbuffered, so a write per frame — let alone the three per
+    /// frame this used to do — is a syscall per 1 KB, each leading with a 2-byte
+    /// length segment that Nagle would hold back waiting on an ACK. Responses
+    /// larger than one frame (`/accessories` is several KB) are the common case.
     pub async fn write_all(&mut self, plaintext: &[u8]) -> Result<()> {
+        self.frame.clear();
         for chunk in plaintext.chunks(MAX_FRAME_PLAINTEXT) {
-            self.write_frame(chunk).await?;
+            self.encode_frame(chunk)?;
         }
+        self.inner.write_all(&self.frame).await?;
         Ok(())
     }
 
@@ -163,23 +172,18 @@ impl EncryptedWriter {
         Ok(())
     }
 
-    /// Stage `len || ciphertext || tag` contiguously and emit it as one write.
-    ///
-    /// The socket is unbuffered, so writing the three parts separately cost
-    /// three syscalls per frame and led with a 2-byte segment that Nagle would
-    /// hold back waiting on an ACK.
-    async fn write_frame(&mut self, plaintext: &[u8]) -> Result<()> {
+    /// Append one `len || ciphertext || tag` frame to the staging buffer.
+    fn encode_frame(&mut self, plaintext: &[u8]) -> Result<()> {
         let aad = (plaintext.len() as u16).to_le_bytes();
-        self.frame.clear();
+        let body = self.frame.len() + HEADER_LEN;
         self.frame.extend_from_slice(&aad);
         self.frame.extend_from_slice(plaintext);
         let nonce = Nonce::from(nonce_for(self.counter));
         let tag = self
             .cipher
-            .encrypt_inout_detached(&nonce, &aad, (&mut self.frame[HEADER_LEN..]).into())
+            .encrypt_inout_detached(&nonce, &aad, (&mut self.frame[body..]).into())
             .map_err(|_| anyhow!("AEAD encrypt failed"))?;
         self.frame.extend_from_slice(&tag);
-        self.inner.write_all(&self.frame).await?;
         self.counter += 1;
         Ok(())
     }
@@ -199,7 +203,7 @@ mod tests {
 
     const KEY: [u8; 32] = [7u8; 32];
 
-    /// Independent oracle for the wire format, mirroring [`EncryptedWriter::write_frame`].
+    /// Independent oracle for the wire format, mirroring [`EncryptedWriter::encode_frame`].
     fn encrypt_frame(counter: u64, plaintext: &[u8]) -> Vec<u8> {
         let cipher = ChaCha20Poly1305::new(&Key::from(KEY));
         let aad = (plaintext.len() as u16).to_le_bytes();
@@ -341,6 +345,24 @@ mod tests {
         let mut reader = EncryptedReader::new(read_half, KEY);
         reader.fill(payload.len()).await.unwrap();
         assert_eq!(reader.buffered(), payload.as_slice());
+    }
+
+    /// The whole message must be staged before it hits the socket — that is what
+    /// makes it one syscall. A round-trip test alone would still pass if each
+    /// frame were written separately, so assert on the staging buffer directly.
+    #[tokio::test]
+    async fn multi_frame_message_is_staged_as_one_buffer() {
+        let (client, _server) = connected().await;
+        let (_read, write_half) = client.into_split();
+        let mut writer = EncryptedWriter::new(write_half, KEY);
+
+        let payload = vec![0x5Au8; MAX_FRAME_PLAINTEXT + 100];
+        writer.write_all(&payload).await.unwrap();
+
+        // Two frames: a full one and a 100-byte remainder, each len + body + tag.
+        let expected = (HEADER_LEN + MAX_FRAME_PLAINTEXT + TAG_LEN) + (HEADER_LEN + 100 + TAG_LEN);
+        assert_eq!(writer.frame.len(), expected);
+        assert_eq!(writer.counter, 2);
     }
 
     #[tokio::test]

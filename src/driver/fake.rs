@@ -35,7 +35,7 @@ impl FakeDriver {
         match command {
             Command::Select => {
                 let channel = channel.unwrap_or_else(|| self.selection.get().next());
-                self.selection.set(channel)?;
+                self.selection.set(channel);
                 self.transport.record_selection(channel).await;
             }
             Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {

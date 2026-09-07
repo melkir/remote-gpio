@@ -47,9 +47,11 @@ impl Selection {
     }
 
     /// Publish a new selection to every subscriber.
-    pub(crate) fn set(&self, channel: Channel) -> Result<()> {
-        self.sender.send(channel)?;
-        Ok(())
+    ///
+    /// Infallible: `send` only fails once every receiver is gone, and this
+    /// struct holds one for its whole life.
+    pub(crate) fn set(&self, channel: Channel) {
+        self.sender.send_replace(channel);
     }
 }
 

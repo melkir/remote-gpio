@@ -172,7 +172,7 @@ impl RtsDriver {
     async fn set_selected_channel(&self, channel: Channel) -> Result<()> {
         self.with_state(move |state| state.set_selected_channel(channel))
             .await?;
-        self.selection.set(channel)?;
+        self.selection.set(channel);
         Ok(())
     }
 

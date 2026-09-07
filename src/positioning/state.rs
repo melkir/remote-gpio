@@ -220,28 +220,21 @@ impl PositionCache {
         self.state.lock().await.blinds
     }
 
-    pub async fn apply_for_channel(&self, channel: Channel, pos: u8) -> Vec<PositionDelta> {
-        if matches!(channel, Channel::All) {
-            return self.apply_all_current(pos).await;
-        }
-        let Some(blind) = find_blind_for_channel(channel) else {
-            return Vec::new();
-        };
-        self.apply_blind_current(blind, pos).await
+    /// Snap every blind the channel addresses to `position`.
+    ///
+    /// `ALL` and a single channel differ only in how many blinds
+    /// [`blinds_for_channel`] yields, so both go through one path.
+    pub async fn apply_for_channel(&self, channel: Channel, position: u8) -> Vec<PositionDelta> {
+        self.settle_all(blinds_for_channel(channel), position).await
     }
 
     pub async fn apply_blind_current(&self, blind: &Blind, position: u8) -> Vec<PositionDelta> {
-        let mut state = self.state.lock().await;
-        let Some(delta) = state.settle(blind.aid, position) else {
-            return Vec::new();
-        };
-        self.persist_positions(&state);
-        vec![delta]
+        self.settle_all(std::slice::from_ref(blind), position).await
     }
 
-    pub async fn apply_all_current(&self, position: u8) -> Vec<PositionDelta> {
+    async fn settle_all(&self, blinds: &[Blind], position: u8) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
-        let deltas: Vec<PositionDelta> = BLINDS
+        let deltas: Vec<PositionDelta> = blinds
             .iter()
             .filter_map(|blind| state.settle(blind.aid, position))
             .collect();

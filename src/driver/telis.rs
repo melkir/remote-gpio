@@ -74,7 +74,7 @@ impl TelisDriver {
     async fn select_once(&self, broadcast: bool) -> Result<Channel> {
         let channel = self.transport.select().await?;
         if broadcast {
-            self.selection.set(channel)?;
+            self.selection.set(channel);
         }
         Ok(channel)
     }
