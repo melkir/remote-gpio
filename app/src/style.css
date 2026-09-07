@@ -1,6 +1,11 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
+/* `cn build` output is a merge table, not markup. Tailwind's automatic source
+   detection otherwise mines class-name fragments out of it and emits CSS for
+   utilities nothing renders. */
+@source not './lib/cn-tables.ts';
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

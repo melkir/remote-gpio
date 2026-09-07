@@ -1,5 +1,7 @@
 {
   "singleQuote": true,
   "allowTrailingCommas": true,
-  "ignorePatterns": []
+  "ignorePatterns": [
+    "src/lib/cn-tables.ts"
+  ]
 }
