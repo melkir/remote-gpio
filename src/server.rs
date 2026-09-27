@@ -20,6 +20,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::trace::DefaultMakeSpan;
 use tower_http::trace::TraceLayer;
+use tracing::Instrument;
 
 pub(crate) const HTTP_HOST: &str = "127.0.0.1";
 pub(crate) const HTTP_PORT: u16 = 5002;
@@ -132,14 +133,16 @@ async fn ws_handler(
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(params): Query<WsQueryParams>,
 ) -> impl IntoResponse {
-    let client_name = params.name.unwrap_or_else(|| "anonymous".to_string());
-    let port = addr.port();
-    tracing::info!("[{}:{}] New WebSocket connection", client_name, port);
-    ws.on_upgrade(move |socket| websocket(socket, state, client_name, port))
+    let client = params.name.as_deref().unwrap_or("anonymous");
+    // Every log line for this connection, including spawned commands, carries
+    // the client identity through this span.
+    let span = tracing::info_span!("ws", client, port = addr.port());
+    span.in_scope(|| tracing::info!("new WebSocket connection"));
+    ws.on_upgrade(move |socket| websocket(socket, state).instrument(span))
 }
 
 /// Manages WebSocket connections and message handling
-async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String, port: u16) {
+async fn websocket(stream: WebSocket, state: Arc<AppState>) {
     let (mut sink, mut stream) = stream.split();
     let mut rx_channel = state.controller.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
@@ -171,52 +174,30 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>, client_name: String,
                 }
             }
             // Handle incoming messages
-            msg = stream.next() => {
-                match msg {
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<CommandRequest>(&text) {
-                            Ok(payload) => {
-                                let command = payload.command.clone();
-                                let channel = payload.channel;
-                                let value = payload.value;
-                                let state = state.clone();
-                                let client_name = client_name.clone();
-                                tokio::spawn(async move {
-                                    match execute_command(&state, payload).await {
-                                        Ok(_) => {
-                                            tracing::info!(
-                                                "[{}:{}] {} {:?} value={:?}",
-                                                client_name,
-                                                port,
-                                                command,
-                                                channel,
-                                                value
-                                            )
-                                        }
-                                        Err(e) => {
-                                            tracing::error!(
-                                                "[{}:{}] Command execution failed: {}",
-                                                client_name,
-                                                port,
-                                                e
-                                            );
-                                        }
-                                    }
-                                });
-                            }
-                            Err(_) => {
-                                tracing::error!(
-                                    "Invalid JSON received from client: {}:{}",
-                                    client_name,
-                                    port
-                                );
-                            }
-                        }
-                    }
-                    Some(Ok(_)) => {} // Ignore other message types (Pong, etc.)
-                    Some(Err(_)) | None => break, // Connection closed or error
-                }
-            }
+            msg = stream.next() => match msg {
+                Some(Ok(Message::Text(text))) => spawn_ws_command(&state, &text),
+                Some(Ok(_)) => {} // Ignore other message types (Pong, etc.)
+                Some(Err(_)) | None => break, // Connection closed or error
+            },
         }
     }
+}
+
+/// Run a WebSocket text frame as a command without blocking the socket loop.
+/// `execute_command` already logs the outcome, so the task discards it.
+fn spawn_ws_command(state: &Arc<AppState>, text: &str) {
+    let payload = match serde_json::from_str::<CommandRequest>(text) {
+        Ok(payload) => payload,
+        Err(e) => {
+            tracing::error!(error = %e, "invalid JSON command from WebSocket client");
+            return;
+        }
+    };
+    let state = Arc::clone(state);
+    tokio::spawn(
+        async move {
+            let _ = execute_command(&state, payload).await;
+        }
+        .in_current_span(),
+    );
 }

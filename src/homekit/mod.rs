@@ -6,7 +6,7 @@ use tokio::sync::broadcast;
 
 use crate::controller::BlindController;
 use crate::hap::mdns::{self, MdnsConfig};
-use crate::hap::runtime::{CharacteristicEvent, HapRuntime};
+use crate::hap::runtime::{EventBatch, HapRuntime};
 use crate::hap::state::{FileHapStore, HapState};
 use crate::hap::{qr, server};
 use crate::persist;
@@ -83,7 +83,7 @@ pub async fn start(controller: Arc<BlindController>) -> Result<HomekitHandles> {
 
 fn spawn_position_events(
     controller: Arc<BlindController>,
-    event_tx: broadcast::Sender<Vec<CharacteristicEvent>>,
+    event_tx: broadcast::Sender<EventBatch>,
 ) -> tokio::task::JoinHandle<()> {
     let mut position_rx = controller.subscribe_positions();
     tokio::spawn(async move {
@@ -95,16 +95,10 @@ fn spawn_position_events(
                         skipped,
                         "position broadcast lagged; resyncing HAP position events from snapshot"
                     );
-                    let positions = controller.position_snapshot().await;
-                    let deltas: Vec<PositionDelta> = positions
-                        .iter()
-                        .map(|pos| PositionDelta {
-                            aid: pos.aid,
-                            current: Some(pos.current),
-                            target: Some(pos.target),
-                            status: Some(pos.status),
-                        })
-                        .collect();
+                    let deltas = controller
+                        .position_snapshot()
+                        .await
+                        .map(PositionDelta::from);
                     somfy::position_characteristic_events(&deltas)
                 }
                 Err(broadcast::error::RecvError::Closed) => break,
@@ -112,7 +106,7 @@ fn spawn_position_events(
 
             if !events.is_empty() {
                 tracing::debug!(count = events.len(), "hap position events published");
-                let _ = event_tx.send(events);
+                let _ = event_tx.send(events.into());
             }
         }
     })

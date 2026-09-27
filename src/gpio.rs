@@ -132,25 +132,23 @@ mod platform {
         output: TelisButton,
         config: &TelisGpioOptions,
     ) -> Result<()> {
-        tracing::debug!("Triggering Telis button: {:?}", output);
         let gpio = button_gpio(output, config);
         let duration = Duration::from_millis(60);
-        tracing::debug!("Triggering GPIO{gpio} for {:?}", duration);
-        let offset = gpio as u32;
-        let mut value = Value::Active;
+        tracing::debug!(button = ?output, gpio, ?duration, "triggering Telis button");
 
+        // Active-low: requesting the line as `Active` pulls it low (pressed),
+        // and `Inactive` releases it.
         let req = Request::builder()
             .on_chip(chip)
-            .with_line(offset)
-            .as_output(value)
+            .with_line(u32::from(gpio))
+            .as_output(Value::Active)
             .as_active_low()
             .request()
             .context("Failed to request output line")?;
 
         tokio::time::sleep(duration).await;
 
-        value = value.not();
-        req.set_lone_value(value)
+        req.set_lone_value(Value::Inactive)
             .context("Failed to set output value")?;
 
         Ok(())

@@ -117,6 +117,13 @@ pub struct CharacteristicEvent {
 }
 
 pub type Subscriptions = HashSet<CharacteristicId>;
+
+/// One batch of characteristic changes as fanned out to every HAP connection.
+///
+/// `broadcast` clones the payload for each receiver, so the batch is shared
+/// behind an `Arc` rather than deep-copying its JSON values per paired
+/// controller.
+pub type EventBatch = Arc<[CharacteristicEvent]>;
 pub type HapFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T>> + Send + 'a>>;
 
 pub trait HapStore: Send + Sync + 'static {
@@ -147,7 +154,7 @@ where
     pub state: Mutex<HapState>,
     pub store: S,
     pub app: Arc<A>,
-    events: broadcast::Sender<Vec<CharacteristicEvent>>,
+    events: broadcast::Sender<EventBatch>,
 }
 
 impl<A, S> HapRuntime<A, S>
@@ -159,7 +166,7 @@ where
         state: HapState,
         store: S,
         app: Arc<A>,
-        events: broadcast::Sender<Vec<CharacteristicEvent>>,
+        events: broadcast::Sender<EventBatch>,
     ) -> Self {
         Self {
             state: Mutex::new(state),
@@ -169,17 +176,17 @@ where
         }
     }
 
-    pub fn subscribe_events(&self) -> broadcast::Receiver<Vec<CharacteristicEvent>> {
+    pub fn subscribe_events(&self) -> broadcast::Receiver<EventBatch> {
         self.events.subscribe()
     }
 
-    pub fn event_sender(&self) -> broadcast::Sender<Vec<CharacteristicEvent>> {
+    pub fn event_sender(&self) -> broadcast::Sender<EventBatch> {
         self.events.clone()
     }
 
     pub fn publish_events(&self, events: Vec<CharacteristicEvent>) {
         if !events.is_empty() {
-            let _ = self.events.send(events);
+            let _ = self.events.send(events.into());
         }
     }
 }

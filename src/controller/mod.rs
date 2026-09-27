@@ -304,6 +304,9 @@ impl BlindController {
         let handle = tokio::spawn(async move {
             tokio::time::sleep(movement.duration).await;
             let deltas = {
+                // Every path that bumps a motion's generation (`begin`, `cancel`,
+                // `cancel_channel`) runs under `operation_lock`, so once this
+                // check passes the token stays current for the rest of the block.
                 let _guard = controller.operation_lock.lock().await;
                 if !controller
                     .motion_tasks
@@ -325,13 +328,6 @@ impl BlindController {
                         );
                         return;
                     }
-                }
-                if !controller
-                    .motion_tasks
-                    .is_current(movement.blind.aid, generation)
-                    .await
-                {
-                    return;
                 }
                 let deltas = controller
                     .positions

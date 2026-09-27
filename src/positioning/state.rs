@@ -131,6 +131,18 @@ pub struct PositionDelta {
     pub status: Option<u8>,
 }
 
+/// Every field of a known position, e.g. to resync a subscriber that lagged.
+impl From<BlindPosition> for PositionDelta {
+    fn from(position: BlindPosition) -> Self {
+        Self {
+            aid: position.aid,
+            current: Some(position.current),
+            target: Some(position.target),
+            status: Some(position.status),
+        }
+    }
+}
+
 impl PositionDelta {
     /// A blind came to rest at a known position: current, target, and status all move.
     pub fn settled(aid: u64, position: u8) -> Self {
