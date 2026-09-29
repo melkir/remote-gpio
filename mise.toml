@@ -2,8 +2,8 @@
 rust = { version = "stable", profile = "default" }
 bun = "1.4"
 zig = "0.16"
-"cargo:cargo-release" = "1.1.6"
-"cargo:cargo-zigbuild" = "0.23.4"
+cargo-release = "1.1.6"
+"github:rust-cross/cargo-zigbuild" = "0.23.4"
 
 [tasks."install:rust"]
 hide = true
