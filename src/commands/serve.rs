@@ -5,7 +5,7 @@ use crate::commands::doctor;
 use crate::config::ResolvedConfig;
 use crate::controller::BlindController;
 use crate::homekit;
-use crate::server::{serve, AppState};
+use crate::server::serve;
 
 pub async fn run(resolved_config: &ResolvedConfig) -> Result<()> {
     let report = doctor::collect(resolved_config, 0).await;
@@ -21,8 +21,6 @@ pub async fn run(resolved_config: &ResolvedConfig) -> Result<()> {
         )
         .await?,
     );
-    let shared_state = Arc::new(AppState::new(controller.clone()));
-
     let hap_handles = if resolved_config.config.homekit {
         match homekit::start(controller.clone()).await {
             Ok(handles) => Some(handles),
@@ -39,7 +37,7 @@ pub async fn run(resolved_config: &ResolvedConfig) -> Result<()> {
     };
 
     tokio::select! {
-        res = serve(shared_state) => res,
+        res = serve(controller) => res,
         sig = wait_for_shutdown() => {
             tracing::info!("received {sig}, shutting down");
             if let Some(handles) = hap_handles {

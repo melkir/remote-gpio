@@ -23,11 +23,57 @@ pub(crate) enum ControlRequest {
     },
 }
 
+/// The `command` field of a [`CommandRequest`]: a button press, or `target` for
+/// a percentage move.
+///
+/// Parsed during deserialization, so an unknown command is rejected alongside
+/// any other malformed body and nothing downstream compares strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(try_from = "String", into = "&'static str")]
+pub(crate) enum RequestCommand {
+    Button(Command),
+    Target,
+}
+
+impl RequestCommand {
+    const TARGET: &'static str = "target";
+
+    /// Wire spelling; the inverse of the `TryFrom<String>` parse.
+    pub(crate) const fn as_str(self) -> &'static str {
+        match self {
+            Self::Button(command) => command.as_str(),
+            Self::Target => Self::TARGET,
+        }
+    }
+}
+
+impl TryFrom<String> for RequestCommand {
+    type Error = anyhow::Error;
+    fn try_from(value: String) -> Result<Self> {
+        if value == Self::TARGET {
+            return Ok(Self::Target);
+        }
+        Command::from_str(&value).map(Self::Button)
+    }
+}
+
+impl From<RequestCommand> for &'static str {
+    fn from(command: RequestCommand) -> Self {
+        command.as_str()
+    }
+}
+
+impl std::fmt::Display for RequestCommand {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
 /// HTTP/JSON command body (`POST /command`, WebSocket text, CLI remote POST).
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct CommandRequest {
-    pub command: String,
+    pub command: RequestCommand,
     pub channel: Option<Channel>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub value: Option<u8>,
@@ -37,12 +83,12 @@ impl CommandRequest {
     pub(crate) fn from_control(request: ControlRequest) -> Self {
         match request {
             ControlRequest::Driver { command, channel } => Self {
-                command: command.to_string(),
+                command: RequestCommand::Button(command),
                 channel,
                 value: None,
             },
             ControlRequest::Position { channel, position } => Self {
-                command: "target".to_string(),
+                command: RequestCommand::Target,
                 channel,
                 value: Some(position),
             },
@@ -87,10 +133,13 @@ fn parse_command(request: CommandRequest) -> Result<ControlRequest, CommandError
         channel,
         value,
     } = request;
-    if command == "target" {
-        let position = target_position_value(value)?;
-        return Ok(ControlRequest::Position { channel, position });
-    }
+    let command = match command {
+        RequestCommand::Target => {
+            let position = target_position_value(value)?;
+            return Ok(ControlRequest::Position { channel, position });
+        }
+        RequestCommand::Button(command) => command,
+    };
 
     if value.is_some() {
         return Err(CommandError::Invalid(
@@ -98,18 +147,14 @@ fn parse_command(request: CommandRequest) -> Result<ControlRequest, CommandError
         ));
     }
 
-    let cmd = Command::from_str(&command).map_err(|e| CommandError::Invalid(e.to_string()))?;
     // Pairing is addressed RF: it has to name the channel rather than fall back
     // to whatever happens to be selected. Every other command may omit it.
-    if matches!(cmd, Command::Prog | Command::ProgLong) && channel.is_none() {
+    if matches!(command, Command::Prog | Command::ProgLong) && channel.is_none() {
         return Err(CommandError::Invalid(
             "prog and prog_long require a channel".to_string(),
         ));
     }
-    Ok(ControlRequest::Driver {
-        command: cmd,
-        channel,
-    })
+    Ok(ControlRequest::Driver { command, channel })
 }
 
 fn target_position_value(value: Option<u8>) -> Result<u8, CommandError> {
@@ -187,7 +232,7 @@ mod tests {
 
     fn parse(command: &str, channel: Option<Channel>) -> Result<ControlRequest, CommandError> {
         parse_command(CommandRequest {
-            command: command.to_string(),
+            command: RequestCommand::try_from(command.to_string()).unwrap(),
             channel,
             value: None,
         })
@@ -225,7 +270,7 @@ mod tests {
         let err = validate_command_request(
             DriverKind::Telis,
             CommandRequest {
-                command: "prog".to_string(),
+                command: RequestCommand::Button(Command::Prog),
                 channel: Some(Channel::L1),
                 value: None,
             },
@@ -267,9 +312,42 @@ mod tests {
         let req: CommandRequest =
             serde_json::from_str(r#"{"command":"up","channel":"L1"}"#).unwrap();
 
-        assert_eq!(req.command, "up");
+        assert_eq!(req.command, RequestCommand::Button(Command::Up));
         assert_eq!(req.channel, Some(Channel::L1));
         assert_eq!(req.value, None);
+    }
+
+    #[test]
+    fn command_request_rejects_unknown_command_while_deserializing() {
+        let err = serde_json::from_str::<CommandRequest>(r#"{"command":"toggle"}"#).unwrap_err();
+        assert!(err.to_string().contains("Invalid command: toggle"), "{err}");
+    }
+
+    /// The CLI serializes typed requests for `POST /command`; the JSON must be
+    /// exactly what the server and the PWA already speak.
+    #[test]
+    fn command_request_serializes_wire_spellings() {
+        for (request, json) in [
+            (
+                ControlRequest::Driver {
+                    command: Command::ProgLong,
+                    channel: Some(Channel::L2),
+                },
+                r#"{"command":"prog_long","channel":"L2"}"#,
+            ),
+            (
+                ControlRequest::Position {
+                    channel: None,
+                    position: 40,
+                },
+                r#"{"command":"target","channel":null,"value":40}"#,
+            ),
+        ] {
+            let wire = serde_json::to_string(&CommandRequest::from_control(request)).unwrap();
+            assert_eq!(wire, json);
+            let back = serde_json::from_str::<CommandRequest>(&wire).unwrap();
+            assert_eq!(parse_command(back).unwrap(), request);
+        }
     }
 
     #[test]
@@ -359,7 +437,7 @@ mod tests {
         dispatch_command(
             &controller,
             CommandRequest {
-                command: "target".to_string(),
+                command: RequestCommand::Target,
                 channel: None,
                 value: Some(50),
             },

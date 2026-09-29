@@ -149,10 +149,7 @@ mod tests {
             let source = std::fs::read_to_string(format!("{root}/{name}")).unwrap();
             assert!(!source.contains(concat!("crate::", "gpio")), "{name}");
             assert!(!source.contains(concat!("crate::", "remote")), "{name}");
-            assert!(
-                !source.contains(concat!("crate::server::", "AppState")),
-                "{name}"
-            );
+            assert!(!source.contains(concat!("crate::", "server")), "{name}");
         }
     }
 

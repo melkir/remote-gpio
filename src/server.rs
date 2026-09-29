@@ -29,17 +29,6 @@ pub(crate) fn base_url() -> String {
     format!("http://{HTTP_HOST}:{HTTP_PORT}")
 }
 
-/// Application state shared across all routes
-pub struct AppState {
-    pub controller: Arc<BlindController>,
-}
-
-impl AppState {
-    pub fn new(controller: Arc<BlindController>) -> Self {
-        Self { controller }
-    }
-}
-
 /// WebSocket query parameters
 #[derive(Debug, Deserialize)]
 struct WsQueryParams {
@@ -47,8 +36,8 @@ struct WsQueryParams {
 }
 
 /// Starts the HTTP server with all routes and middleware
-pub async fn serve(shared_state: Arc<AppState>) -> Result<()> {
-    let app = create_router(shared_state);
+pub async fn serve(controller: Arc<BlindController>) -> Result<()> {
+    let app = create_router(controller);
     let listener = tokio::net::TcpListener::bind((HTTP_HOST, HTTP_PORT)).await?;
     tracing::info!("Listening on http://{}", listener.local_addr()?);
 
@@ -62,14 +51,14 @@ pub async fn serve(shared_state: Arc<AppState>) -> Result<()> {
 }
 
 /// Creates the router with all routes and middleware
-fn create_router(shared_state: Arc<AppState>) -> Router {
+fn create_router(controller: Arc<BlindController>) -> Router {
     Router::new()
         .route("/channel", get(handle_channel))
         .route("/events", get(handle_events))
         .route("/command", post(handle_command))
         .route("/ws", get(ws_handler))
         .fallback(embed::static_handler)
-        .with_state(shared_state)
+        .with_state(controller)
         .layer(
             TraceLayer::new_for_http()
                 .make_span_with(DefaultMakeSpan::default().include_headers(false)),
@@ -77,15 +66,15 @@ fn create_router(shared_state: Arc<AppState>) -> Router {
 }
 
 /// Returns the currently-selected channel as plain text.
-async fn handle_channel(State(state): State<Arc<AppState>>) -> &'static str {
-    state.controller.current_selection().as_str()
+async fn handle_channel(State(controller): State<Arc<BlindController>>) -> &'static str {
+    controller.current_selection().as_str()
 }
 
 /// Streams channel selection changes as server-sent events.
 async fn handle_events(
-    State(state): State<Arc<AppState>>,
+    State(controller): State<Arc<BlindController>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
-    let mut rx = state.controller.subscribe_selection();
+    let mut rx = controller.subscribe_selection();
     rx.mark_changed();
     let stream = stream::unfold(rx, |mut rx| async move {
         rx.changed().await.ok()?;
@@ -98,10 +87,10 @@ async fn handle_events(
 
 /// Handles command requests via HTTP
 async fn handle_command(
-    State(state): State<Arc<AppState>>,
+    State(controller): State<Arc<BlindController>>,
     Json(payload): Json<CommandRequest>,
 ) -> Response {
-    match execute_command(&state, payload).await {
+    match execute_command(&controller, payload).await {
         Ok(()) => StatusCode::OK.into_response(),
         Err(err) => {
             let status = if err.is_client_error() {
@@ -114,14 +103,17 @@ async fn handle_command(
     }
 }
 
-async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), CommandError> {
+async fn execute_command(
+    controller: &Arc<BlindController>,
+    payload: CommandRequest,
+) -> Result<(), CommandError> {
     tracing::info!(
         command = %payload.command,
         ?payload.channel,
         ?payload.value,
         "remote command received"
     );
-    if let Err(err) = dispatch_command(&state.controller, payload).await {
+    if let Err(err) = dispatch_command(controller, payload).await {
         tracing::error!(error = %err, "remote command failed");
         return Err(err);
     }
@@ -132,7 +124,7 @@ async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<()
 /// Handles WebSocket upgrade requests
 async fn ws_handler(
     ws: WebSocketUpgrade,
-    State(state): State<Arc<AppState>>,
+    State(controller): State<Arc<BlindController>>,
     ConnectInfo(addr): ConnectInfo<SocketAddr>,
     Query(params): Query<WsQueryParams>,
 ) -> impl IntoResponse {
@@ -141,13 +133,13 @@ async fn ws_handler(
     // the client identity through this span.
     let span = tracing::info_span!("ws", client, port = addr.port());
     span.in_scope(|| tracing::info!("new WebSocket connection"));
-    ws.on_upgrade(move |socket| websocket(socket, state).instrument(span))
+    ws.on_upgrade(move |socket| websocket(socket, controller).instrument(span))
 }
 
 /// Manages WebSocket connections and message handling
-async fn websocket(stream: WebSocket, state: Arc<AppState>) {
+async fn websocket(stream: WebSocket, controller: Arc<BlindController>) {
     let (mut sink, mut stream) = stream.split();
-    let mut rx_channel = state.controller.subscribe_selection();
+    let mut rx_channel = controller.subscribe_selection();
     let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
 
     // Send initial channel state. `borrow_and_update` marks the current value
@@ -178,7 +170,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
             }
             // Handle incoming messages
             msg = stream.next() => match msg {
-                Some(Ok(Message::Text(text))) => spawn_ws_command(&state, &text),
+                Some(Ok(Message::Text(text))) => spawn_ws_command(&controller, &text),
                 Some(Ok(_)) => {} // Ignore other message types (Pong, etc.)
                 Some(Err(_)) | None => break, // Connection closed or error
             },
@@ -188,7 +180,7 @@ async fn websocket(stream: WebSocket, state: Arc<AppState>) {
 
 /// Run a WebSocket text frame as a command without blocking the socket loop.
 /// `execute_command` already logs the outcome, so the task discards it.
-fn spawn_ws_command(state: &Arc<AppState>, text: &str) {
+fn spawn_ws_command(controller: &Arc<BlindController>, text: &str) {
     let payload = match serde_json::from_str::<CommandRequest>(text) {
         Ok(payload) => payload,
         Err(e) => {
@@ -196,10 +188,10 @@ fn spawn_ws_command(state: &Arc<AppState>, text: &str) {
             return;
         }
     };
-    let state = Arc::clone(state);
+    let controller = Arc::clone(controller);
     tokio::spawn(
         async move {
-            let _ = execute_command(&state, payload).await;
+            let _ = execute_command(&controller, payload).await;
         }
         .in_current_span(),
     );
