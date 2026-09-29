@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
-use rand::rngs::OsRng;
-use rand::Rng;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, RngExt};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -85,7 +85,7 @@ impl HapState {
     }
 
     fn generate() -> Self {
-        let mut rng = OsRng;
+        let mut rng = UnwrapErr(SysRng);
         let mut signing_bytes = [0u8; 32];
         rng.fill(&mut signing_bytes);
         let signing = SigningKey::from_bytes(&signing_bytes);
@@ -98,7 +98,7 @@ impl HapState {
             .collect::<Vec<_>>()
             .join(":");
 
-        let setup_code = srp_setup_code(rng.gen_range(0..100_000_000u32));
+        let setup_code = srp_setup_code(rng.random_range(0..100_000_000u32));
         let setup_id = generate_setup_id();
 
         Self {
@@ -119,9 +119,9 @@ impl HapState {
 /// scannable in case the operator falls back to typing it.
 fn generate_setup_id() -> String {
     const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     (0..4)
-        .map(|_| ALPHABET[rng.gen_range(0..ALPHABET.len())] as char)
+        .map(|_| ALPHABET[rng.random_range(0..ALPHABET.len())] as char)
         .collect()
 }
 

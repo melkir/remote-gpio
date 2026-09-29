@@ -1,6 +1,6 @@
 use anyhow::{bail, Context, Result};
-use rand::rngs::OsRng;
-use rand::Rng;
+use rand::rngs::SysRng;
+use rand::{rand_core::UnwrapErr, RngExt};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -157,9 +157,9 @@ fn default_selected_channel() -> Channel {
 }
 
 fn unique_remote_id(used: &mut BTreeSet<u32>) -> u32 {
-    let mut rng = OsRng;
+    let mut rng = UnwrapErr(SysRng);
     loop {
-        let id = rng.gen_range(1..=0xFF_FFFF);
+        let id = rng.random_range(1..=0xFF_FFFF);
         if used.insert(id) {
             return id;
         }

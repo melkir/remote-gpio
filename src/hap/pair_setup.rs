@@ -6,7 +6,7 @@ use anyhow::Result;
 use chacha20poly1305::aead::{AeadInOut, KeyInit};
 use chacha20poly1305::{ChaCha20Poly1305, Key, Tag};
 use ed25519_dalek::{Signer, SigningKey, Verifier, VerifyingKey};
-use rand::{rngs::OsRng, RngCore};
+use rand::{rand_core::UnwrapErr, rngs::SysRng, Rng};
 
 use crate::hap::crypto::{hkdf_sha512, pairing_nonce};
 use crate::hap::srp;
@@ -104,8 +104,9 @@ impl PairSetupSession {
 
         let mut salt = [0u8; 16];
         let mut b_priv = [0u8; 32];
-        OsRng.fill_bytes(&mut salt);
-        OsRng.fill_bytes(&mut b_priv);
+        let mut rng = UnwrapErr(SysRng);
+        rng.fill_bytes(&mut salt);
+        rng.fill_bytes(&mut b_priv);
 
         let setup = srp::server_setup(state.setup_code.as_bytes(), salt, b_priv);
         let b_pub = setup.b_pub.clone();
