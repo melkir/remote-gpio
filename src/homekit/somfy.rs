@@ -59,7 +59,7 @@ pub(crate) fn position_characteristic_events(deltas: &[PositionDelta]) -> Vec<Ch
         if let Some(status) = delta.status {
             events.push(CharacteristicEvent {
                 id: CharacteristicId::new(delta.aid, IID_POSITION_STATE),
-                value: serde_json::json!(status),
+                value: serde_json::json!(status.hap_value()),
             });
         }
     }
@@ -122,11 +122,16 @@ fn read_characteristic(positions: &[BlindPosition], id: CharacteristicId) -> Cha
 fn build_accessories(positions: &[BlindPosition]) -> Value {
     let blinds: Vec<BlindAccessory<'_>> = BLINDS
         .iter()
-        .map(|blind| BlindAccessory {
-            aid: blind.aid,
-            name: blind.name,
-            serial: blind.serial,
-            position: position_for_aid(positions, blind.aid).current,
+        .map(|blind| {
+            let position = position_for_aid(positions, blind.aid);
+            BlindAccessory {
+                aid: blind.aid,
+                name: blind.name,
+                serial: blind.serial,
+                current_position: position.current,
+                target_position: position.target,
+                position_state: position.status.hap_value(),
+            }
         })
         .collect();
     accessory_db::build_accessories(&blinds)
@@ -137,7 +142,7 @@ mod tests {
     use super::*;
     use crate::core::{Channel, Command};
     use crate::driver::ProtocolOperation;
-    use crate::positioning::state::STATUS_STOPPED;
+    use crate::positioning::state::MotionStatus;
     use crate::testing::fixtures::fake_four_blinds;
     use serde_json::json;
     use tokio::time::Duration;
@@ -158,7 +163,7 @@ mod tests {
             aid: 2,
             current: 0,
             target: 0,
-            status: STATUS_STOPPED,
+            status: MotionStatus::Stopped,
         }];
 
         let read = read_characteristic(&positions, CharacteristicId::new(2, IID_CURRENT_POSITION));
@@ -174,25 +179,25 @@ mod tests {
                 aid: 2,
                 current: 100,
                 target: 100,
-                status: STATUS_STOPPED,
+                status: MotionStatus::Stopped,
             },
             BlindPosition {
                 aid: 3,
                 current: 100,
                 target: 100,
-                status: STATUS_STOPPED,
+                status: MotionStatus::Stopped,
             },
             BlindPosition {
                 aid: 4,
                 current: 100,
                 target: 100,
-                status: STATUS_STOPPED,
+                status: MotionStatus::Stopped,
             },
             BlindPosition {
                 aid: 5,
                 current: 100,
                 target: 100,
-                status: STATUS_STOPPED,
+                status: MotionStatus::Stopped,
             },
         ]);
         let aids = body["accessories"]
@@ -203,6 +208,32 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(aids, vec![1, 2, 3, 4, 5]);
+    }
+
+    /// A controller fetching `/accessories` mid-move must see the same target and
+    /// state a characteristic read would return, not a blind parked at `current`.
+    #[test]
+    fn accessories_report_in_flight_target_and_state() {
+        let body = build_accessories(&[BlindPosition {
+            aid: 2,
+            current: 100,
+            target: 40,
+            status: MotionStatus::Decreasing,
+        }]);
+        let characteristics = &body["accessories"][1]["services"][1]["characteristics"];
+        let value = |iid: u64| {
+            characteristics
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|c| c["iid"] == iid)
+                .unwrap()["value"]
+                .clone()
+        };
+
+        assert_eq!(value(IID_CURRENT_POSITION), json!(100));
+        assert_eq!(value(IID_TARGET_POSITION), json!(40));
+        assert_eq!(value(IID_POSITION_STATE), json!(0));
     }
 
     #[tokio::test]

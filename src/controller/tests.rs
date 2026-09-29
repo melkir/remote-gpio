@@ -182,7 +182,7 @@ async fn target_position_matching_pending_target_is_noop() {
 
 #[tokio::test]
 async fn manual_stop_cancels_timed_position_completion() {
-    use crate::positioning::state::STATUS_STOPPED;
+    use crate::positioning::state::MotionStatus;
 
     let controller =
         fake_controller(uniform_positioning_l1_ms(100), HashMap::from([(2, 100)])).await;
@@ -215,9 +215,9 @@ async fn manual_stop_cancels_timed_position_completion() {
     let position = controller.position_for_aid(2).await;
     assert_eq!(position.current, 100);
     assert_eq!(position.target, 100);
-    assert_eq!(position.status, STATUS_STOPPED);
+    assert_eq!(position.status, MotionStatus::Stopped);
     assert_eq!(published[0].target, Some(100));
-    assert_eq!(published[0].status, Some(STATUS_STOPPED));
+    assert_eq!(published[0].status, Some(MotionStatus::Stopped));
 }
 
 #[tokio::test]
@@ -238,7 +238,7 @@ async fn position_broadcast_runs_once_per_non_empty_emit() {
 
 #[tokio::test]
 async fn position_broadcast_while_operation_lock_held() {
-    use crate::positioning::state::{PositionDelta, STATUS_INCREASING};
+    use crate::positioning::state::{MotionStatus, PositionDelta};
 
     let controller = fake_controller(controller_config(), HashMap::from([(2, 100)])).await;
     let mut position_rx = controller.subscribe_positions();
@@ -248,7 +248,7 @@ async fn position_broadcast_while_operation_lock_held() {
         aid: 2,
         current: None,
         target: Some(50),
-        status: Some(STATUS_INCREASING),
+        status: Some(MotionStatus::Increasing),
     }]);
 
     let published = tokio::time::timeout(Duration::from_millis(10), position_rx.recv())

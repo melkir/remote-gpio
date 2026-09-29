@@ -55,11 +55,6 @@ impl Selection {
     }
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct CommandOutcome {
-    pub inferred_position: Option<u8>,
-}
-
 #[cfg(test)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub(crate) enum ProtocolOperation {

@@ -2,8 +2,6 @@
 
 use serde_json::{json, Value};
 
-use crate::positioning::state::STATUS_STOPPED;
-
 pub(crate) const BRIDGE_AID: u64 = 1;
 
 /// Accessory Information strings. Reads in [`super::characteristic`] answer from
@@ -35,7 +33,10 @@ pub(crate) struct BlindAccessory<'a> {
     pub aid: u64,
     pub name: &'a str,
     pub serial: &'a str,
-    pub position: u8,
+    pub current_position: u8,
+    pub target_position: u8,
+    /// HAP `PositionState` wire value (0 decreasing, 1 increasing, 2 stopped).
+    pub position_state: u8,
 }
 
 pub(crate) fn build_accessories(blinds: &[BlindAccessory<'_>]) -> Value {
@@ -67,7 +68,7 @@ fn blind_accessory(blind: &BlindAccessory<'_>) -> Value {
         "aid": blind.aid,
         "services": [
             accessory_info_service(blind.name, BLIND_MODEL, blind.serial),
-            window_covering_service(blind.position),
+            window_covering_service(blind),
         ]
     })
 }
@@ -87,20 +88,14 @@ fn accessory_info_service(name: &str, model: &str, serial: &str) -> Value {
     })
 }
 
-fn window_covering_service(position: u8) -> Value {
+fn window_covering_service(blind: &BlindAccessory<'_>) -> Value {
     json!({
         "iid": IID_WC_SERVICE,
         "type": "8C",
         "characteristics": [
-            char_uint8(IID_CURRENT_POSITION, "6D", position, &["pr", "ev"], 100),
-            char_uint8(IID_TARGET_POSITION, "7C", position, &["pr", "pw", "ev"], 100),
-            char_uint8(
-                IID_POSITION_STATE,
-                "72",
-                STATUS_STOPPED,
-                &["pr", "ev"],
-                2,
-            ),
+            char_uint8(IID_CURRENT_POSITION, "6D", blind.current_position, &["pr", "ev"], 100),
+            char_uint8(IID_TARGET_POSITION, "7C", blind.target_position, &["pr", "pw", "ev"], 100),
+            char_uint8(IID_POSITION_STATE, "72", blind.position_state, &["pr", "ev"], 2),
         ],
     })
 }

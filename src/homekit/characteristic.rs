@@ -113,7 +113,7 @@ fn read_blind(
         BlindCharacteristic::Firmware => Ok(json!(FIRMWARE)),
         BlindCharacteristic::CurrentPosition => Ok(json!(position().current)),
         BlindCharacteristic::TargetPosition => Ok(json!(position().target)),
-        BlindCharacteristic::PositionState => Ok(json!(position().status)),
+        BlindCharacteristic::PositionState => Ok(json!(position().status.hap_value())),
     }
 }
 

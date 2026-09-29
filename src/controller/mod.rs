@@ -7,7 +7,7 @@ use tokio::sync::{broadcast, Mutex};
 
 use crate::config::{DriverConfig, DriverKind, PositioningOptions};
 use crate::core::{Channel, Command};
-use crate::driver::{CommandOutcome, CommandRouter, SelectedChannelRx};
+use crate::driver::{CommandRouter, SelectedChannelRx};
 use crate::positioning::motion::{
     plan_motion, BlindMovement, DriverStart, MotionPlan, MotionRequest, MotionTimings,
 };
@@ -231,12 +231,8 @@ impl BlindController {
     /// selected channel; action commands with an explicit channel target that
     /// channel directly without changing logical selection when the driver
     /// supports that distinction.
-    pub async fn execute(
-        &self,
-        command: Command,
-        channel: Option<Channel>,
-    ) -> Result<CommandOutcome> {
-        let (outcome, deltas) = {
+    pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
+        let deltas = {
             let _guard = self.operation_lock.lock().await;
             // An action command naming a channel targets it directly; `select`
             // and channel-less commands go through the driver's own selection.
@@ -253,24 +249,24 @@ impl BlindController {
             self.complete_command(target, command).await
         };
         self.emit_position_deltas(&deltas);
-        Ok(outcome)
+        Ok(())
     }
 
     /// Run an action command directly on `channel`. RTS can do this without
     /// changing public selection state; Telis may update selection because
     /// targeting a channel requires moving the physical selector.
     #[cfg(test)]
-    pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<CommandOutcome> {
+    pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         if command == Command::Select {
             anyhow::bail!("select is not a direct targeted command");
         }
-        let (outcome, deltas) = {
+        let deltas = {
             let _guard = self.operation_lock.lock().await;
             self.router.execute_on(channel, command).await?;
             self.complete_command(channel, command).await
         };
         self.emit_position_deltas(&deltas);
-        Ok(outcome)
+        Ok(())
     }
 
     #[cfg(test)]
@@ -278,13 +274,10 @@ impl BlindController {
         self.router.operations()
     }
 
-    async fn complete_command(
-        &self,
-        channel: Channel,
-        command: Command,
-    ) -> (CommandOutcome, Vec<PositionDelta>) {
-        let inferred_position = infer_position(command);
-        let deltas = match (command, inferred_position) {
+    /// Fold a completed button press into the position estimate: up/down snap
+    /// the channel's blinds to fully open/closed, stop freezes them in place.
+    async fn complete_command(&self, channel: Channel, command: Command) -> Vec<PositionDelta> {
+        match (command, infer_position(command)) {
             (_, Some(position)) => {
                 self.motion_tasks.cancel_channel(channel).await;
                 self.positions.apply_for_channel(channel, position).await
@@ -294,8 +287,7 @@ impl BlindController {
                 self.positions.stop_channel(channel).await
             }
             _ => Vec::new(),
-        };
-        (CommandOutcome { inferred_position }, deltas)
+        }
     }
 
     async fn schedule_completion(self: &Arc<Self>, movement: BlindMovement) {

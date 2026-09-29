@@ -8,7 +8,7 @@ use std::sync::Arc;
 use crate::config::DriverKind;
 use crate::controller::BlindController;
 use crate::core::{Channel, Command};
-use crate::driver::{CommandOutcome, TELIS_PROG_UNAVAILABLE};
+use crate::driver::TELIS_PROG_UNAVAILABLE;
 
 /// Validated command ready for dispatch.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,10 +50,21 @@ impl CommandRequest {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug)]
 pub(crate) enum CommandError {
+    /// The request itself is malformed; retrying it unchanged cannot succeed.
     Invalid(String),
+    /// The request is valid, but the active driver cannot pair.
     PairingUnavailable,
+    /// The request was valid and reached the driver, which failed to carry it out.
+    Execution(anyhow::Error),
+}
+
+impl CommandError {
+    /// Whether the caller sent something wrong, as opposed to the device failing.
+    pub(crate) fn is_client_error(&self) -> bool {
+        !matches!(self, Self::Execution(_))
+    }
 }
 
 impl std::fmt::Display for CommandError {
@@ -61,15 +72,13 @@ impl std::fmt::Display for CommandError {
         match self {
             Self::Invalid(msg) => write!(f, "{msg}"),
             Self::PairingUnavailable => write!(f, "{TELIS_PROG_UNAVAILABLE}"),
+            // `{:#}` keeps the whole context chain on one line.
+            Self::Execution(err) => write!(f, "{err:#}"),
         }
     }
 }
 
 impl std::error::Error for CommandError {}
-
-fn command_error(err: anyhow::Error) -> CommandError {
-    CommandError::Invalid(format!("{err:?}"))
-}
 
 /// Validate a command request. Does not touch hardware.
 fn parse_command(request: CommandRequest) -> Result<ControlRequest, CommandError> {
@@ -146,7 +155,7 @@ pub(crate) fn validate_control_request(
 pub(crate) async fn dispatch_command(
     controller: &Arc<BlindController>,
     request: CommandRequest,
-) -> Result<CommandOutcome, CommandError> {
+) -> Result<(), CommandError> {
     let parsed = validate_command_request(controller.driver_kind(), request)?;
     dispatch_control_request(controller, parsed).await
 }
@@ -154,27 +163,19 @@ pub(crate) async fn dispatch_command(
 pub(crate) async fn dispatch_control_request(
     controller: &Arc<BlindController>,
     request: ControlRequest,
-) -> Result<CommandOutcome, CommandError> {
+) -> Result<(), CommandError> {
     match request {
-        ControlRequest::Driver {
-            command: cmd,
-            channel,
-        } => controller
-            .execute(cmd, channel)
+        ControlRequest::Driver { command, channel } => controller
+            .execute(command, channel)
             .await
-            .with_context(|| format!("executing {cmd:?} command"))
-            .map_err(command_error),
-        ControlRequest::Position { channel, position } => {
-            controller
-                .set_target_for_channel(channel, position)
-                .await
-                .with_context(|| format!("executing target position to {position}%"))
-                .map_err(command_error)?;
-            Ok(CommandOutcome {
-                inferred_position: None,
-            })
-        }
+            .with_context(|| format!("executing {command} command")),
+        ControlRequest::Position { channel, position } => controller
+            .set_target_for_channel(channel, position)
+            .await
+            .map(|_| ())
+            .with_context(|| format!("moving to target position {position}%")),
     }
+    .map_err(CommandError::Execution)
 }
 
 #[cfg(test)]
@@ -199,6 +200,18 @@ mod tests {
             ensure_pairing_for_kind(DriverKind::Telis, Command::Prog),
             Err(CommandError::PairingUnavailable)
         ));
+    }
+
+    #[test]
+    fn driver_failures_are_server_errors_with_a_one_line_message() {
+        let err = CommandError::Execution(
+            anyhow::anyhow!("connection refused").context("executing up command"),
+        );
+
+        assert!(!err.is_client_error());
+        assert_eq!(err.to_string(), "executing up command: connection refused");
+        assert!(CommandError::Invalid("bad".to_string()).is_client_error());
+        assert!(CommandError::PairingUnavailable.is_client_error());
     }
 
     #[test]

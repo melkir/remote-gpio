@@ -16,9 +16,25 @@ use crate::persist::{self, atomic_save_bytes};
 
 const POSITIONS_FILE: &str = "positions.json";
 
-pub const STATUS_DECREASING: u8 = 0;
-pub const STATUS_INCREASING: u8 = 1;
-pub const STATUS_STOPPED: u8 = 2;
+/// Direction a blind is travelling, as HomeKit's `PositionState` characteristic
+/// reports it. Convert with [`Self::hap_value`] only at the HAP edge.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum MotionStatus {
+    Decreasing,
+    Increasing,
+    Stopped,
+}
+
+impl MotionStatus {
+    /// Wire value for the HAP `PositionState` characteristic (`72`).
+    pub const fn hap_value(self) -> u8 {
+        match self {
+            Self::Decreasing => 0,
+            Self::Increasing => 1,
+            Self::Stopped => 2,
+        }
+    }
+}
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Blind {
@@ -93,7 +109,7 @@ pub struct BlindPosition {
     pub aid: u64,
     pub current: u8,
     pub target: u8,
-    pub status: u8,
+    pub status: MotionStatus,
 }
 
 impl BlindPosition {
@@ -103,7 +119,7 @@ impl BlindPosition {
             aid,
             current: 100,
             target: 100,
-            status: STATUS_STOPPED,
+            status: MotionStatus::Stopped,
         }
     }
 }
@@ -128,7 +144,7 @@ pub struct PositionDelta {
     pub aid: u64,
     pub current: Option<u8>,
     pub target: Option<u8>,
-    pub status: Option<u8>,
+    pub status: Option<MotionStatus>,
 }
 
 /// Every field of a known position, e.g. to resync a subscriber that lagged.
@@ -150,12 +166,12 @@ impl PositionDelta {
             aid,
             current: Some(position),
             target: Some(position),
-            status: Some(STATUS_STOPPED),
+            status: Some(MotionStatus::Stopped),
         }
     }
 
     /// A blind started moving toward `target`; current is still being estimated.
-    pub fn retargeted(aid: u64, target: u8, status: u8) -> Self {
+    pub fn retargeted(aid: u64, target: u8, status: MotionStatus) -> Self {
         Self {
             aid,
             current: None,
@@ -185,7 +201,7 @@ impl PositionState {
                 aid: blind.aid,
                 current,
                 target: current,
-                status: STATUS_STOPPED,
+                status: MotionStatus::Stopped,
             };
         }
         Self { blinds }
@@ -204,7 +220,7 @@ impl PositionState {
         }
         blind.current = position;
         blind.target = position;
-        blind.status = STATUS_STOPPED;
+        blind.status = MotionStatus::Stopped;
         Some(PositionDelta::settled(aid, position))
     }
 }
@@ -276,7 +292,12 @@ impl PositionCache {
         deltas
     }
 
-    pub async fn apply_target(&self, blind: &Blind, target: u8, status: u8) -> Vec<PositionDelta> {
+    pub async fn apply_target(
+        &self,
+        blind: &Blind,
+        target: u8,
+        status: MotionStatus,
+    ) -> Vec<PositionDelta> {
         let mut state = self.state.lock().await;
         let target = target.min(100);
         let Some(position) = state.get_mut(blind.aid) else {
@@ -302,15 +323,15 @@ impl PositionCache {
         aids_for_channel(channel)
             .filter_map(|aid| {
                 let position = state.get_mut(aid)?;
-                if position.target == position.current && position.status == STATUS_STOPPED {
+                if position.target == position.current && position.status == MotionStatus::Stopped {
                     return None;
                 }
                 position.target = position.current;
-                position.status = STATUS_STOPPED;
+                position.status = MotionStatus::Stopped;
                 Some(PositionDelta::retargeted(
                     aid,
                     position.current,
-                    STATUS_STOPPED,
+                    MotionStatus::Stopped,
                 ))
             })
             .collect()
@@ -394,13 +415,15 @@ mod tests {
         let blind = snapshot.iter().find(|p| p.aid == 2).unwrap();
         assert_eq!(blind.current, 25);
         assert_eq!(blind.target, 25);
-        assert_eq!(blind.status, STATUS_STOPPED);
+        assert_eq!(blind.status, MotionStatus::Stopped);
     }
 
     #[tokio::test]
     async fn stop_channel_resets_pending_target_to_last_known_position() {
         let cache = PositionCache::from_positions(HashMap::from([(2, 75)]));
-        cache.apply_target(&BLINDS[0], 25, STATUS_DECREASING).await;
+        cache
+            .apply_target(&BLINDS[0], 25, MotionStatus::Decreasing)
+            .await;
 
         let deltas = cache.stop_channel(Channel::L1).await;
 
@@ -410,7 +433,7 @@ mod tests {
                 aid: 2,
                 current: None,
                 target: Some(75),
-                status: Some(STATUS_STOPPED),
+                status: Some(MotionStatus::Stopped),
             }]
         );
         assert_eq!(
@@ -419,7 +442,7 @@ mod tests {
                 aid: 2,
                 current: 75,
                 target: 75,
-                status: STATUS_STOPPED,
+                status: MotionStatus::Stopped,
             }
         );
     }
@@ -432,7 +455,7 @@ mod tests {
                 aid: *aid,
                 current: *current,
                 target: 100,
-                status: STATUS_INCREASING,
+                status: MotionStatus::Increasing,
             })
             .collect()
     }
@@ -504,7 +527,7 @@ mod tests {
 
         assert_eq!(delta.current, Some(0));
         assert_eq!(delta.target, Some(0));
-        assert_eq!(delta.status, Some(STATUS_STOPPED));
+        assert_eq!(delta.status, Some(MotionStatus::Stopped));
     }
 
     #[test]

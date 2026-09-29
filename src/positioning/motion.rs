@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::config::{BlindTimingOptions, PositioningOptions};
 use crate::core::{Channel, Command};
-use crate::positioning::state::{Blind, BLINDS, STATUS_DECREASING, STATUS_INCREASING};
+use crate::positioning::state::{Blind, MotionStatus, BLINDS};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct BlindMotionTiming {
@@ -62,7 +62,7 @@ pub struct BlindMovement {
     pub blind: &'static Blind,
     pub target: u8,
     pub command: Command,
-    pub status: u8,
+    pub status: MotionStatus,
     pub duration: Duration,
     pub stop_at_end: bool,
 }
@@ -122,9 +122,13 @@ fn movement_for(request: MotionRequest) -> Option<BlindMovement> {
     }
 
     let (command, status, full_travel) = if target > current {
-        (Command::Up, STATUS_INCREASING, request.timing.open)
+        (Command::Up, MotionStatus::Increasing, request.timing.open)
     } else {
-        (Command::Down, STATUS_DECREASING, request.timing.close)
+        (
+            Command::Down,
+            MotionStatus::Decreasing,
+            request.timing.close,
+        )
     };
     let delta = current.abs_diff(target) as u128;
     let slack_ms = request.timing.slack.as_millis();
@@ -235,7 +239,7 @@ mod tests {
             }]
         );
         assert_eq!(movements[0].duration, Duration::from_millis(15_000));
-        assert_eq!(movements[0].status, STATUS_INCREASING);
+        assert_eq!(movements[0].status, MotionStatus::Increasing);
         assert!(movements[0].stop_at_end);
     }
 
@@ -254,7 +258,7 @@ mod tests {
 
         assert_eq!(movements[0].command, Command::Down);
         assert_eq!(movements[0].duration, Duration::from_millis(6_000));
-        assert_eq!(movements[0].status, STATUS_DECREASING);
+        assert_eq!(movements[0].status, MotionStatus::Decreasing);
         assert!(movements[0].stop_at_end);
     }
 

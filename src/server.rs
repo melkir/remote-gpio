@@ -102,28 +102,31 @@ async fn handle_command(
     Json(payload): Json<CommandRequest>,
 ) -> Response {
     match execute_command(&state, payload).await {
-        Ok(_) => StatusCode::OK.into_response(),
-        Err(e) => (StatusCode::BAD_REQUEST, e).into_response(),
+        Ok(()) => StatusCode::OK.into_response(),
+        Err(err) => {
+            let status = if err.is_client_error() {
+                StatusCode::BAD_REQUEST
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            };
+            (status, err.to_string()).into_response()
+        }
     }
 }
 
-async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), String> {
+async fn execute_command(state: &AppState, payload: CommandRequest) -> Result<(), CommandError> {
     tracing::info!(
         command = %payload.command,
         ?payload.channel,
         ?payload.value,
         "remote command received"
     );
-    dispatch_command(&state.controller, payload)
-        .await
-        .map_err(map_command_error)?;
+    if let Err(err) = dispatch_command(&state.controller, payload).await {
+        tracing::error!(error = %err, "remote command failed");
+        return Err(err);
+    }
     tracing::info!("remote command completed");
     Ok(())
-}
-
-fn map_command_error(err: CommandError) -> String {
-    tracing::error!(error = %err, "remote command failed");
-    err.to_string()
 }
 
 /// Handles WebSocket upgrade requests
