@@ -22,7 +22,7 @@
     "class-variance-authority": "^0.7.1",
     "cn": "^0.4.0",
     "lucide-preact": "^1.11.0",
-    "preact": "^10.29.1",
+    "preact": "^11.0.0",
     "tailwindcss": "^4.2.2",
     "use-haptic": "^1.1.13"
   },
