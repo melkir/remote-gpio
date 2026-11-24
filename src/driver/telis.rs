@@ -35,35 +35,37 @@ impl TelisDriver {
         })
     }
 
-    pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
+    /// Steer the physical selector to `channel`, or advance it one step when
+    /// there is no channel to steer toward.
+    pub(crate) async fn select(&self, channel: Option<Channel>) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
-        if let Some(target) = channel {
-            self.select_to(target).await?;
+        match channel {
+            Some(target) => self.select_to(target).await,
+            None => self.select_once().await.map(|_| ()),
         }
+    }
 
-        // `select` with no channel has nothing to steer toward, so it just
-        // advances the physical selector one step.
-        if command == Command::Select && channel.is_none() {
-            return self.select_once().await.map(|_| ());
-        }
-        self.press(command).await
+    /// Press the button for `command` on whatever the remote has selected.
+    pub(crate) async fn press(&self, command: Command) -> Result<()> {
+        let _guard = self.execute_lock.lock().await;
+        self.press_button(command).await
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
         self.select_to(channel).await?;
-        self.press(command).await
+        self.press_button(command).await
     }
 
-    /// Press the button for `command`. Selection has already been steered to the
-    /// target channel, so `select` is a no-op here.
-    async fn press(&self, command: Command) -> Result<()> {
+    async fn press_button(&self, command: Command) -> Result<()> {
         match command {
             Command::Up => self.transport.press(TelisButton::Up).await,
             Command::Down => self.transport.press(TelisButton::Down).await,
             Command::Stop => self.transport.press(TelisButton::Stop).await,
             Command::Prog | Command::ProgLong => bail!("{TELIS_PROG_UNAVAILABLE}"),
-            Command::Select => Ok(()),
+            // The Select button is only pressed through `select`, which also
+            // reads the LEDs back to learn where the selector landed.
+            Command::Select => bail!("select must go through the driver's select path"),
         }
     }
 
@@ -194,5 +196,58 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains(TELIS_PROG_UNAVAILABLE));
+    }
+
+    fn events(transport: &RecordingTransport) -> Vec<Event> {
+        transport
+            .events
+            .lock()
+            .expect("recording transport events mutex")
+            .clone()
+    }
+
+    #[tokio::test]
+    async fn select_steps_to_the_channel_or_advances_once() {
+        // The first reading seeds the driver; the rest answer each select press.
+        let transport = Arc::new(RecordingTransport::new(vec![
+            Channel::L1,
+            Channel::L2,
+            Channel::L3,
+            Channel::L4,
+        ]));
+        let driver = TelisDriver::with_transport(transport.clone())
+            .await
+            .unwrap();
+
+        driver.select(Some(Channel::L3)).await.unwrap();
+        assert_eq!(driver.selection().get(), Channel::L3);
+
+        driver.select(None).await.unwrap();
+        assert_eq!(driver.selection().get(), Channel::L4);
+
+        // One press to read the initial selection, two to reach L3, one to advance.
+        assert_eq!(
+            events(&transport),
+            vec![Event::Button(TelisButton::Select); 4]
+        );
+    }
+
+    #[tokio::test]
+    async fn press_uses_the_current_selection_without_selecting() {
+        let transport = Arc::new(RecordingTransport::new(vec![Channel::L2]));
+        let driver = TelisDriver::with_transport(transport.clone())
+            .await
+            .unwrap();
+
+        driver.press(Command::Up).await.unwrap();
+
+        assert_eq!(driver.selection().get(), Channel::L2);
+        assert_eq!(
+            events(&transport),
+            vec![
+                Event::Button(TelisButton::Select),
+                Event::Button(TelisButton::Up)
+            ]
+        );
     }
 }

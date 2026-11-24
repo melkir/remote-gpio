@@ -144,19 +144,15 @@ impl RtsDriver {
         Ok(Self::from_parts(options, state, transmitter))
     }
 
-    pub(crate) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
-        match command {
-            Command::Select => {
-                let channel = channel.unwrap_or_else(|| self.selection.get().next());
-                self.set_selected_channel(channel).await
-            }
-            // Directional commands use persisted logical selection, not `channel`.
-            // Call [`Self::execute_on`] to transmit on a specific RTS channel.
-            Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
-                let channel = self.selection.get();
-                self.execute_on(channel, command).await
-            }
-        }
+    /// Change the persisted logical selection; nothing is transmitted.
+    pub(crate) async fn select(&self, channel: Option<Channel>) -> Result<()> {
+        let channel = channel.unwrap_or_else(|| self.selection.get().next());
+        self.set_selected_channel(channel).await
+    }
+
+    /// Transmit `command` on the selected channel.
+    pub(crate) async fn press(&self, command: Command) -> Result<()> {
+        self.execute_on(self.selection.get(), command).await
     }
 
     pub(crate) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
@@ -480,10 +476,7 @@ mod tests {
                 .await
                 .unwrap();
 
-        driver
-            .execute(Command::Select, Some(Channel::L4))
-            .await
-            .unwrap();
+        driver.select(Some(Channel::L4)).await.unwrap();
 
         assert_eq!(driver.selection().get(), Channel::L4);
         assert!(transmitter.transmissions().is_empty());

@@ -226,9 +226,10 @@ pub(crate) async fn dispatch_control_request(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{DriverConfig, DriverKind, PositioningOptions};
+    use crate::config::{DriverKind, PositioningOptions};
     use crate::driver::ProtocolOperation;
-    use std::sync::Arc;
+    use crate::testing::fixtures::fake_controller;
+    use std::collections::HashMap;
 
     fn parse(command: &str, channel: Option<Channel>) -> Result<ControlRequest, CommandError> {
         parse_command(CommandRequest {
@@ -424,11 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn dispatch_target_without_channel_uses_current_selection() {
-        let controller = Arc::new(
-            BlindController::with_driver(DriverConfig::fake(), PositioningOptions::default())
-                .await
-                .unwrap(),
-        );
+        let controller = fake_controller(PositioningOptions::default(), HashMap::new()).await;
         controller
             .execute(Command::Select, Some(Channel::L2))
             .await

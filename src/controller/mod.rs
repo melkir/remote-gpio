@@ -265,36 +265,23 @@ impl BlindController {
     pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
         let deltas = {
             let _guard = self.operation_lock.lock().await;
-            // An action command naming a channel targets it directly; `select`
-            // and channel-less commands go through the driver's own selection.
-            let target = match channel {
-                Some(channel) if command != Command::Select => {
+            let target = match (command, channel) {
+                (Command::Select, channel) => {
+                    self.router.select(channel).await?;
+                    self.current_selection()
+                }
+                // An action command naming a channel targets it directly...
+                (command, Some(channel)) => {
                     self.router.execute_on(channel, command).await?;
                     channel
                 }
-                _ => {
-                    self.router.execute(command, channel).await?;
+                // ...and without one it goes to whatever is selected.
+                (command, None) => {
+                    self.router.press(command).await?;
                     self.current_selection()
                 }
             };
             self.complete_command(target, command).await
-        };
-        self.emit_position_deltas(&deltas);
-        Ok(())
-    }
-
-    /// Run an action command directly on `channel`. RTS can do this without
-    /// changing public selection state; Telis may update selection because
-    /// targeting a channel requires moving the physical selector.
-    #[cfg(test)]
-    pub async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
-        if command == Command::Select {
-            anyhow::bail!("select is not a direct targeted command");
-        }
-        let deltas = {
-            let _guard = self.operation_lock.lock().await;
-            self.router.execute_on(channel, command).await?;
-            self.complete_command(channel, command).await
         };
         self.emit_position_deltas(&deltas);
         Ok(())

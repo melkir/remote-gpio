@@ -1,5 +1,5 @@
 use super::*;
-use crate::config::{DriverConfig, PositioningOptions};
+use crate::config::PositioningOptions;
 use crate::driver::ProtocolOperation;
 use crate::testing::fixtures::{fake_controller, uniform_positioning_l1_ms};
 use std::collections::HashMap;
@@ -20,9 +20,7 @@ fn position_inference_only_tracks_directional_extremes() {
 
 #[tokio::test]
 async fn client_command_with_channel_targets_without_selection() {
-    let controller = BlindController::with_driver(DriverConfig::fake(), controller_config())
-        .await
-        .unwrap();
+    let controller = fake_controller(controller_config(), HashMap::new()).await;
 
     controller
         .execute(Command::Up, Some(Channel::L3))
@@ -42,11 +40,7 @@ async fn client_command_with_channel_targets_without_selection() {
 
 #[tokio::test]
 async fn controller_operations_wait_behind_operation_lock() {
-    let controller = Arc::new(
-        BlindController::with_driver(DriverConfig::fake(), controller_config())
-            .await
-            .unwrap(),
-    );
+    let controller = fake_controller(controller_config(), HashMap::new()).await;
     let guard = controller.lock_operations_for_test().await;
     let pending_controller = controller.clone();
 
@@ -102,22 +96,6 @@ async fn target_position_writes_wait_behind_operation_lock() {
             command: Command::Down,
         }]
     );
-}
-
-#[tokio::test]
-async fn execute_on_rejects_select() {
-    let controller = BlindController::with_driver(DriverConfig::fake(), controller_config())
-        .await
-        .unwrap();
-
-    let err = controller
-        .execute_on(Channel::L2, Command::Select)
-        .await
-        .unwrap_err()
-        .to_string();
-
-    assert!(err.contains("select is not a direct targeted command"));
-    assert_eq!(controller.operations(), Vec::new());
 }
 
 #[tokio::test]
@@ -329,4 +307,26 @@ async fn finish_timed_motions_returns_immediately_when_idle() {
     let controller = fake_controller(controller_config(), HashMap::new()).await;
 
     assert!(controller.finish_timed_motions(Duration::ZERO).await);
+}
+
+#[tokio::test]
+async fn select_without_channel_advances_and_channelless_command_follows_selection() {
+    let controller = fake_controller(controller_config(), HashMap::new()).await;
+
+    controller.execute(Command::Select, None).await.unwrap();
+    assert_eq!(controller.current_selection(), Channel::L2);
+
+    controller.execute(Command::Down, None).await.unwrap();
+
+    assert_eq!(
+        controller.operations(),
+        vec![
+            ProtocolOperation::TelisSelection(Channel::L2),
+            ProtocolOperation::FakeCommand {
+                channel: Channel::L2,
+                command: Command::Down,
+            },
+        ]
+    );
+    assert_eq!(controller.position_for_aid(3).await.current, 0);
 }

@@ -80,14 +80,21 @@ impl CommandRouter {
         })
     }
 
-    /// UI-style command dispatch. Telis/Fake may use `channel` to select or target
-    /// before acting; RTS uses persisted selection for directional commands (use
-    /// [`Self::execute_on`] to transmit on a specific channel without selecting).
-    pub async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
+    /// Select `channel`, or advance to the next one when none is given.
+    pub async fn select(&self, channel: Option<Channel>) -> Result<()> {
         match self {
-            Self::Fake(driver) => driver.execute(command, channel).await,
-            Self::Telis(driver) => driver.execute(command, channel).await,
-            Self::Rts(driver) => driver.execute(command, channel).await,
+            Self::Fake(driver) => driver.select(channel).await,
+            Self::Telis(driver) => driver.select(channel).await,
+            Self::Rts(driver) => driver.select(channel).await,
+        }
+    }
+
+    /// Send `command` on the currently selected channel.
+    pub async fn press(&self, command: Command) -> Result<()> {
+        match self {
+            Self::Fake(driver) => driver.press(command).await,
+            Self::Telis(driver) => driver.press(command).await,
+            Self::Rts(driver) => driver.press(command).await,
         }
     }
 

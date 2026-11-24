@@ -29,20 +29,16 @@ impl FakeDriver {
         self.transport.operations()
     }
 
-    pub(super) async fn execute(&self, command: Command, channel: Option<Channel>) -> Result<()> {
+    pub(super) async fn select(&self, channel: Option<Channel>) -> Result<()> {
         let _guard = self.execute_lock.lock().await;
-        let target = channel.unwrap_or_else(|| self.selection.get());
-        match command {
-            Command::Select => {
-                let channel = channel.unwrap_or_else(|| self.selection.get().next());
-                self.selection.set(channel);
-                self.transport.record_selection(channel).await;
-            }
-            Command::Up | Command::Down | Command::Stop | Command::Prog | Command::ProgLong => {
-                self.transport.send(target, command).await?;
-            }
-        }
+        let channel = channel.unwrap_or_else(|| self.selection.get().next());
+        self.selection.set(channel);
+        self.transport.record_selection(channel).await;
         Ok(())
+    }
+
+    pub(super) async fn press(&self, command: Command) -> Result<()> {
+        self.execute_on(self.selection.get(), command).await
     }
 
     pub(super) async fn execute_on(&self, channel: Channel, command: Command) -> Result<()> {
@@ -111,14 +107,11 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn execute_select_updates_and_broadcasts_selection() {
+    async fn select_updates_and_broadcasts_selection() {
         let driver = FakeDriver::new(Channel::L1);
         let mut rx = driver.selection().subscribe();
 
-        driver
-            .execute(Command::Select, Some(Channel::L3))
-            .await
-            .unwrap();
+        driver.select(Some(Channel::L3)).await.unwrap();
 
         rx.changed().await.unwrap();
         assert_eq!(*rx.borrow_and_update(), Channel::L3);
