@@ -46,7 +46,7 @@ httparse = "1.10"
 form_urlencoded = "1.2"
 http = "1.4"
 num-bigint = "0.5"
-qrcode = { version = "0.15", default-features = false }
+qrcode = { version = "0.15", default-features = false, features = ["std"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gpiocdev = { version = "0.8", features = ["uapi_v2", "async_tokio"] }
