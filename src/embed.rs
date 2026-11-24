@@ -12,7 +12,8 @@ use std::borrow::Cow;
 #[folder = "app/dist/"]
 struct Assets;
 
-/// Serves the embedded PWA in release builds, or reads `app/dist/` from disk in debug.
+/// Serves the embedded PWA in release builds. Debug builds serve no frontend
+/// assets: the Vite dev server (port 5173) does, and proxies API calls here.
 pub async fn static_handler(uri: Uri) -> Response {
     let path = uri.path().trim_start_matches('/');
     let path = if path.is_empty() { "index.html" } else { path };
@@ -22,8 +23,7 @@ pub async fn static_handler(uri: Uri) -> Response {
 #[cfg(not(debug_assertions))]
 async fn serve_asset(path: &str) -> Response {
     if let Some(file) = Assets::get(path) {
-        let mime = mime_guess::from_path(path).first_or_octet_stream();
-        return embedded_response(mime.as_ref(), file.data);
+        return embedded_response(file.metadata.mimetype(), file.data);
     }
     // SPA fallback
     if let Some(index) = Assets::get("index.html") {

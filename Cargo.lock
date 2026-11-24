@@ -3303,7 +3303,6 @@ dependencies = [
  "http",
  "httparse",
  "mdns-sd",
- "mime_guess",
  "nix 0.32.0",
  "num-bigint",
  "qrcode",
