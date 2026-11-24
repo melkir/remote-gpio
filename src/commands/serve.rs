@@ -1,11 +1,16 @@
 use anyhow::{bail, Result};
 use std::sync::Arc;
+use std::time::Duration;
 
 use crate::commands::doctor;
 use crate::config::ResolvedConfig;
 use crate::controller::BlindController;
 use crate::homekit;
 use crate::server::serve;
+
+/// How long shutdown waits for in-flight timed moves. Well above any real
+/// blind's travel time and below systemd's default 90s stop timeout.
+const SHUTDOWN_MOTION_GRACE: Duration = Duration::from_secs(60);
 
 pub async fn run(resolved_config: &ResolvedConfig) -> Result<()> {
     let report = doctor::collect(resolved_config, 0).await;
@@ -37,13 +42,32 @@ pub async fn run(resolved_config: &ResolvedConfig) -> Result<()> {
     };
 
     tokio::select! {
-        res = serve(controller) => res,
+        res = serve(controller.clone()) => res,
         sig = wait_for_shutdown() => {
             tracing::info!("received {sig}, shutting down");
             if let Some(handles) = hap_handles {
                 handles.abort();
             }
+            finish_timed_motions(&controller).await;
             Ok(())
+        }
+    }
+}
+
+/// Let in-flight timed moves send their `stop` and persist their position
+/// before exiting. A second signal skips the wait.
+async fn finish_timed_motions(controller: &BlindController) {
+    tokio::select! {
+        finished = controller.finish_timed_motions(SHUTDOWN_MOTION_GRACE) => {
+            if !finished {
+                tracing::warn!(
+                    "timed blind moves still running after {}s; exiting without their final stop",
+                    SHUTDOWN_MOTION_GRACE.as_secs()
+                );
+            }
+        }
+        sig = wait_for_shutdown() => {
+            tracing::warn!("received {sig} again; exiting without waiting for timed blind moves");
         }
     }
 }

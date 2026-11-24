@@ -79,6 +79,16 @@ impl MotionTasks {
             .is_some_and(|state| state.generation == generation)
     }
 
+    /// Take the handles of every motion still in flight, leaving the motions
+    /// themselves current so they complete normally. Shutdown awaits these.
+    pub async fn take_in_flight(&self) -> Vec<tokio::task::JoinHandle<()>> {
+        let mut tasks = self.tasks.lock().await;
+        tasks
+            .values_mut()
+            .filter_map(|state| state.handle.take())
+            .collect()
+    }
+
     pub async fn remove_if_current(&self, aid: u64, generation: u64) {
         let mut tasks = self.tasks.lock().await;
         if let Some(state) = tasks.get_mut(&aid) {

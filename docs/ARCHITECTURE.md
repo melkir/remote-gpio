@@ -208,6 +208,8 @@ Runtime state lives in `$STATE_DIRECTORY` (set by systemd's `StateDirectory=somf
 
 State files are written with a temp-file plus atomic rename pattern. Security-sensitive HomeKit state is stored with restrictive permissions. The service does not replay persisted positions into GPIO or RF on startup; position state is for client continuity, not physical reconciliation.
 
+A timed move's `stop` and final position exist only in memory until the move completes. On SIGINT/SIGTERM, `serve` therefore waits for in-flight timed moves (up to 60 seconds; a second signal skips the wait) so a restart or upgrade mid-move still stops the blind at its target and saves the result. A crash or power loss mid-move is not covered: the blind runs to its limit and the saved position stays at the pre-move value until the next move.
+
 ## Deployment Architecture
 
 The release artifact is one binary:

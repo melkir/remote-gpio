@@ -271,3 +271,62 @@ async fn position_broadcast_not_sent_when_emit_empty() {
     assert!(deltas.is_empty());
     assert!(position_rx.try_recv().is_err());
 }
+
+#[tokio::test]
+async fn finish_timed_motions_sends_the_scheduled_stop_and_settles() {
+    use crate::positioning::state::MotionStatus;
+
+    let controller =
+        fake_controller(uniform_positioning_l1_ms(100), HashMap::from([(2, 100)])).await;
+    controller
+        .set_target_positions(vec![(2, 50)])
+        .await
+        .unwrap();
+
+    assert!(
+        controller
+            .finish_timed_motions(Duration::from_secs(5))
+            .await
+    );
+
+    assert_eq!(
+        controller.operations(),
+        vec![
+            ProtocolOperation::FakeCommand {
+                channel: Channel::L1,
+                command: Command::Down,
+            },
+            ProtocolOperation::FakeCommand {
+                channel: Channel::L1,
+                command: Command::Stop,
+            },
+        ]
+    );
+    let position = controller.position_for_aid(2).await;
+    assert_eq!(position.current, 50);
+    assert_eq!(position.target, 50);
+    assert_eq!(position.status, MotionStatus::Stopped);
+}
+
+#[tokio::test]
+async fn finish_timed_motions_gives_up_after_the_grace_period() {
+    let controller =
+        fake_controller(uniform_positioning_l1_ms(60_000), HashMap::from([(2, 100)])).await;
+    controller
+        .set_target_positions(vec![(2, 50)])
+        .await
+        .unwrap();
+
+    assert!(
+        !controller
+            .finish_timed_motions(Duration::from_millis(20))
+            .await
+    );
+}
+
+#[tokio::test]
+async fn finish_timed_motions_returns_immediately_when_idle() {
+    let controller = fake_controller(controller_config(), HashMap::new()).await;
+
+    assert!(controller.finish_timed_motions(Duration::ZERO).await);
+}

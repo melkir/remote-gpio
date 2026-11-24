@@ -83,7 +83,7 @@ EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits o
 
 ## Lifecycle
 
-`serve` races the HTTP server against a shutdown signal handler that catches both SIGINT (Ctrl-C) and SIGTERM (`systemctl stop somfy`). On shutdown it aborts the HAP listener and position-bridge tasks held in `HomekitHandles`, then drops the `Announcement` guard, which calls `daemon.unregister(...)` then `daemon.shutdown()` to stop the mdns-sd worker threads.
+`serve` races the HTTP server against a shutdown signal handler that catches both SIGINT (Ctrl-C) and SIGTERM (`systemctl stop somfy`). On shutdown it aborts the HAP listener and position-bridge tasks held in `HomekitHandles` and drops the `Announcement` guard, which calls `daemon.unregister(...)` then `daemon.shutdown()` to stop the mdns-sd worker threads. It then waits for in-flight timed moves to finish before exiting (see [ARCHITECTURE.md](ARCHITECTURE.md#persistence)).
 
 ## Dependencies
 

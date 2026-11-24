@@ -156,6 +156,37 @@ impl BlindController {
         Ok(deltas)
     }
 
+    /// Wait for in-flight timed moves to complete, up to `grace`.
+    ///
+    /// A timed move's `stop` and its final position only exist in a spawned
+    /// task, so exiting mid-move would let the blind run to its limit while
+    /// `positions.json` kept the pre-move estimate. Shutdown calls this so the
+    /// scheduled `stop` is sent and the result persisted before the process
+    /// exits. Returns `false` if moves were still running when `grace` ran out.
+    pub async fn finish_timed_motions(&self, grace: std::time::Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + grace;
+        // Loop: a connection that is still draining can start another move
+        // while the first batch is being awaited.
+        loop {
+            let in_flight = self.motion_tasks.take_in_flight().await;
+            if in_flight.is_empty() {
+                return true;
+            }
+            tracing::info!(
+                moves = in_flight.len(),
+                "waiting for timed blind moves to finish"
+            );
+            for mut handle in in_flight {
+                if tokio::time::timeout_at(deadline, &mut handle)
+                    .await
+                    .is_err()
+                {
+                    return false;
+                }
+            }
+        }
+    }
+
     async fn build_motion_requests(&self, targets: Vec<(u64, u8)>) -> Vec<MotionRequest> {
         // Four accessories, fixed at compile time: a linear scan of the snapshot
         // beats building a map to look up at most four entries.
