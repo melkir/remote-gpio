@@ -1,6 +1,20 @@
 # Native HomeKit (HAP) Server
 
-`somfy serve` runs a native HomeKit Accessory Protocol server alongside the HTTP, SSE, and WebSocket API. The Home app talks straight to the Rust binary — no Homebridge, no Node.
+`somfy serve` can run a native HomeKit Accessory Protocol server alongside the HTTP, SSE, and WebSocket API. The Home app talks straight to the Rust binary — no Homebridge, no Node.
+
+## Enabling HomeKit
+
+HomeKit is **off by default**. Turn it on in `/etc/somfy/config.toml`, then restart the service:
+
+```toml
+homekit = true
+```
+
+```bash
+sudo somfy restart
+```
+
+While it is disabled, `somfy homekit status` just reports `HomeKit is disabled in <config path>`. If the HAP server fails to start, `serve` logs a warning and keeps running without HomeKit.
 
 ## Pairing
 
@@ -18,26 +32,19 @@ Pairing lifecycle commands are exposed by the CLI:
 somfy homekit --help
 ```
 
-## Doctor
+`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. After `reset` or `unpair`, run `sudo somfy restart` so the in-memory HAP server advertises and enforces the updated state.
 
-`somfy doctor` deliberately stays focused on process and deployment health: systemd unit drift, service state, GPIO access, updates, and deployed version. HomeKit pairing state lives under `somfy homekit ...` so diagnostics and pairing lifecycle commands do not drift apart.
+`somfy doctor` does not report pairing state. It stays focused on process and deployment health; pairing lives under `somfy homekit ...` so the two don't drift apart.
 
 ## Wire layout
 
-- **Port `5010`** — dedicated TCP listener. Kept separate from the loopback HTTP listener (`127.0.0.1:5002`) because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
-- **mDNS** — `_hap._tcp.local.` advertised via `mdns-sd`. TXT record carries `id`, `c#`, `s#`, `sf`, `ci=2` (Bridge), `md`, `pv=1.1`. The `Announcement` guard's `Drop` impl unregisters and shuts the daemon's worker threads.
+- **Port `5010`** — dedicated TCP listener. Kept separate from the loopback HTTP listener (`127.0.0.1:5002`, served by axum) because post-`Pair-Verify` traffic upgrades the socket into HAP's custom AEAD framing, which doesn't fit axum's request/response model.
+- **mDNS** — `_hap._tcp.local.` advertised via `mdns-sd`. TXT record carries `id`, `c#`, `s#`, `sf`, `ff=0`, `ci=2` (Bridge), `md`, `pv=1.1`, and the setup hash `sh`. The `Announcement` guard's `Drop` impl unregisters and shuts the daemon's worker threads.
 - **Accessory database** — Bridge (`aid=1`) plus 4 bridged `WindowCovering` accessories (`aid=2..5`), one per Somfy LED selector (`L1`–`L4`). `ALL` is not an accessory: it is a fan-out that addresses all four (see `blinds_for_channel`). IIDs are stable across runs; `config_number` must bump if the schema ever changes.
 
 ## Persistent state
 
-`$STATE_DIRECTORY` (set by systemd via `StateDirectory=somfy`; otherwise defaults to `/var/lib/somfy` in release builds and `./hap-state` in debug builds; override with `SOMFY_STATE_DIR`):
-
-| File             | Owner                  | Contents                                                                                 |
-| ---------------- | ---------------------- | ---------------------------------------------------------------------------------------- |
-| `hap.json`       | `state.rs`             | device id, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers      |
-| `positions.json` | `positioning/state.rs` | aid → last estimated position (0-100). Reload is **read-only** — never replayed to GPIO. |
-
-Both files are written atomically (tmp + `rename`) with mode `0600`. systemd preserves them across `somfy upgrade`.
+HomeKit state lives in `hap.json` (device ID, setup code, Ed25519 long-term signing key, `c#`/`s#`, paired controllers); blind positions live in `positions.json` and are never replayed to hardware on reload. Both sit in the service state directory, written atomically with mode `0600`, and survive `somfy upgrade`. Location and the full file list: [ARCHITECTURE.md](ARCHITECTURE.md#persistence).
 
 ## Crypto + protocol
 
@@ -47,21 +54,13 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 | SRP-6a / SHA-512    | In-tree `src/hap/srp.rs` over the 3072-bit group (RFC 5054). The upstream `srp` crate ships only the simplified M1 form, which iOS rejects.            |
 | Pair-Setup (M1–M6)  | `src/hap/pair_setup.rs` — username `Pair-Setup`, AccessoryX/iOSX derived per spec, signed Ed25519 proofs.                                              |
 | Pair-Verify (M1–M4) | `src/hap/pair_verify.rs` — X25519 ECDH, Ed25519 mutual auth, HKDF-SHA512 → session keys.                                                               |
-| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024. Each frame is staged contiguously and written once; the socket is unbuffered, so a separate 2-byte length write would lead a segment Nagle holds. |
+| Session framing     | `src/hap/session.rs` — ChaCha20-Poly1305 with 2-byte length AAD, per-direction nonces, max plaintext 1024. Each frame is written in one call (see below). |
 | HTTP                | Hand-rolled on `tokio` + `httparse` (no axum). Both plain and encrypted readers feed the same parser; `http::StatusCode` owns response status phrases. |
 | App wiring          | `src/homekit/mod.rs` wires mDNS advertisement, HAP state, controller position events, and the generic HAP server.                                      |
 
 ## Connection lifecycle
 
-`src/hap/server/mod.rs::handle_connection` runs a single `tokio::select!`:
-
-> **Reads off this socket must be cancellation-safe.** The request-reading branch
-> races the event branch, so its future is dropped whenever an EVENT push wins —
-> possibly mid-frame. `EncryptedReader` therefore accumulates wire bytes in a
-> struct field using `read`, which guarantees nothing was consumed when it is
-> cancelled. `read_exact` is **not** safe here: it discards a partial fill, which
-> desyncs the stream and makes every later frame fail to decrypt. `fill_frame`
-> also stops at the current frame's boundary so pipelined frames stay separate.
+`src/hap/server/mod.rs::handle_connection` runs a single `tokio::select!` that races request reads against event pushes. A connection goes through three phases:
 
 1. **Plain phase** — `POST /pair-setup`, `POST /pair-verify`. After M4 verifies, the reader/writer are upgraded to encrypted halves and the connection switches to the control channel.
 2. **Control phase** — `GET /accessories`, `GET /characteristics`, `PUT /characteristics`, `POST /pairings`. All require an encrypted writer; otherwise we return `401`.
@@ -69,44 +68,30 @@ Both files are written atomically (tmp + `rename`) with mode `0600`. systemd pre
 
 EVENT push is what resolves the iOS "Closing…" / "Opening…" spinner (waits on `PositionState=2` + `CurrentPosition` matching `TargetPosition`) and what keeps grouped Home writes reflected on each individual blind tile.
 
+### Socket invariants
+
+- **Reads must be cancellation-safe.** The request-reading branch is dropped whenever an EVENT push wins the `select!`, possibly mid-frame. `EncryptedReader` therefore accumulates wire bytes in a struct field using `read`, which guarantees nothing was consumed when it is cancelled. `read_exact` is **not** safe here: it discards a partial fill, which desyncs the stream and makes every later frame fail to decrypt. `fill_frame` also stops at the current frame's boundary so pipelined frames stay separate.
+- **Writes go out in one call.** The socket is unbuffered, so each encrypted frame (length prefix + ciphertext + tag) is staged contiguously and written once. A separate 2-byte length write would become a tiny segment that Nagle holds back.
+
 ## PUT semantics
 
 `handle_put_characteristics` distinguishes three shapes per entry:
 
 - `{aid, iid, ev: true|false}` — toggle subscription on the per-connection set. No GPIO action.
 - `{aid, iid, value: N}` where `N` matches the estimated current position — no-op unless it cancels a pending timed move, in which case the controller sends `stop`.
-- `{aid, iid, value: N}` with a real change — asks the shared controller to move from the estimated current position to `N`. The controller sends `up` or `down`, emits `TargetPosition` plus moving `PositionState`, and for interior targets (`1..99`) sends `stop` after the configured proportional travel time. Endpoint targets (`0` or `100`) rely on the motor's own limits. Completion updates `CurrentPosition`, persists `positions.json`, and emits stopped events. HAP EVENT frames for those updates are published only from the position bridge (not duplicated on the PUT write outcome).
-
-## Timed positioning
-
-Somfy RTS/Telis motors do not report physical position, so percentages are estimated from configured travel time. These timings are used by HomeKit target-position writes and by the shared `target` command path. The defaults are 10 seconds open and close for every blind. Override per blind:
-
-```toml
-[positioning.l1]
-open_ms = 8500
-close_ms = 9200
-slack_ms = 2700
-
-[positioning.l2]
-open_ms = 7000
-close_ms = 8000
-```
-
-The controller supports different timings per blind. `slack_ms` is optional and defaults to `0`; when set, it is treated as closed-end slack included in full-travel timings. The planner subtracts it from proportional visible travel, then adds it back only for upward moves that start from estimated position `0`. Interior targets (`1..99`) schedule a proportional `stop`; endpoint targets (`0` and `100`) rely on the motor's own limits. When all four blinds move in the same direction in one request, the controller can start them with one `ALL` command, then issue individual `stop` commands for interior targets at each blind's calculated completion time.
+- `{aid, iid, value: N}` with a real change — asks the shared controller to move from the estimated current position to `N`. The controller sends `up` or `down`, emits `TargetPosition` plus moving `PositionState`, and stops the motor per the [timed positioning](HARDWARE.md#timed-positioning) rules. Completion updates `CurrentPosition`, persists `positions.json`, and emits stopped events. HAP EVENT frames for those updates are published only from the position bridge (not duplicated on the PUT write outcome).
 
 ## Lifecycle
 
-`serve` selects between the HTTP server and a shutdown signal handler that catches both SIGINT (Ctrl-C) and SIGTERM (`systemctl stop somfy`). On either path the `Announcement` guard drops, which calls `daemon.unregister(...)` then `daemon.shutdown()`, terminating the mdns-sd worker threads. The HAP listener task is detached on `tokio::spawn` and dies with the runtime.
+`serve` races the HTTP server against a shutdown signal handler that catches both SIGINT (Ctrl-C) and SIGTERM (`systemctl stop somfy`). On shutdown it aborts the HAP listener and position-bridge tasks held in `HomekitHandles`, then drops the `Announcement` guard, which calls `daemon.unregister(...)` then `daemon.shutdown()` to stop the mdns-sd worker threads.
 
 ## Dependencies
 
-`mdns-sd`, `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `hkdf`, `rand`, `httparse`, `http`, `num-bigint`. All pure Rust, all cross-compile cleanly for `armv7-unknown-linux-gnueabihf`.
-
-`status` creates `hap.json` if needed, prints the setup URI/code, and renders the QR while the bridge is unpaired. Resetting or removing pairings requires `sudo somfy restart` so the in-memory HAP server advertises and enforces the updated state.
+`mdns-sd`, `ed25519-dalek`, `x25519-dalek`, `chacha20poly1305`, `hkdf`, `sha2`, `rand`, `httparse`, `http`, `num-bigint`, `qrcode`. All pure Rust, all cross-compile cleanly for `armv7-unknown-linux-gnueabihf`.
 
 ## Accessory Identity Stability
 
-Home remembers accessories by the persisted identity in `hap.json` and by stable accessory/characteristic IDs from `homekit/somfy.rs`. Treat these values as compatibility surfaces:
+Home remembers accessories by the persisted identity in `hap.json` and by stable accessory IDs (`BLINDS` in `positioning/state.rs`) and characteristic IDs (`IID_*` in `homekit/accessory_db.rs`). Treat these values as compatibility surfaces:
 
 - Keep `device_id`, `setup_id`, and the long-term signing key stable across upgrades. Regenerating them is a factory reset and forces re-pairing.
 - Keep AIDs and IIDs stable once shipped. Changing them can make Home lose room/name/automation associations.

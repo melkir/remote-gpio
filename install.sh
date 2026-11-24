@@ -119,9 +119,10 @@ Switch driver (fake/telis/rts):
 
   sudo somfy config set-driver rts
 
-HomeKit pairing: the somfy binary advertises itself natively over mDNS.
-Show the pairing QR code and setup code:
+HomeKit (off by default): add \`homekit = true\` to /etc/somfy/config.toml,
+restart, then show the pairing QR code and setup code:
 
+  sudo somfy restart
   somfy homekit status
 
 In the iOS Home app: Add Accessory → scan the QR code.

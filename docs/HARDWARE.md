@@ -63,35 +63,24 @@ The RTS driver skips the wired remote and transmits Somfy RTS frames directly at
 
 A 433.42 MHz tuned antenna on the CC1101 ANT pad is required for usable range.
 
-### Software path
-
-`RtsDriver::transmit` follows the same high-level sequence for every press:
-
-1. Reserve the next rolling code for the target channel.
-2. Encode and obfuscate the 7-byte RTS frame.
-3. Build a pigpiod waveform on GDO0.
-4. Put the CC1101 into TX while pigpiod clocks the pulse train.
-5. Commit the in-memory rolling code only after a successful transmission.
-
-Frame layout, Manchester timings, and pigpiod commands are kept in [RTS_DRIVER.md](RTS_DRIVER.md) so this hardware page can stay focused on setup.
+The defaults match this table (`rts.gpio.gdo0 = 18`, `rts.spi_device = "/dev/spidev0.0"`); override them in config if your wiring differs. How a press becomes RF (rolling-code reserve, frame encoding, pigpiod waveform) is covered in [RTS_DRIVER.md](RTS_DRIVER.md), so this page stays focused on setup.
 
 ### Configuration
 
-- Settings live in `/etc/somfy/config.toml` (or `--config`).
-- Built-in defaults are target-aware
-- A config file always wins.
+Settings live in `/etc/somfy/config.toml` (or `--config`). Built-in defaults depend on the build target; anything in the config file wins.
 
 ```bash
-somfy config show   # resolved TOML after validation
+sudo somfy config set-driver rts   # switch driver, set up pigpiod, restart
+somfy config show                  # resolved TOML after validation
 ```
 
 `somfy doctor` checks deployment health (systemd unit, GPIO access, updates, deployed SHA) and driver-specific probes (SPI, GDO0, pigpiod on loopback port `8888`, `rts.json`).
 
 ### Pairing
 
-Pairing requires `driver = "rts"` in config (`somfy config set-driver rts`). The Telis driver does not implement `prog`; if you are using the wired Telis setup, put the motor into pair-listen with a physical Somfy remote. If the Pi is meant to be the master RTS remote, use `--long`.
+Pairing requires the RTS driver. The Telis driver does not implement `prog`: with the wired Telis setup, pair motors using a physical Somfy remote.
 
-Each channel is paired independently. There are two useful flows depending on whether you already have a paired remote.
+Each channel is paired independently. There are two flows, depending on whether you already have a paired remote.
 
 **Adding the Pi as a new remote (recommended).** Long-press the PROG button on an already-paired remote until the motor jogs (~5 s). Then send the command:
 
@@ -114,3 +103,27 @@ for channel in L1 L2 L3 L4; do somfy remote prog "$channel" --long; done; somfy 
 ```
 
 For the protocol-level RTS reference (frame format, checksum, obfuscation, waveform timings, pigpiod commands), see [RTS_DRIVER.md](RTS_DRIVER.md).
+
+## Timed positioning
+
+Neither driver can read the blind's physical position, so percentages are estimated from per-blind travel times. They drive the PWA and API `target` command as well as HomeKit. The default is 10 seconds each way for every blind; time your blinds and set the real values (in **seconds**; restarts the service unless `--no-restart`):
+
+```bash
+sudo somfy config set-positioning L1 --open 8.5 --close 9.2 --slack 2.7
+```
+
+That writes the equivalent TOML (in **milliseconds**) to `/etc/somfy/config.toml`:
+
+```toml
+[positioning.l1]
+open_ms = 8500
+close_ms = 9200
+slack_ms = 2700
+```
+
+How a move is planned:
+
+- **Endpoint targets** (`0` or `100`) just send `down` or `up` and rely on the motor's own limits.
+- **Interior targets** (`1`-`99`) send `up` or `down`, then `stop` after the proportional share of the travel time.
+- **`slack_ms`** (optional, default `0`) is closed-end slack included in the full-travel times: the planner subtracts it from proportional travel, then adds it back only for upward moves that start from `0`.
+- **All four blinds** moving the same direction in one request start with a single `ALL` command, then get individual `stop`s at each blind's own completion time.

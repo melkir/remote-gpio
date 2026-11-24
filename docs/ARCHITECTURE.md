@@ -25,16 +25,7 @@ At runtime there are two broad responsibilities in the binary:
 - **Blind control:** accept commands, serialize hardware access, update live state, and publish position/selection events.
 - **Host management:** install, upgrade, diagnose, configure, and operate the systemd service on the Pi.
 
-The operator commands support the service, but they are not in the live command path.
-
-## Design Goals
-
-- Keep one stable command surface for the PWA, API clients, CLI remote mode, and HomeKit.
-- Make the hardware driver a replaceable runtime choice, not a compile-time product variant.
-- Serialize blind operations so client commands, GPIO pulses, Telis selection changes, and RTS radio transmissions never interleave incorrectly.
-- Preserve RTS rolling-code safety even across crashes and power loss.
-- Run without Node or Homebridge on the Pi; the release artifact is one self-managing binary with embedded frontend assets.
-- Treat the Pi as an appliance: install, upgrade, health checks, and rollback are built into the CLI.
+The operator commands support the service, but they are not in the live command path. The reasoning behind the main design choices is collected in [Architectural Decisions](#architectural-decisions).
 
 ## Control Plane
 
@@ -79,7 +70,7 @@ flowchart TB
   router --> fake
 ```
 
-HTTP, WebSocket, and the PWA validate API requests before entering the controller. HomeKit uses the same controller and driver router, but applies its own protocol semantics and accessory model before dispatching commands.
+The HTTP/SSE/WS server is axum, bound to `127.0.0.1:5002`; it validates requests (`src/service/`) before they reach the controller. HomeKit uses the same controller and driver router, but applies its own protocol semantics and accessory model before dispatching commands.
 
 The CLI has two modes:
 
@@ -90,7 +81,16 @@ The CLI has two modes:
 
 ### Transport Boundary
 
-Command requests are expressed in terms of `Channel` and command intent. Channels are `L1`-`L4` and `ALL`. Direct button commands are `up`, `down`, `stop`, `select`, `prog`, and `prog_long`; percentage positioning uses `target` with a `value` from `0` to `100`. Transport adapters are responsible for parsing protocol-specific input and returning protocol-specific output, but they should not implement hardware behavior.
+Transport adapters parse protocol-specific input and return protocol-specific output, but they never implement hardware behavior. `POST /command`, WebSocket text messages, and `somfy remote` all send the same JSON body, for example `{"command":"target","channel":"L2","value":50}`:
+
+| `command`            | `channel` (`L1`-`L4`, `ALL`)                                       | `value`             |
+| -------------------- | ------------------------------------------------------------------ | ------------------- |
+| `up`, `down`, `stop` | Optional. Given: acts on that channel. Omitted: current selection. | —                   |
+| `select`             | Optional. Given: selects it. Omitted: advances to the next one.    | —                   |
+| `prog`, `prog_long`  | Required (pairing must name its channel). RTS driver only.         | —                   |
+| `target`             | Optional, as for `up`.                                             | `0`-`100`, required |
+
+`POST /command` answers `200` on success, `400` when validation rejects the request (including a pairing command the active driver can't perform), and `500` when the driver itself fails. A body that doesn't deserialize, such as an unknown `command`, is rejected earlier by axum's JSON extractor.
 
 Live state is pushed through:
 
@@ -108,7 +108,7 @@ The application core owns the rules that should be consistent across clients:
 - when selection changes are broadcast;
 - how inferred position updates are generated after movement commands.
 
-The system has no motor position sensors. Position is an application-level inference: successful `up` maps to open (`100`), successful `down` maps to closed (`0`), and `target` moves from the cached current position to the requested percentage using configured travel times. `ALL` fans out to the individual channels so HomeKit and API clients remain consistent.
+The system has no motor position sensors. Position is an application-level inference: successful `up` maps to open (`100`), successful `down` maps to closed (`0`), and `target` moves from the cached current position to the requested percentage using [configured travel times](HARDWARE.md#timed-positioning). `ALL` fans out to the individual channels so HomeKit and API clients remain consistent.
 
 ### Driver Boundary
 
@@ -120,7 +120,7 @@ The driver router is the hardware seam. Every driver exposes the same command op
 | `telis` | Presses a wired Telis 4 remote and reads LEDs to observe selected channel.  | Physical remote LEDs.     |
 | `rts`   | Acts as five virtual RTS remotes (`L1`-`L4`, `ALL`) through a CC1101 radio. | Persisted RTS state file. |
 
-All drivers are compiled into the binary. The active driver is selected by `/etc/somfy/config.toml` at startup. Pi Linux defaults to Telis if no config exists; other targets default to fake.
+All drivers are compiled into the binary. The active driver is selected by `/etc/somfy/config.toml` at startup. Without a config file, Linux ARM builds (the Pi) default to Telis and every other target defaults to fake.
 
 ## Runtime Flows
 
@@ -141,7 +141,7 @@ sequenceDiagram
   Controller-->>UI: selection / position events
 ```
 
-The HTTP and WebSocket routes handle the client-facing request contract before dispatching to the controller. Direct button requests use `{"command":"up","channel":"L2"}`; `channel` is optional for `up`, `down`, `stop`, and `select`, and omitted movement commands use the current selection. Target-position requests use `{"command":"target","value":50}` or `{"command":"target","channel":"L2","value":50}`. `select` changes the public selected channel. Movement, pairing, and target commands with an explicit channel target that channel directly. Direct targeted controller calls reject `select` because selection is a client request, not a per-channel action.
+Request shapes are in the [Transport Boundary](#transport-boundary) table. Commands with an explicit channel act on that channel directly; `select` is the only command that changes the public selection.
 
 ### HomeKit Command
 
@@ -158,27 +158,21 @@ sequenceDiagram
   HAP->>HK: target position update
   HK->>Controller: set target position
   Controller->>Cache: store target + moving state
-  Controller-->>HAP: EVENT target/moving notification
+  Controller-->>HK: position broadcast (target/moving)
+  HK-->>HAP: EVENT notification
   Controller->>Driver: target channel directly
   Driver-->>Controller: success or error
   Controller->>Driver: stop after proportional travel time for interior targets
   Controller->>Cache: persist estimated current position
-  Controller-->>HAP: EVENT current/stopped notification
+  Controller-->>HK: position broadcast (current/stopped)
+  HK-->>HAP: EVENT notification
 ```
 
-HomeKit exposes four `WindowCovering` accessories: `L1`-`L4`. The HomeKit adapter translates target-position characteristic writes into controller target-position requests, then publishes the resulting position deltas back as HAP events. HAP protocol details and write semantics live in [HAP.md](HAP.md).
+HomeKit is opt-in (`homekit = true` in config). It exposes four `WindowCovering` accessories: `L1`-`L4`. The HomeKit adapter translates target-position characteristic writes into controller target-position requests, then publishes the resulting position deltas back as HAP events. HAP protocol details and write semantics live in [HAP.md](HAP.md).
 
 ### RTS Transmission
 
-The RTS driver has additional safety work before it emits RF:
-
-1. Reserve a block of rolling codes on disk.
-2. Encode and obfuscate a Somfy RTS frame for the target channel.
-3. Build a Manchester pulse train.
-4. Ask pigpiod to clock the GDO0 waveform while the CC1101 is in transmit mode.
-5. Advance the in-memory rolling code only after a successful transmission.
-
-The persisted reserve may skip unused codes after a crash. That is intentional: losing spare codes is safer than replaying an old code that a motor has already accepted.
+Before emitting RF, the RTS driver reserves a block of rolling codes on disk, and it advances the in-memory code only after pigpiod has clocked the waveform out successfully. A crash may therefore skip unused codes. That is intentional: losing spare codes is safer than replaying an old code that a motor has already accepted. The step-by-step flow is in [RTS_DRIVER.md](RTS_DRIVER.md#transmission-flow).
 
 ## Concurrency Model
 
@@ -188,28 +182,29 @@ Drivers still keep local locks around hardware resources:
 
 - Telis uses one execution lock around GPIO output and selection sequences.
 - RTS uses one transmission lock around radio configuration and pigpiod waveform operations.
-- WebSocket commands run asynchronously so connection keepalives and selection updates can continue while command work waits behind the controller queue.
 
 The controller lock is the application-level ordering rule. Driver locks are internal safety guards for hardware resources and driver state; they remain useful if driver code is tested directly or a future path accidentally bypasses the controller.
+
+WebSocket commands are spawned as their own tasks, so connection keepalives and selection updates keep flowing while a command waits behind the controller queue.
 
 Selection notifications and position broadcasts are separate from operation and hardware locks, so observers can continue receiving state while a command is queued or executing.
 
 Live state uses two notification channels:
 
 - **Selection** — `watch` from the active driver through `BlindController::subscribe_selection()`; consumed by SSE `/events` and WebSocket.
-- **Positions** — `BlindController::subscribe_positions` after inferred moves and timed HomeKit motion. Emits always happen outside the operation lock. The controller is transport-agnostic: it never calls into HAP directly. When HomeKit is enabled, `homekit::start` spawns a bridge task that subscribes to that broadcast, maps deltas to `CharacteristicEvent`, and forwards them to the HAP runtime event bus. Do not add a controller-side HAP sink or callback; that couples layers and was removed in favor of this single fan-out point. If the bridge falls behind, it logs and resyncs from `position_snapshot()` rather than dropping updates silently.
+- **Positions** — `BlindController::subscribe_positions` broadcast after inferred moves and timed motion, always emitted outside the operation lock. The controller never calls into HAP: HomeKit consumes this broadcast through a single bridge task (see [HAP.md](HAP.md#connection-lifecycle)). Don't add a controller-side HAP sink or callback.
 
 These locks are correctness mechanisms, not trust boundaries. They prevent malformed timing and state races; they do not authenticate clients.
 
 ## Persistence
 
-Runtime state lives under `$STATE_DIRECTORY` when systemd manages the service. Release builds otherwise use `/var/lib/somfy`; debug builds can use local state for development.
+Runtime state lives in `$STATE_DIRECTORY` (set by systemd's `StateDirectory=somfy`), else `SOMFY_STATE_DIR`, else `/var/lib/somfy` in release builds and `./hap-state` in debug builds.
 
-| File             | Owner           | Purpose                                                                   |
-| ---------------- | --------------- | ------------------------------------------------------------------------- |
-| `rts.json`       | RTS driver      | Virtual remote IDs, selected RTS channel, and rolling-code reserves.      |
-| `hap.json`       | HAP state       | HomeKit identity, setup data, long-term key, config number, and pairings. |
-| `positions.json` | Position cache (`positioning/state.rs`) | Last inferred blind positions per accessory (read-only on reload). |
+| File             | Owner                                   | Purpose                                                                   |
+| ---------------- | --------------------------------------- | ------------------------------------------------------------------------- |
+| `rts.json`       | RTS driver                              | Virtual remote IDs, selected RTS channel, and rolling-code reserves.      |
+| `hap.json`       | HAP state                               | HomeKit identity, setup data, long-term key, config number, and pairings. |
+| `positions.json` | Position cache (`positioning/state.rs`) | Last inferred blind positions per accessory (read-only on reload).        |
 
 State files are written with a temp-file plus atomic rename pattern. Security-sensitive HomeKit state is stored with restrictive permissions. The service does not replay persisted positions into GPIO or RF on startup; position state is for client continuity, not physical reconciliation.
 
@@ -218,8 +213,8 @@ State files are written with a temp-file plus atomic rename pattern. Security-se
 The release artifact is one binary:
 
 - clap subcommands provide the operator and remote CLI;
-- the Axum server serves HTTP, SSE, WebSocket, and embedded PWA assets;
-- the HAP server runs a separate TCP listener on port `5010`;
+- the axum server serves HTTP, SSE, WebSocket, and embedded PWA assets on `127.0.0.1:5002`;
+- when `homekit = true`, the HAP server runs a separate TCP listener on port `5010`;
 - driver implementations are all present and selected by config;
 - build metadata is embedded at compile time for `--version`, `doctor`, and upgrade reporting.
 
@@ -232,32 +227,17 @@ The release artifact is one binary:
 | Decision                      | Why It Exists                                                                                   | Tradeoff                                                                 |
 | ----------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------ |
 | Runtime driver selection      | One UI/API can support wired Telis, direct RTS, and development without rebuilding.             | Driver-specific behavior must be normalized at the application boundary. |
+| One controller queue          | Client commands, GPIO pulses, selection changes, and RF transmissions never interleave.         | A slow command delays every other client's command.                      |
+| Single self-managing binary   | The Pi is an appliance: install, upgrade, health checks, and rollback ship in the CLI.          | Deployment logic (systemd, pigpiod setup, rollback) lives in this repo.  |
 | Telis LEDs as selection truth | The physical remote may be changed outside the app, so LEDs are the most accurate state source. | Selection changes require debounce logic and GPIO input wiring.          |
 | RTS write-ahead rolling codes | Prevents replay after crashes or partial transmissions.                                         | Crashes can intentionally burn unused reserved codes.                    |
 | Native HAP server             | Removes Homebridge and Node from the appliance.                                                 | The repo owns HAP protocol, crypto, pairing, and event semantics.        |
 | pigpiod for RTS timing        | 640 microsecond Manchester half-symbols need timing outside the async runtime.                  | The Pi must run a local pigpiod daemon locked to loopback.               |
 | Inferred positions            | Gives HomeKit and the UI useful state without motor encoders.                                   | State is a timing-based estimate, not measured blind position.           |
 
-## Code Map
-
-This section is a pointer into the implementation, not the architecture itself.
-
-| Area                                        | Primary Paths                              |
-| ------------------------------------------- | ------------------------------------------ |
-| CLI and operator commands                   | `src/cli.rs`, `src/commands/`              |
-| HTTP, SSE, WebSocket, static assets         | `src/server.rs`, `src/embed.rs`            |
-| HTTP command validation helper              | `src/service/`                             |
-| Operation queue, targeting, position events | `src/controller/`                          |
-| Shared command and channel types            | `src/core.rs`                              |
-| Config resolution and validation            | `src/config.rs`                            |
-| Driver routing and implementations          | `src/driver/`, `src/gpio.rs`, `src/rts/`   |
-| HomeKit application adapter                 | `src/homekit/`                             |
-| HAP protocol stack                          | `src/hap/`                                 |
-| Frontend PWA                                | `app/`                                     |
-| systemd and deployment helpers              | `src/systemd.rs`, `src/deploy/`, `assets/` |
-
 ## Related Docs
 
+- The file-by-file code map lives in [CLAUDE.md](../CLAUDE.md#repo-layout).
 - [HARDWARE.md](HARDWARE.md) covers Telis wiring, CC1101 setup, GPIO behavior, and pairing workflows.
 - [RTS_DRIVER.md](RTS_DRIVER.md) is the protocol reference for RTS frames, waveform timings, rolling codes, pigpiod, and CC1101 configuration.
 - [HAP.md](HAP.md) covers HomeKit pairing, persistent identity, characteristic behavior, encrypted sessions, and event push.

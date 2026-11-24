@@ -2,7 +2,7 @@
 
 A self-contained reference for the Somfy RTS frame format, waveform timings, and the pigpiod commands the driver uses.
 
-For wiring, bring-up, and pairing flow, see [HARDWARE.md](HARDWARE.md#cc1101-rts-driver). For the driver's place in the system, see [ARCHITECTURE.md](ARCHITECTURE.md#driver-boundary).
+For wiring, configuration, and pairing flow, see [HARDWARE.md](HARDWARE.md#cc1101-rts-driver). For the driver's place in the system, see [ARCHITECTURE.md](ARCHITECTURE.md#driver-boundary).
 
 ## Radio
 
@@ -177,14 +177,13 @@ RtsDriver::transmit(channel, command)
   → WVNEW / WVAG / WVCRE / WVTX, poll WVBSY, WVDEL
   → CC1101 SIDLE
   → on success, advance in-memory rolling code
-  → signal sent (channel, command) for position inference
 ```
 
 If waveform upload or transmission fails, the in-memory rolling code is **not** advanced. The persisted reserve may still skip ahead on restart, which is safe.
 
 ## CC1101 Configuration
 
-Bring-up notes (see also [HARDWARE.md](HARDWARE.md#bring-up-checklist)):
+Bring-up notes (see also [HARDWARE.md](HARDWARE.md#cc1101-rts-driver)):
 
 - `PKTCTRL0.PKT_FORMAT = 0b11` — asynchronous serial mode (data on GDO0).
 - ASK / OOK modulation.

@@ -10,7 +10,8 @@ The service models one Somfy installation behind a small command surface. It can
 
 ```bash
 brew install mise
-mise install
+mise install       # toolchain: rust, bun, zig
+mise run install   # Rust and frontend dependencies
 mise run dev
 ```
 
@@ -20,7 +21,13 @@ mise run dev
 curl -fsSL https://raw.githubusercontent.com/melkir/remote-gpio/main/install.sh | sudo bash
 ```
 
-The script downloads the latest stable Pi binary, installs it at `/usr/local/bin/somfy`, writes the systemd unit, and starts the service.
+The script downloads the latest stable Pi binary, installs it at `/usr/local/bin/somfy`, writes the systemd unit, and starts the service. The web UI and API listen on `127.0.0.1:5002` (loopback only).
+
+Next steps:
+
+- Pick a driver: `sudo somfy config set-driver <fake|telis|rts>` (wiring and pairing in [docs/HARDWARE.md](docs/HARDWARE.md)).
+- Enable HomeKit (off by default): add `homekit = true` to `/etc/somfy/config.toml`, run `sudo somfy restart`, then `somfy homekit status` for the pairing QR. See [docs/HAP.md](docs/HAP.md).
+- Check health: `somfy doctor`.
 
 ### Upgrade
 
@@ -32,7 +39,7 @@ Pulls the latest stable release, swaps the binary, refreshes the systemd unit, r
 
 ### Versioning
 
-- Push to `main` → CI cross-compiles for armv7 and refreshes a moving `main` prerelease.
+- Push to `main` → CI cross-compiles for armv7 and refreshes the moving `nightly` prerelease.
 - Tag `vX.Y.Z` → stable release + `SHA256SUMS`.
 - `somfy --version` and `somfy doctor` report the embedded git SHA and build date.
 
@@ -43,7 +50,7 @@ Release from a clean `main`: `mise run release --execute`. The Pi upgrades with 
 | Doc                                          | Contents                                              |
 | -------------------------------------------- | ----------------------------------------------------- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | System boundaries, runtime flows, drivers, tradeoffs  |
-| [docs/HARDWARE.md](docs/HARDWARE.md)         | Wiring, GPIO/RTS setup, pairing, end-to-end data flow |
+| [docs/HARDWARE.md](docs/HARDWARE.md)         | Wiring, GPIO/RTS setup, pairing, blind timings        |
 | [docs/RTS_DRIVER.md](docs/RTS_DRIVER.md)     | RTS frame format, waveform, pigpiod                   |
 | [docs/HAP.md](docs/HAP.md)                   | HomeKit protocol and pairing lifecycle                |
 | [CLAUDE.md](CLAUDE.md)                       | Contributor/agent conventions                         |

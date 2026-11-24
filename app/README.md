@@ -2,7 +2,7 @@
 
 Preact + Vite + Tailwind PWA for RemoteGPIO.
 
-See the [main README](../readme.md) for project documentation.
+See the [main README](../README.md) for project documentation.
 
 ## Commands
 
